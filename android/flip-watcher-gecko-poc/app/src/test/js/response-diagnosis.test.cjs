@@ -46,3 +46,34 @@ test('passive registration covers existing hosts; body listener retains its narr
  const regs=[];create({webRequest:{filterResponseData(){throw Error('must remain idle');},onBeforeRequest:{addListener(...args){regs.push(args);}}}},core,{setTimeout(){},clearTimeout(){}});
  assert.equal(regs.length,2);assert.equal(regs[0].length,2);assert(regs[0][1].urls.includes('https://*.fbcdn.net/*'));assert.deepEqual(regs[1][2],['blocking']);assert(!regs[1][1].urls.some(u=>u.includes('fbcdn') || u.includes('*.facebook')));
 });
+const loadMsg={...msg,reloadConsent:true,windowMs:25000};
+const navigate=h=>h.request({type:'main_frame',url});
+const verify=h=>h.d.confirmLoad({nonce:msg.nonce,safe:true},sender);
+test('controlled load buffers data until the new approved document is verified',()=>{
+ const h=harness();h.arm(loadMsg);h.request({type:'other'});assert.equal(h.filters.length,0);
+ navigate(h);h.stream(JSON.stringify(story()),{type:'other'});
+ assert.equal(h.read().status,'STOP'); // content route cannot read privileged load
+ assert.equal(h.d.loadContext({...sender,tab:{id:8}}).active,false);
+ assert.equal(h.d.loadContext(sender).active,true);assert.equal(verify(h),true);
+ const r=h.d.readLoad(msg);assert.equal(r.status,'OK');assert.equal(r.counts.responseLoadMode,1);assert.equal(r.counts.responseLoadNavigation,1);assert.equal(r.counts.responseLoadVerified,1);assert.equal(r.counts.responseQueuedBodies,1);assert.equal(r.counts.responseExactIds,1);assert(!JSON.stringify(r).includes('PRIVATE'));
+});
+test('only one exact same-tab main-frame is allowed; redirects and repeated loads stop',()=>{
+ for(const change of [{url:url.replace(group,'other')},{url:url.replace('www.','m.')},{frameId:2}]){const h=harness();h.arm(loadMsg);h.request({type:'main_frame',url,...change});assert.equal(h.d.readLoad(msg).status,'STOP');}
+ const h=harness();h.arm(loadMsg);navigate(h);navigate(h);assert.equal(h.d.readLoad(msg).status,'STOP');
+});
+test('fetch and other are load-only and retain all source, frame, host and path gates',()=>{
+ for(const type of ['fetch','other']){const idle=harness();idle.arm();idle.request({type});assert.equal(idle.filters.length,0);
+ const h=harness();h.arm(loadMsg);navigate(h);for(const bad of [{frameId:1},{url:'https://graph.facebook.com/ajax/feed/'},{url:'https://www.facebook.com/data/'},{documentUrl:undefined}])h.request({type,...bad});assert.equal(h.filters.length,0);
+ h.stream(JSON.stringify(story()),{type});verify(h);assert.equal(h.d.readLoad(msg).counts.responseExactIds,1);}
+});
+test('unverified, unsafe and expired documents never expose parsed post counters',()=>{
+ for(const action of ['read','unsafe','expire']){const h=harness();h.arm(loadMsg);navigate(h);h.stream(JSON.stringify(story()),{type:'other'});
+ if(action==='unsafe')h.d.confirmLoad({nonce:msg.nonce,safe:false},sender);if(action==='expire')h.timers[0].fn();
+ const r=h.d.readLoad(msg);assert.equal(r.status,'STOP');assert.equal(r.counts.responseExactIds,0);assert.equal(h.d.loadContext(sender).active,false);}
+});
+test('verification response aborts even before document confirmation',()=>{const h=harness();h.arm(loadMsg);navigate(h);h.stream('/checkpoint/',{type:'other'});assert.equal(h.d.loadContext(sender).active,false);assert.equal(h.d.readLoad(msg).status,'STOP');});
+test('scoped cancellation revokes late arm and cannot cancel a later unrelated window',()=>{
+ const h=harness();h.d.abortLoad(msg);assert.equal(h.arm(loadMsg).status,'STOP');
+ const next={...msg,nonce:'second-fresh-consent'};assert.equal(h.arm(next).status,'ARMED');h.d.abortLoad(msg);assert.equal(h.read(next).status,'OK');
+});
+test('load timer is bounded to 25 seconds and cannot extend the old 15 second mode',()=>{const h=harness();h.arm({...loadMsg,windowMs:999999});assert.equal(h.timers[0].ms,25000);h.d.abort();h.arm({...msg,windowMs:999999});assert.equal(h.timers[1].ms,15000);});

@@ -4,7 +4,7 @@ import org.json.JSONObject
 
 /** Only bounded aggregate counts cross into Android. No response data is persisted. */
 object ResponseProtocol {
-    val keys = listOf("responseAutoScroll", "responseScrollSteps", "responseScrollMoves", "responseObserved", "responseBoundTab", "responseOtherTab", "responseNoTab", "responseTabXhr", "responseFrameRejected", "responseHostRejected", "responseEndpointRejected", "responseMissingOrigin", "responseApiAvailable", "responseArmed", "responseRequestsSeen", "responseOriginRejected", "responseFiltered", "responseCompleted", "responseBytes", "responseOversize", "responseDecodeErrors", "responseStreamErrors", "responseLimitSkipped", "responseKeyPostId", "responseKeyStoryId", "responseExactIds", "responseDuplicateIds", "responseRecordsWithText", "responseRecordsWithAuthor", "responseRecordsWithImages", "responsePriceSignals", "responseAreaSignals", "responseStopped")
+    val keys = listOf("responseLoadMode", "responseLoadNavigation", "responseLoadVerified", "responseQueuedBodies", "responseTabFetch", "responseTabOther", "responseTabUnhandled", "responseAutoScroll", "responseScrollSteps", "responseScrollMoves", "responseObserved", "responseBoundTab", "responseOtherTab", "responseNoTab", "responseTabXhr", "responseFrameRejected", "responseHostRejected", "responseEndpointRejected", "responseMissingOrigin", "responseApiAvailable", "responseArmed", "responseRequestsSeen", "responseOriginRejected", "responseFiltered", "responseCompleted", "responseBytes", "responseOversize", "responseDecodeErrors", "responseStreamErrors", "responseLimitSkipped", "responseKeyPostId", "responseKeyStoryId", "responseExactIds", "responseDuplicateIds", "responseRecordsWithText", "responseRecordsWithAuthor", "responseRecordsWithImages", "responsePriceSignals", "responseAreaSignals", "responseStopped")
     fun report(reply: JSONObject, nonce: String): String? {
         if (reply.optString("type") != "responseDiagnosisResult" || reply.optString("nonce") != nonce) return null
         if (reply.keys().asSequence().toSet() != setOf("type", "nonce", "status", "counts")) return null
@@ -18,17 +18,20 @@ object ResponseProtocol {
         if (listOf("responseRecordsWithText", "responseRecordsWithAuthor", "responseRecordsWithImages", "responsePriceSignals", "responseAreaSignals").any { counts.getInt(it) > counts.getInt("responseExactIds") }) return null
         if (counts.getInt("responseAutoScroll") !in 0..1 || counts.getInt("responseScrollSteps") > 5 || counts.getInt("responseScrollMoves") > counts.getInt("responseScrollSteps")) return null
         if (counts.getInt("responseAutoScroll") == 0 && counts.getInt("responseScrollSteps") != 0) return null
+        if (listOf("responseLoadMode", "responseLoadNavigation", "responseLoadVerified").any { counts.getInt(it) > 1 } || counts.getInt("responseQueuedBodies") > 8) return null
+        if (counts.getInt("responseLoadMode") == 0 && (counts.getInt("responseLoadNavigation") != 0 || counts.getInt("responseLoadVerified") != 0 || counts.getInt("responseQueuedBodies") != 0)) return null
+        if (status == "OK" && counts.getInt("responseLoadMode") == 1 && (counts.getInt("responseLoadNavigation") != 1 || counts.getInt("responseLoadVerified") != 1 || counts.getInt("responseAutoScroll") != 0)) return null
         val transport = when {
             status != "OK" -> status
             counts.getInt("responseObserved") == 0 -> "BRAK ZDARZEŃ w oknie; parser nie otrzymał danych."
             counts.getInt("responseBoundTab") == 0 -> "BRAK POWIĄZANIA Z KARTĄ; treści nie odczytano."
-            counts.getInt("responseTabXhr") == 0 -> "BRAK XHR W KARCIE; widoczny ruch ma inne typy."
+            counts.getInt("responseTabXhr") + counts.getInt("responseTabFetch") + counts.getInt("responseTabOther") == 0 -> "BRAK XHR W KARCIE ani obsługiwanych typów fetch/other; widoczny ruch ma inne typy."
             counts.getInt("responseFiltered") == 0 -> "BRAK BEZPIECZNEJ ODPOWIEDZI; sprawdź liczniki odrzuceń."
             counts.getInt("responseBytes") == 0 -> "BRAK ODCZYTANYCH BAJTÓW; sprawdź ukończenia i błędy."
             counts.getInt("responseExactIds") == 0 -> "DANE ODCZYTANE, BRAK POTWIERDZONYCH ID."
             else -> "POTWIERDZONE ID W ODCZYTANYCH DANYCH; kompletność ofert niepotwierdzona."
         }
-        return "ODPOWIEDZI 0.3.1 • tylko lokalnie • $status\n" + "Ocena transportu: $transport\n" + keys.joinToString("\n") { "$it: ${counts.getInt(it)}" } +
+        return "ODPOWIEDZI 0.3.2 • tylko lokalnie • $status\n" + "Ocena transportu: $transport\n" + keys.joinToString("\n") { "$it: ${counts.getInt(it)}" } +
             "\nID: dokładny identyfikator i permalink zatwierdzonej grupy z parsera rozszerzenia. Cena/metraż: sygnały heurystyczne. Same liczniki nie potwierdzają kompletności ofert. UNSUPPORTED: API odpowiedzi niedostępne; STOP: przerwana próba. Brak skanu i zapisu treści."
     }
 }

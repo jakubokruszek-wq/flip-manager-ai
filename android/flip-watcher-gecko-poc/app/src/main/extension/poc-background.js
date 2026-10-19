@@ -76,6 +76,11 @@
       if (message.type === "abortResponse") {
         scope.FlipResponseDiagnosis?.abort();
         reply({type:"abortResponseResult"});
+      } else if (message.type === "abortResponseLoad") {
+        scope.FlipResponseDiagnosis.abortLoad(message);
+        reply({type:"abortResponseLoadResult"});
+      } else if (message.type === "readResponseLoad") {
+        reply({type:"responseDiagnosisResult",...scope.FlipResponseDiagnosis.readLoad(message)});
       } else if (message.type === "armLoad") {
         reply({ type: "armLoadResult", armed: loadCounter.arm(message.nonce, message.accepted, message.windowMs) ? 1 : 0, listener: api.listener ? 1 : 0 });
       } else if (message.type === "readLoad") {

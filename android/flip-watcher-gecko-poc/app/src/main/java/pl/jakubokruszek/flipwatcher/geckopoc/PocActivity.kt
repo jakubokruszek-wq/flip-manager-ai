@@ -66,6 +66,7 @@ class PocActivity : ComponentActivity() {
     private var visibleEpoch = 0L
     private var visibleBusy = false
     private var responseBusy = false
+    private val responseReloadGate = ResponseReloadGate()
     private var visibleDialog: AlertDialog? = null
     private var inspectingDom = false
     private var haltMessage: String? = null
@@ -104,6 +105,7 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun stopVisiblePosts() {
+        responseReloadGate.cancel()
         channel?.abortResponseDiagnosis()
         GeckoHost.background.abortResponses()
         responseBusy = false
@@ -161,6 +163,32 @@ class PocActivity : ComponentActivity() {
             }.show()
     }
 
+    private fun checkResponseLoad() {
+        if (responseBusy || visibleBusy || scanning || inspectingDom || measuringLoad || kind != PageKind.APPROVED_GROUP || progress < 100 || haltMessage != null) return
+        val currentSession = session ?: return
+        val current = channel ?: return
+        val approvedUrl = url ?: return
+        val epoch = visibleEpoch
+        visibleDialog = AlertDialog.Builder(this).setTitle("Nowa zgoda: jedno otwarcie i odpowiedzi")
+            .setMessage("Otworzyć ponownie DOKŁADNIE tę zatwierdzoną grupę w tej samej karcie i przez 25 s odczytywać lokalnie jej odpowiedzi danych? Obejmuje typy XHR, fetch i other, wyłącznie dozwolone endpointy, top-frame i dokładny kontekst grupy. To nowy zakres, niezależny od skanu i przewijania. Do 8 odpowiedzi, 512 KiB na odpowiedź, 2 MiB łącznie i 20 ID. Wcześniejsze odpowiedzi pozostaną w ograniczonej pamięci RAM do sprawdzenia nowego dokumentu; bez potwierdzenia zostaną usunięte bez analizy postów. Bez odczytu dokumentu HTML, nagłówków, cookies i tokenów, zapisu, uploadu, skanu i kolektora. Tylko jedno zatwierdzone otwarcie; kolejne przejście, LOGIN/CAPTCHA/CHECKPOINT, pauza, wygaszenie lub utrata kontekstu: STOP. Bez automatycznego przewijania.")
+            .setNegativeButton("Anuluj", null).setPositiveButton("Zgadzam się jednorazowo") { _, _ ->
+                if (epoch != visibleEpoch || current !== channel || currentSession !== session || approvedUrl != url || kind != PageKind.APPROVED_GROUP) return@setPositiveButton
+                responseReloadGate.begin(approvedUrl); responseBusy = true
+                output.text = "Odpowiedzi od otwarcia: 25 s, jedno zatwierdzone otwarcie. Nie dotykaj ekranu."
+                render()
+                lifecycleScope.launch {
+                    val report = runCatching { ResponseLoadRunner(GeckoHost.background).run(currentSession, current, approvedUrl,
+                        PocPolicy.APPROVED_GROUP_ID, alive = { epoch == visibleEpoch && currentSession === session && responseReloadGate.active },
+                        willLoad = { responseReloadGate.willLoad() }) }.getOrNull()
+                    if (epoch == visibleEpoch && currentSession === session && responseReloadGate.active) {
+                        responseReloadGate.cancel(); responseBusy = false
+                        output.text = report ?: "STOP: brak potwierdzonego nowego dokumentu lub przerwana próba."
+                        render()
+                    }
+                }
+            }.show()
+    }
+
     // ---- session
 
     private fun askConsentAndOpen() {
@@ -184,7 +212,7 @@ class PocActivity : ComponentActivity() {
         val ext = extension ?: run { output.text = "Rozszerzenie kolektora nie jest gotowe: ${extensionError ?: "instalacja w toku"}"; return }
         // Default settings: normal mobile Firefox user agent, JavaScript and cookies as in the browser. No override, no spoofing.
         val newSession = GeckoSession(GeckoSessionSettings.Builder().build())
-        val newChannel = CollectorChannel(newSession, fixtureMode = false, onVisibleStop = { stopVisiblePosts() }) { value -> probe = value; render() }
+        val newChannel = CollectorChannel(newSession, fixtureMode = false, onVisibleStop = { stopVisiblePosts() }, onPageDisconnect = { if (!responseReloadGate.allowOldDisconnect()) stopVisiblePosts() }, onPageConnected = { responseReloadGate.connected() }) { value -> probe = value; render() }
         newChannel.attach(ext)
         newSession.progressDelegate = progressDelegate
         newSession.contentDelegate = contentDelegate
@@ -565,6 +593,7 @@ class PocActivity : ComponentActivity() {
         }
 
         override fun onPageStop(session: GeckoSession, success: Boolean) {
+            if (!success && responseBusy) stopVisiblePosts()
             render()
             val current = channel ?: return
             lifecycleScope.launch { current.probe()?.let { probe = it; render() } }
@@ -593,7 +622,7 @@ class PocActivity : ComponentActivity() {
         }
 
         override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny> {
-            if (responseBusy) stopVisiblePosts()
+            if (responseBusy && !responseReloadGate.allowRequest(request.uri, request.isRedirect, request.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW)) stopVisiblePosts()
             recordStep(NavStep(PocPolicy.sanitize(request.uri), request.isRedirect, request.hasUserGesture))
             if (!PocPolicy.allowNavigation(request.uri)) {
                 blockedNavigations++
@@ -610,6 +639,7 @@ class PocActivity : ComponentActivity() {
         }
 
         override fun onLoadError(session: GeckoSession, uri: String?, error: WebRequestError): GeckoResult<String>? {
+            if (responseBusy) stopVisiblePosts()
             lastLoadError = "kategoria ${error.category}, kod ${error.code} (${PocPolicy.sanitize(uri)})"
             render()
             return null
@@ -617,7 +647,7 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun onUrl(value: String?) {
-        stopVisiblePosts()
+        if (!responseReloadGate.allowLocation(value)) stopVisiblePosts()
         url = value
         kind = PocPolicy.classify(value)
         if (kind == PageKind.APPROVED_GROUP) loginRequested = false
@@ -639,7 +669,7 @@ class PocActivity : ComponentActivity() {
             stop != null -> stop
             !open -> "Sesja zamknięta. „Otwórz sesję” uruchamia przeglądarkę tylko dla grupy ${PocPolicy.APPROVED_GROUP_ID}."
             loginRequested && kind == PageKind.LOGIN -> "Logowanie ręczne na stronie Facebooka. Po zalogowaniu użyj „Wróć do grupy”."
-            responseBusy -> "Trwa lokalna diagnostyka odpowiedzi (15 s)."
+            responseBusy -> if (responseReloadGate.active) "Trwa diagnostyka od otwarcia (25 s)." else "Trwa lokalna diagnostyka odpowiedzi (15 s)."
             scanning -> "Trwa skan (max ${PocPolicy.MAX_POSTS} postów, ${PocPolicy.SCAN_TIMEOUT_MS / 1000} s)…"
             kind == PageKind.APPROVED_GROUP && preferences.getBoolean(KEY_ONE_SCAN_USED, false) ->
                 "Zatwierdzona grupa otwarta. Limit jednego skanu testowego wykorzystany; wyniki dostępne lokalnie."
@@ -653,6 +683,7 @@ class PocActivity : ComponentActivity() {
         listOf("group", "login", "back").forEach { buttons[it]?.isEnabled = open && !scanning }
         listOf("scan", "scan3").forEach { buttons[it]?.isEnabled = canScan }
         buttons["responses"]?.isEnabled = open && !responseBusy && !visibleBusy && !scanning && !inspectingDom && kind == PageKind.APPROVED_GROUP && progress == 100 && channel?.isConnected == true
+        buttons["responseLoad"]?.isEnabled = buttons["responses"]?.isEnabled == true
         buttons["responseScroll"]?.isEnabled = buttons["responses"]?.isEnabled == true
         buttons["dom"]?.isEnabled = open && !responseBusy && !scanning && !inspectingDom &&
             kind == PageKind.APPROVED_GROUP && channel?.isConnected == true
@@ -732,6 +763,7 @@ class PocActivity : ComponentActivity() {
                 button("scan3", "Skanuj + przewiń 3×") { scan(scrolls = 3) },
             ))
             addView(row(button("responses", "Sprawdź dane sieciowe") { checkResponses() }, button("responseScroll", "Dane + przewijanie") { checkResponses(autoScroll = true) }))
+            addView(row(button("responseLoad", "Odpowiedzi od otwarcia") { checkResponseLoad() }))
             addView(row(button("visiblePosts", "Sprawdź widoczne posty") { checkVisiblePosts() }))
             addView(row(
                 button("dom", "Diagnoza postów") { inspectDom() },

@@ -48,6 +48,10 @@ class BackgroundChannel {
         override fun onMessage(nativeApp: String, message: Any, sender: WebExtension.MessageSender): GeckoResult<Any>? = null
     }
 
+    fun abortResponseLoad(nonce: String) {
+        runCatching { port?.postMessage(JSONObject().put("type", "abortResponseLoad").put("nonce", nonce)) }
+    }
+
     fun abortResponses() {
         runCatching { port?.postMessage(JSONObject().put("type", "abortResponse").put("nonce", UUID.randomUUID().toString())) }
     }

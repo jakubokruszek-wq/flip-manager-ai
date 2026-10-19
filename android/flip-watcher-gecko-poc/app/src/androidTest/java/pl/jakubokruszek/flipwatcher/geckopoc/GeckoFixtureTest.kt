@@ -535,4 +535,36 @@ class GeckoFixtureTest {
         }
     }
 
+    @Test fun responseLoadCapturesOnlyFreshConsentedInitialRequest() {
+        ActivityScenario.launch(GeckoTestHostActivity::class.java).use { scenario ->
+            var host: GeckoTestHostActivity? = null
+            scenario.onActivity { host = it }
+            runBlocking { withTimeout(120_000) { withContext(Dispatchers.Main) {
+                val server = LoopbackFixtureServer { name -> runCatching { context.assets.open(name).bufferedReader().use { it.readText() } }.getOrNull() }
+                val session = GeckoSession(GeckoSessionSettings.Builder().build())
+                val channel = CollectorChannel(session, fixtureMode = true)
+                val background = BackgroundChannel()
+                try {
+                    val extension = GeckoHost.collectorExtension(context)
+                    background.attach(extension); channel.attach(extension)
+                    session.open(GeckoHost.runtime(context)); host!!.geckoView.setSession(session); session.setActive(true)
+                    val target = server.url(groupPath, "response-load")
+                    session.loadUri(target)
+                    assertTrue(channel.awaitPort(30_000)); delay(1_000)
+                    assertNull(channel.prepareResponseLoad(false, FIXTURE_GROUP_ID, 4_000))
+                    val report = ResponseLoadRunner(background).run(session,channel,target,FIXTURE_GROUP_ID,5_000,alive={true},willLoad={})
+                    Log.i("GeckoPocTest", "RESPONSE_INITIAL $report")
+                    for (field in listOf("responseLoadMode: 1","responseLoadNavigation: 1","responseLoadVerified: 1","responseExactIds: 1","responseCompleted: 1"))
+                        assertTrue("missing $field: $report", report?.contains(field)==true)
+                    assertFalse(report.orEmpty().contains("PRIVATE")); assertFalse(report.orEmpty().contains("550000000000003"))
+                    assertEquals(1, channel.probe()!!.articles)
+                    launch { delay(800); session.loadUri(server.url("/login/", "login")) }
+                    val stopped = ResponseLoadRunner(background).run(session,channel,target,FIXTURE_GROUP_ID,3_000,alive={true},willLoad={})
+                    assertTrue("stopped=$stopped", stopped==null || stopped.contains("• STOP"))
+                    assertFalse(stopped.orEmpty().contains("responseExactIds: 1"))
+                } finally { background.abortResponses(); channel.close(); host!!.geckoView.releaseSession(); session.close(); server.close() }
+            } } }
+        }
+    }
+
 }

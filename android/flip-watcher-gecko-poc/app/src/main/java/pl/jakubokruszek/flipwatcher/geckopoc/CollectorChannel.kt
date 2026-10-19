@@ -19,6 +19,8 @@ class CollectorChannel(
     private val session: GeckoSession,
     private val fixtureMode: Boolean = false,
     private val onVisibleStop: () -> Unit = {},
+    private val onPageDisconnect: () -> Unit = onVisibleStop,
+    private val onPageConnected: () -> Unit = {},
     private val onProbe: (PageProbe) -> Unit = {},
 ) {
     private var port: WebExtension.Port? = null
@@ -38,7 +40,7 @@ class CollectorChannel(
             when (json.optString("type")) {
                 "visiblePostsStop" -> onVisibleStop()
                 "ready" -> ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
-                "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
+                "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                     pending.remove(json.optString("nonce"))?.complete(json)
                 }
@@ -47,7 +49,7 @@ class CollectorChannel(
 
         override fun onDisconnect(port: WebExtension.Port) {
             if (port !== this@CollectorChannel.port) return
-            onVisibleStop()
+            onPageDisconnect()
             this@CollectorChannel.port = null
             portReady = CompletableDeferred()
             // The page went away: every waiting request ends now.
@@ -68,6 +70,7 @@ class CollectorChannel(
             this@CollectorChannel.port = port
             port.setDelegate(portDelegate)
             portReady.complete(Unit)
+            onPageConnected()
         }
 
         override fun onMessage(nativeApp: String, message: Any, sender: WebExtension.MessageSender): GeckoResult<Any>? = null
@@ -125,6 +128,15 @@ class CollectorChannel(
             .put("consent", true).put("groupId", groupId)
             .put("allowLoopback", fixtureMode), 8_000) ?: return null
         return VisiblePostsProtocol.report(reply, nonce)
+    }
+
+    suspend fun prepareResponseLoad(consent: Boolean, groupId: String, windowMs: Int, nonce: String = UUID.randomUUID().toString()): String? {
+        if (!consent) return null
+        val reply = request(nonce, JSONObject().put("type", "prepareResponseLoad").put("nonce", nonce)
+            .put("consent", true).put("reloadConsent", true).put("groupId", groupId).put("allowLoopback", fixtureMode)
+            .put("windowMs", windowMs.coerceIn(1_000, 25_000)), 8_000) ?: return null
+        return nonce.takeIf { reply.optString("type") == "responseLoadArmed" && reply.optString("nonce") == nonce &&
+            reply.optString("status") == "ARMED" && reply.keys().asSequence().toSet() == setOf("type", "nonce", "status") }
     }
 
     suspend fun responseDiagnosis(consent: Boolean, groupId: String = PocPolicy.APPROVED_GROUP_ID, windowMs: Int = 15_000, autoScrollConsent: Boolean = false): String? {

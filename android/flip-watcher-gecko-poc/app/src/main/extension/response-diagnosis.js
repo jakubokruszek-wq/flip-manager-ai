@@ -1,35 +1,62 @@
 /* Opt-in response diagnostic. No body, record, URL or ID ever leaves this module. */
 (function(scope) {
   "use strict";
-  const keys = ["responseAutoScroll","responseScrollSteps","responseScrollMoves","responseObserved","responseBoundTab","responseOtherTab","responseNoTab","responseTabXhr","responseFrameRejected","responseHostRejected","responseEndpointRejected","responseMissingOrigin","responseApiAvailable","responseArmed","responseRequestsSeen","responseOriginRejected","responseFiltered","responseCompleted","responseBytes","responseOversize","responseDecodeErrors","responseStreamErrors","responseLimitSkipped","responseKeyPostId","responseKeyStoryId","responseExactIds","responseDuplicateIds","responseRecordsWithText","responseRecordsWithAuthor","responseRecordsWithImages","responsePriceSignals","responseAreaSignals","responseStopped"];
+  const keys = ["responseLoadMode","responseLoadNavigation","responseLoadVerified","responseQueuedBodies","responseTabFetch","responseTabOther","responseTabUnhandled","responseAutoScroll","responseScrollSteps","responseScrollMoves","responseObserved","responseBoundTab","responseOtherTab","responseNoTab","responseTabXhr","responseFrameRejected","responseHostRejected","responseEndpointRejected","responseMissingOrigin","responseApiAvailable","responseArmed","responseRequestsSeen","responseOriginRejected","responseFiltered","responseCompleted","responseBytes","responseOversize","responseDecodeErrors","responseStreamErrors","responseLimitSkipped","responseKeyPostId","responseKeyStoryId","responseExactIds","responseDuplicateIds","responseRecordsWithText","responseRecordsWithAuthor","responseRecordsWithImages","responsePriceSignals","responseAreaSignals","responseStopped"];
   const MAX_BODY=524288, MAX_TOTAL=2097152;
   function groupURL(raw, group, fixture) {
     try { const u=new URL(raw); return /^[A-Za-z0-9._-]{1,100}$/.test(group) && !u.username && !u.password && !u.hash &&
       (fixture || !u.search) && ((u.protocol==="https:" && !u.port && ["facebook.com","www.facebook.com","m.facebook.com"].includes(u.hostname)) || (fixture && u.protocol==="http:" && u.hostname==="127.0.0.1")) && u.pathname.replace(/\/$/,"") === "/groups/"+group; } catch {return false;}
   }
   function create(api, core, timers=scope) {
-    let current=null, listenerReady=false;
+    let current=null, listenerReady=false;const revoked=new Set();
     const available=()=>listenerReady && typeof api?.webRequest?.filterResponseData==="function";
     const fresh=(stopped=false)=>Object.fromEntries(keys.map(k=>[k,k==="responseStopped"?Number(stopped):k==="responseApiAvailable" && available()?1:0]));
     const inc=(s,key,n=1)=>{s.counts[key]=Math.min(2000,s.counts[key]+n);};
     function discard(stream) {stream.parts.length=0;stream.decoder=null;try{stream.filter.disconnect();}catch{} }
-    function release(s) {s.closed=true;timers.clearTimeout(s.timer);for(const stream of s.streams.values()) discard(stream);s.streams.clear();s.ids.clear();}
+    function release(s) {s.closed=true;timers.clearTimeout(s.timer);for(const stream of s.streams.values()) discard(stream);s.streams.clear();s.ids.clear();s.pending.length=0;}
     function abort() {if(current){const s=current;current=null;release(s);}}
     function senderOK(sender,m) {return m?.consent===true && Number.isInteger(sender?.tab?.id) && sender.tab.id>=0 && sender.frameId===0 && groupURL(sender.url,m.groupId,m.fixture===true);}
     function arm(m,sender) {
       if(!senderOK(sender,m) || typeof m.nonce!=="string" || !/^[A-Za-z0-9-]{8,64}$/.test(m.nonce)) return {status:"STOP",counts:fresh(true)};
+      if(revoked.has(m.nonce))return {status:"STOP",counts:fresh(true)};
       if(!available()) return {status:"UNSUPPORTED",counts:fresh()};
       if(current) return {status:"BUSY",counts:fresh()};
-      const s={nonce:m.nonce,tab:sender.tab.id,group:m.groupId,fixture:m.fixture===true,counts:fresh(),streams:new Map(),ids:new Set(),closed:false,expired:false};
-      s.counts.responseArmed=1;current=s;
-      s.timer=timers.setTimeout(()=>{if(current!==s)return;for(const stream of s.streams.values())discard(stream);s.streams.clear();s.ids.clear();s.expired=true;},Math.max(500,Math.min(15000,Number(m.windowMs)||15000)));
+      const s={nonce:m.nonce,tab:sender.tab.id,group:m.groupId,fixture:m.fixture===true,counts:fresh(),streams:new Map(),ids:new Set(),pending:[],load:m.reloadConsent===true,target:sender.url,navigated:false,verified:false,closed:false,expired:false};
+      s.counts.responseArmed=1;s.counts.responseLoadMode=s.load?1:0;current=s;
+      s.timer=timers.setTimeout(()=>{if(current!==s)return;for(const stream of s.streams.values())discard(stream);s.streams.clear();s.ids.clear();s.pending.length=0;s.expired=true;},Math.max(500,Math.min(s.load?25000:15000,Number(m.windowMs)||15000)));
       return {status:"ARMED",counts:{...s.counts}};
     }
     function read(m,sender) {
       const s=current;
-      if(!s || m.nonce!==s.nonce || sender?.tab?.id!==s.tab || sender.frameId!==0) return {status:"STOP",counts:fresh(true)};
+      if(!s || s.load || m.nonce!==s.nonce || sender?.tab?.id!==s.tab || sender.frameId!==0) return {status:"STOP",counts:fresh(true)};
       if(!senderOK({...sender}, {...m,consent:true,groupId:s.group,fixture:s.fixture})){abort();return {status:"STOP",counts:fresh(true)};}
       const counts={...s.counts};current=null;release(s);return {status:"OK",counts};
+    }
+    function abortLoad(m) {
+      if(typeof m?.nonce!=="string" || !/^[A-Za-z0-9-]{8,64}$/.test(m.nonce))return;
+      revoked.add(m.nonce);while(revoked.size>32)revoked.delete(revoked.values().next().value);
+      if(current?.load && current.nonce===m.nonce)abort();
+    }
+    function loadContext(sender) {
+      const s=current;
+      if(!s || !s.load || !s.navigated || s.closed || s.expired || sender?.tab?.id!==s.tab || !senderOK(sender,{consent:true,groupId:s.group,fixture:s.fixture}))return {active:false};
+      return {active:true,nonce:s.nonce,groupId:s.group,fixture:s.fixture};
+    }
+    function confirmLoad(m,sender) {
+      const s=current;if(!loadContext(sender).active || m.nonce!==s.nonce || m.safe!==true){if(s && sender?.tab?.id===s.tab)abort();return false;}
+      s.verified=true;s.counts.responseLoadVerified=1;
+      const pending=s.pending.splice(0);for(const body of pending){if(current!==s)break;parse(s,body);}return current===s;
+    }
+    // Privileged native port only; a content script cannot invoke this route.
+    function readLoad(m) {
+      const s=current;if(!s || !s.load || m.nonce!==s.nonce)return {status:"STOP",counts:fresh(true)};
+      if(!s.navigated || !s.verified){abort();return {status:"STOP",counts:fresh(true)};}
+      const counts={...s.counts};current=null;release(s);return {status:"OK",counts};
+    }
+    function receive(s,body) {
+      if(/captcha_response|id=["']login_form|\/checkpoint\//i.test(body)){abort();return;}
+      if(s.load && !s.verified){if(!s.expired && current===s){s.pending.push(body);inc(s,"responseQueuedBodies");}return;}
+      parse(s,body);
     }
     // The desktop parser may supply a missing group from its source context.
     // Independently require an explicit group URL in a structured link field
@@ -82,8 +109,10 @@
       if(!Number.isInteger(d.tabId) || d.tabId<0){inc(s,"responseNoTab");return;}
       if(d.tabId!==s.tab){inc(s,"responseOtherTab");return;}
       inc(s,"responseBoundTab");
-      if(d.type!=="xmlhttprequest")return;
-      inc(s,"responseTabXhr");
+      if(d.type==="xmlhttprequest")inc(s,"responseTabXhr");
+      else if(d.type==="fetch")inc(s,"responseTabFetch");
+      else if(d.type==="other")inc(s,"responseTabOther");
+      else {inc(s,"responseTabUnhandled");return;}
       if(d.frameId!==0){inc(s,"responseFrameRejected");return;}
       let u;try{u=new URL(d.url);}catch{return;}
       if(!allowedHost(u,s)){inc(s,"responseHostRejected");return;}
@@ -91,8 +120,14 @@
     }
     function before(d) {
       const s=current;if(!s || s.closed || s.expired || d.tabId!==s.tab) return;
-      if(d.type==="main_frame"){abort();return;}
-      if(d.type!=="xmlhttprequest" || d.frameId!==0)return;
+      if(d.type==="main_frame"){
+        if(s.load && !s.navigated && d.frameId===0 && d.url===s.target && groupURL(d.url,s.group,s.fixture)){
+          s.navigated=true;s.counts.responseLoadNavigation=1;return;
+        }
+        abort();return;
+      }
+      if(s.load && !s.navigated)return;
+      if(!(d.type==="xmlhttprequest" || (s.load && ["fetch","other"].includes(d.type))) || d.frameId!==0)return;
       let u;try{u=new URL(d.url);}catch{return;}
       if(!allowedHost(u,s) || !allowedPath(u.pathname))return;
       inc(s,"responseRequestsSeen");
@@ -113,7 +148,7 @@
         try{filter.close();}catch{}s.streams.delete(d.requestId);
         if(current!==s || s.closed || s.expired || !stream.decoder){stream.parts.length=0;return;}
         let body="";try{body=stream.parts.join("")+stream.decoder.decode();}catch{inc(s,"responseDecodeErrors");}
-        stream.parts.length=0;stream.decoder=null;inc(s,"responseCompleted");if(body)parse(s,body);
+        stream.parts.length=0;stream.decoder=null;inc(s,"responseCompleted");if(body)receive(s,body);
       };
       filter.onerror=()=>{if(current===s&&!s.closed)inc(s,"responseStreamErrors");drop();};
     }
@@ -124,7 +159,7 @@
         listenerReady=true;
       }catch{}
     }
-    return {arm,read,abort,before,observe,stop(m,sender){if(current && current.nonce===m.nonce && current.tab===sender?.tab?.id && sender.frameId===0)abort();}};
+    return {arm,read,abort,before,observe,loadContext,confirmLoad,readLoad,abortLoad,stop(m,sender){if(current && current.nonce===m.nonce && current.tab===sender?.tab?.id && sender.frameId===0)abort();}};
   }
   const exported={create,keys,groupURL};
   if(typeof module!=="undefined")module.exports=exported;
@@ -132,6 +167,8 @@
     const diagnosis=create(scope.browser,scope.FlipFacebookCollectorCore);
     scope.FlipResponseDiagnosis=diagnosis;
     browser.runtime.onMessage.addListener((m,sender)=>{
+      if(m?.type==="responseLoadContext")return Promise.resolve(diagnosis.loadContext(sender));
+      if(m?.type==="confirmResponseLoad")return Promise.resolve({confirmed:diagnosis.confirmLoad(m,sender)});
       if(m?.type==="armResponse")return Promise.resolve(diagnosis.arm(m,sender));
       if(m?.type==="readResponse")return Promise.resolve(diagnosis.read(m,sender));
       if(m?.type==="stopResponse"){diagnosis.stop(m,sender);return Promise.resolve({stopped:true});}

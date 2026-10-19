@@ -384,12 +384,34 @@
       void browser.runtime.sendMessage({type:"stopResponse",nonce:request.nonce}).catch(()=>{});
     }
   }
+  let activeLoadAbort=null,disposeLoadWatch=null;
+  function clearLoadWatch(){if(disposeLoadWatch)disposeLoadWatch();disposeLoadWatch=null;activeLoadAbort=null;}
+  async function adoptResponseLoad(){
+    const info=await browser.runtime.sendMessage({type:"responseLoadContext"});
+    if(!info?.active)return;
+    const request={groupId:info.groupId,allowLoopback:info.fixture===true};let stopped=false;
+    const abort=()=>{if(stopped)return;stopped=true;void browser.runtime.sendMessage({type:"stopResponse",nonce:info.nonce}).catch(()=>{});try{port.postMessage({type:"visiblePostsStop"});}catch{}};
+    activeLoadAbort=abort;
+    if(!responsePageSafe(request)){abort();return;}
+    disposeLoadWatch=scope.FlipVisiblePosts.watch(scope,request,abort);
+    if(stopped || !responsePageSafe(request)){abort();return;}
+    const confirmed=await browser.runtime.sendMessage({type:"confirmResponseLoad",nonce:info.nonce,safe:true});
+    if(!confirmed?.confirmed)abort();
+  }
   let activeResponseAbort=null;
-  port.onDisconnect.addListener(()=>{if(activeResponseAbort)activeResponseAbort();void browser.runtime.sendMessage({type:"stopResponse",nonce:activeResponseNonce}).catch(()=>{});});
+  port.onDisconnect.addListener(()=>{if(activeLoadAbort)activeLoadAbort();clearLoadWatch();if(activeResponseAbort)activeResponseAbort();void browser.runtime.sendMessage({type:"stopResponse",nonce:activeResponseNonce}).catch(()=>{});});
   let activeResponseNonce="";
   port.onMessage.addListener(async message => {
     if (!message || typeof message !== "object" || typeof message.nonce !== "string") return;
-    if(message.type==="abortResponseDiagnosis"){if(activeResponseAbort)activeResponseAbort();return;}
+    if(message.type==="abortResponseDiagnosis"){if(activeLoadAbort)activeLoadAbort();clearLoadWatch();if(activeResponseAbort)activeResponseAbort();return;}
+    if(message.type==="prepareResponseLoad"){
+      if(message.consent!==true || message.reloadConsent!==true || activeResponseNonce || !responsePageSafe(message)){
+        port.postMessage({type:"responseLoadArmed",nonce:message.nonce,status:"STOP"});return;
+      }
+      if(stopVisibleWatch)stopVisibleWatch();stopVisibleWatch=null;clearLoadWatch();
+      const armed=await browser.runtime.sendMessage({type:"armResponse",nonce:message.nonce,consent:true,reloadConsent:true,groupId:message.groupId,fixture:message.allowLoopback===true,windowMs:message.windowMs});
+      port.postMessage({type:"responseLoadArmed",nonce:message.nonce,status:armed?.status||"STOP"});return;
+    }
     if (message.type === "responseDiagnosis") {
       if(activeResponseNonce)return;
       activeResponseNonce=message.nonce;
@@ -482,4 +504,5 @@
   });
 
   port.postMessage({ type: "ready", probe: probe() });
+  void adoptResponseLoad().catch(()=>{if(activeLoadAbort)activeLoadAbort();});
 })(globalThis);

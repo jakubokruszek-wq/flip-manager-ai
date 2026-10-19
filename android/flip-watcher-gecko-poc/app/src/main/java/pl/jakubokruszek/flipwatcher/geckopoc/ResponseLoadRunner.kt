@@ -1,0 +1,28 @@
+package pl.jakubokruszek.flipwatcher.geckopoc
+
+import kotlinx.coroutines.delay
+import org.json.JSONObject
+import org.mozilla.geckoview.GeckoSession
+
+/** New consent, same approved session/tab, one exact reload. No collector or saved results. */
+class ResponseLoadRunner(private val background: BackgroundChannel) {
+    suspend fun run(session: GeckoSession, channel: CollectorChannel, url: String, groupId: String,
+        windowMs: Int = 25_000, alive: () -> Boolean, willLoad: () -> Unit): String? {
+        val wait = windowMs.coerceIn(1_000, 25_000)
+        var finished = false
+        val nonce = java.util.UUID.randomUUID().toString()
+        try {
+            if (!background.isConnected && !background.awaitPort(3_000)) return null
+            channel.prepareResponseLoad(true, groupId, wait, nonce) ?: return null
+            if (!alive()) return null
+            willLoad(); session.loadUri(url)
+            var elapsed = 0
+            while (elapsed < wait) { if (!alive()) return null; delay(250); elapsed += 250 }
+            if (!alive()) return null
+            val reply = background.request(JSONObject().put("type", "readResponseLoad").put("nonce", nonce)) ?: return null
+            val report = ResponseProtocol.report(reply, nonce)
+            finished = true
+            return report
+        } finally { if (!finished) background.abortResponseLoad(nonce) }
+    }
+}

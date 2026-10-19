@@ -1,3 +1,5 @@
+Aktualna diagnostyka: [0.3.2 — odpowiedzi od otwarcia](docs/poc-032.md).
+
 # Aktualizacja 0.3.1
 
 Opcjonalne **Dane + przewijanie**, osobna zgoda, do 5 kroków w 15 s. [Instrukcja](docs/poc-031.md). Tryb ręczny i limity odczytu bez zmian. Poniżej historia poprzednich wersji.
