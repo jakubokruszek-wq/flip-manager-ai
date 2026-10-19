@@ -345,6 +345,9 @@
     if(request.consent!==true || !responsePageSafe(request))return stopped();
     const message={nonce:request.nonce,groupId:request.groupId,fixture:request.allowLoopback===true,consent:true,windowMs:Math.max(500,Math.min(15000,Number(request.windowMs)||15000))};
     let stopWatch=null,invalid=false,wake;
+    let scrollSteps=0,scrollMoves=0;
+    const autoScroll=request.autoScrollConsent===true;
+    const deadline=scope.performance.now()+message.windowMs;
     const cancelled=new Promise(resolve=>{wake=resolve;});
     const abort=()=>{if(invalid)return;invalid=true;wake();void browser.runtime.sendMessage({type:"stopResponse",nonce:request.nonce}).catch(()=>{});try{port.postMessage({type:"visiblePostsStop"});}catch{}};
     activeResponseAbort=abort;
@@ -353,9 +356,27 @@
       if(armed?.status!=="ARMED")return armed||stopped();
       stopWatch=scope.FlipVisiblePosts.watch(scope,request,abort);
       if(invalid || !responsePageSafe(request)){abort();return stopped();}
-      await Promise.race([sleep(message.windowMs),cancelled]);
+      // Optional, independently consented diagnostic scrolling. Never scan().
+      // Monotonic deadline starts BEFORE arming; suspension cannot extend it.
+      if(autoScroll) {
+        for(let i=0;i<5;i++) {
+          const pause=i===0?1000:2000;
+          if(deadline-scope.performance.now()<=pause)break;
+          await Promise.race([sleep(pause),cancelled]);
+          if(invalid || !responsePageSafe(request)){abort();return stopped();}
+          if(scope.performance.now()>=deadline)break;
+          const before=scope.scrollY;
+          scope.scrollBy({left:0,top:Math.max(400,Math.min(900,Math.round(scope.innerHeight*0.9))),behavior:"instant"});
+          scrollSteps++;
+          if(scope.scrollY!==before)scrollMoves++;
+        }
+      }
+      await Promise.race([sleep(Math.max(0,deadline-scope.performance.now())),cancelled]);
       if(invalid || !responsePageSafe(request)){abort();return stopped();}
-      return await browser.runtime.sendMessage({type:"readResponse",...message})||stopped();
+      const result=await browser.runtime.sendMessage({type:"readResponse",...message});
+      if(!result)return stopped();
+      if(result.status==="OK" && result.counts)Object.assign(result.counts,{responseAutoScroll:autoScroll?1:0,responseScrollSteps:scrollSteps,responseScrollMoves:scrollMoves});
+      return result;
     } catch {return stopped();}
     finally {
       if(activeResponseAbort===abort)activeResponseAbort=null;

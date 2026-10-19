@@ -1,7 +1,7 @@
 /* Opt-in response diagnostic. No body, record, URL or ID ever leaves this module. */
 (function(scope) {
   "use strict";
-  const keys = ["responseObserved","responseBoundTab","responseOtherTab","responseNoTab","responseTabXhr","responseFrameRejected","responseHostRejected","responseEndpointRejected","responseMissingOrigin","responseApiAvailable","responseArmed","responseRequestsSeen","responseOriginRejected","responseFiltered","responseCompleted","responseBytes","responseOversize","responseDecodeErrors","responseStreamErrors","responseLimitSkipped","responseKeyPostId","responseKeyStoryId","responseExactIds","responseDuplicateIds","responseRecordsWithText","responseRecordsWithAuthor","responseRecordsWithImages","responsePriceSignals","responseAreaSignals","responseStopped"];
+  const keys = ["responseAutoScroll","responseScrollSteps","responseScrollMoves","responseObserved","responseBoundTab","responseOtherTab","responseNoTab","responseTabXhr","responseFrameRejected","responseHostRejected","responseEndpointRejected","responseMissingOrigin","responseApiAvailable","responseArmed","responseRequestsSeen","responseOriginRejected","responseFiltered","responseCompleted","responseBytes","responseOversize","responseDecodeErrors","responseStreamErrors","responseLimitSkipped","responseKeyPostId","responseKeyStoryId","responseExactIds","responseDuplicateIds","responseRecordsWithText","responseRecordsWithAuthor","responseRecordsWithImages","responsePriceSignals","responseAreaSignals","responseStopped"];
   const MAX_BODY=524288, MAX_TOTAL=2097152;
   function groupURL(raw, group, fixture) {
     try { const u=new URL(raw); return /^[A-Za-z0-9._-]{1,100}$/.test(group) && !u.username && !u.password && !u.hash &&

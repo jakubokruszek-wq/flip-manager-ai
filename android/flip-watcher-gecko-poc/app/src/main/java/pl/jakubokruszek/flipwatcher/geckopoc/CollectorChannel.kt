@@ -127,12 +127,12 @@ class CollectorChannel(
         return VisiblePostsProtocol.report(reply, nonce)
     }
 
-    suspend fun responseDiagnosis(consent: Boolean, groupId: String = PocPolicy.APPROVED_GROUP_ID, windowMs: Int = 15_000): String? {
+    suspend fun responseDiagnosis(consent: Boolean, groupId: String = PocPolicy.APPROVED_GROUP_ID, windowMs: Int = 15_000, autoScrollConsent: Boolean = false): String? {
         if (!consent) return null
         val nonce = UUID.randomUUID().toString()
         val reply = request(nonce, JSONObject().put("type", "responseDiagnosis").put("nonce", nonce)
             .put("consent", true).put("groupId", groupId).put("allowLoopback", fixtureMode)
-            .put("windowMs", windowMs.coerceIn(500, 15_000)), windowMs.coerceIn(500, 15_000) + 8_000L) ?: return null
+            .put("autoScrollConsent", autoScrollConsent).put("windowMs", windowMs.coerceIn(500, 15_000)), windowMs.coerceIn(500, 15_000) + 8_000L) ?: return null
         return ResponseProtocol.report(reply, nonce)
     }
 

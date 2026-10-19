@@ -6,7 +6,7 @@ import org.junit.Test
 
 class ResponseProtocolTest {
     private fun reply() = JSONObject().put("type", "responseDiagnosisResult").put("nonce", "fresh").put("status", "OK").put("counts", JSONObject().apply { ResponseProtocol.keys.forEach { put(it, 0) } })
-    @Test fun onlyCountsAreDisplayed() { assertTrue(ResponseProtocol.report(reply(), "fresh")!!.startsWith("ODPOWIEDZI 0.3.0")) }
+    @Test fun onlyCountsAreDisplayed() { assertTrue(ResponseProtocol.report(reply(), "fresh")!!.startsWith("ODPOWIEDZI 0.3.1")) }
     @Test fun wrongNonceTypeAndStatusAreRejected() {
         assertNull(ResponseProtocol.report(reply(), "old"))
         assertNull(ResponseProtocol.report(reply().put("type", "scanResult"), "fresh"))
@@ -45,6 +45,15 @@ class ResponseProtocolTest {
         assertTrue(ResponseProtocol.report(r, "fresh")!!.contains("BRAK XHR W KARCIE"))
         r.getJSONObject("counts").put("responseTabXhr", 1)
         assertTrue(ResponseProtocol.report(r, "fresh")!!.contains("BRAK BEZPIECZNEJ ODPOWIEDZI"))
+    }
+
+    @Test fun scrollCountersAreBoundedAndRequireSeparateConsentFlag() {
+        for ((key, value) in listOf("responseAutoScroll" to 2, "responseScrollSteps" to 6, "responseScrollMoves" to 1, "responseScrollSteps" to 1)) {
+            val r = reply(); r.getJSONObject("counts").put(key, value)
+            assertNull(ResponseProtocol.report(r, "fresh"))
+        }
+        val r = reply(); r.getJSONObject("counts").put("responseAutoScroll", 1).put("responseScrollSteps", 5).put("responseScrollMoves", 4)
+        assertNotNull(ResponseProtocol.report(r, "fresh"))
     }
 
 }

@@ -521,9 +521,10 @@ class GeckoFixtureTest {
                     assertEquals(1, channel.probe()!!.articles)
                     val cancelStarted = android.os.SystemClock.elapsedRealtime()
                     launch { delay(500); channel.abortResponseDiagnosis() }
-                    assertNull(channel.responseDiagnosis(true, FIXTURE_GROUP_ID, 15_000))
+                    assertNull(channel.responseDiagnosis(true, FIXTURE_GROUP_ID, 15_000, autoScrollConsent = true))
                     assertTrue("native abort waited for full window", android.os.SystemClock.elapsedRealtime() - cancelStarted < 10_000)
-                    val again = channel.responseDiagnosis(true, FIXTURE_GROUP_ID, 2_000)
+                    val again = channel.responseDiagnosis(true, FIXTURE_GROUP_ID, 4_000, autoScrollConsent = true)
+                    assertTrue("no real scroll: $again", (Regex("responseScrollMoves: ([0-9]+)").find(again.orEmpty())?.groupValues?.get(1)?.toIntOrNull() ?: 0) > 0)
                     assertTrue("again=$again", again?.contains("responseExactIds: 1") == true)
                     launch { delay(500); session.loadUri(server.url("/login/", "login")) }
                     val stopped = channel.responseDiagnosis(true, FIXTURE_GROUP_ID, 2_000)

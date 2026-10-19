@@ -1,3 +1,7 @@
+# Aktualizacja 0.3.1
+
+Opcjonalne **Dane + przewijanie**, osobna zgoda, do 5 kroków w 15 s. [Instrukcja](docs/poc-031.md). Tryb ręczny i limity odczytu bez zmian. Poniżej historia poprzednich wersji.
+
 # Aktualizacja 0.3.0
 
 Pasywne liczniki przyczyn zerowego okna odpowiedzi, bez poszerzania odczytu treści. [Instrukcja i interpretacja](docs/poc-030.md). Nowa jednorazowa zgoda. Poprzednie sekcje opisują historię.

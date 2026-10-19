@@ -1,15 +1,33 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 function harness(){
- let handler,disconnect,watchAbort,disposed=0;const messages=[],runtime=[],timers=[];
+ let handler,disconnect,watchAbort,disposed=0,now=0;const messages=[],runtime=[],timers=[];
  const doc={title:'Group',visibilityState:'visible',body:{innerText:''},documentElement:{},forms:[],getElementsByTagName:()=>[],querySelector:()=>null,querySelectorAll:()=>[]};
  const port={postMessage:m=>messages.push(m),onMessage:{addListener(fn){handler=fn;}},onDisconnect:{addListener(fn){disconnect=fn;}}};
- const scope={URL,Date,Promise,document:doc,location:{href:'https://www.facebook.com/groups/group/',hostname:'www.facebook.com',pathname:'/groups/group/'},innerWidth:400,innerHeight:600,MutationObserver:class {observe(){}},FlipGeckoPocAdapter:{},FlipFacebookCollectorCore:{},FlipVisiblePosts:{context:()=>true,watch(w,r,abort){watchAbort=abort;return()=>disposed++;}},setTimeout(fn,ms){timers.push({fn,ms});},browser:{runtime:{connectNative:()=>port,async sendMessage(m){runtime.push(m);return {status:m.type==='armResponse'?'ARMED':'OK',counts:{}};}}}};
+ const scope={URL,Date,Promise,performance:{now:()=>now},scrollY:0,scrollBy(o){this.scrollY+=o.top;},document:doc,location:{href:'https://www.facebook.com/groups/group/',hostname:'www.facebook.com',pathname:'/groups/group/'},innerWidth:400,innerHeight:600,MutationObserver:class {observe(){}},FlipGeckoPocAdapter:{},FlipFacebookCollectorCore:{},FlipVisiblePosts:{context:()=>true,watch(w,r,abort){watchAbort=abort;return()=>disposed++;}},setTimeout(fn,ms){timers.push({fn,ms});},browser:{runtime:{connectNative:()=>port,async sendMessage(m){runtime.push(m);return {status:m.type==='armResponse'?'ARMED':'OK',counts:{}};}}}};
  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../main/extension/poc-content.js'),'utf8'),scope);
- return {doc,scope,messages,runtime,timers,send:m=>handler(m),disconnect:()=>disconnect(),abort:()=>watchAbort(),disposed:()=>disposed};
+ return {advance(){const t=timers.shift();assert(t);now+=t.ms;t.fn();},jump(ms){now+=ms;},doc,scope,messages,runtime,timers,send:m=>handler(m),disconnect:()=>disconnect(),abort:()=>watchAbort(),disposed:()=>disposed};
 }
 const request={type:'responseDiagnosis',nonce:'fresh-consent',consent:true,groupId:'group',windowMs:15000};
 const flush=async()=>{for(let i=0;i<10;i++)await Promise.resolve();};
-test('content layer refuses absent consent before arming or reading',async()=>{const h=harness();await h.send({...request,consent:false});assert.equal(h.runtime.length,0);assert.equal(h.messages.at(-1).status,'STOP');});
+test('content layer refuses absent consent before arming or reading',async()=>{const h=harness();await h.send({...request,consent:false,autoScrollConsent:true});assert.equal(h.runtime.length,0);assert.equal(h.messages.at(-1).status,'STOP');});
 test('native stop cancels the window immediately and permits a fresh attempt',async()=>{const h=harness();const pending=h.send(request);await flush();assert(h.runtime.some(m=>m.type==='armResponse'));await h.send({type:'abortResponseDiagnosis',nonce:'native-stop'});await pending;assert.equal(h.messages.at(-1).status,'STOP');assert.equal(h.disposed(),1);assert(!h.runtime.some(m=>m.type==='readResponse'));const again=h.send({...request,nonce:'new-consent'});await flush();h.abort();await again;assert.equal(h.runtime.filter(m=>m.type==='armResponse').length,2);});
 test('page watcher and port disconnect cancel instead of waiting fifteen seconds',async()=>{for(const action of ['abort','disconnect']){const h=harness();const p=h.send(request);await flush();h[action]();await p;assert.equal(h.messages.at(-1).status,'STOP');assert(h.runtime.some(m=>m.type==='stopResponse'));assert.equal(h.disposed(),1);}});
 test('context disappearing while arm is in flight stops and cleans the armed session',async()=>{const h=harness();const p=h.send(request);h.doc.visibilityState='hidden';await p;assert.equal(h.messages.at(-1).status,'STOP');assert(h.runtime.some(m=>m.type==='stopResponse'));assert(!h.runtime.some(m=>m.type==='readResponse'));});
+
+test('automatic scroll is off without separate explicit consent',async()=>{
+ for(const value of [undefined,false,'true']){const h=harness();const p=h.send({...request,autoScrollConsent:value});await flush();h.advance();await p;assert.equal(h.scope.scrollY,0);assert.equal(h.messages.at(-1).counts.responseAutoScroll,0);assert.equal(h.messages.at(-1).counts.responseScrollSteps,0);}
+});
+test('explicit scrolling is bounded to five steps inside the armed fifteen seconds',async()=>{
+ const h=harness();const p=h.send({...request,autoScrollConsent:true});await flush();assert.equal(h.scope.scrollY,0);
+ for(let i=0;i<5;i++){h.advance();await flush();}
+ assert.equal(h.scope.scrollY,5*540);h.advance();await p;
+ const c=h.messages.at(-1).counts;assert.equal(c.responseAutoScroll,1);assert.equal(c.responseScrollSteps,5);assert.equal(c.responseScrollMoves,5);assert(h.runtime.some(m=>m.type==='readResponse'));
+});
+test('cancellation or lost visibility prevents subsequent automatic scrolling',async()=>{
+ for(const action of ['cancel','hidden']){const h=harness();const p=h.send({...request,autoScrollConsent:true});await flush();h.advance();await flush();assert.equal(h.scope.scrollY,540);
+ if(action==='cancel')await h.send({type:'abortResponseDiagnosis',nonce:'stop'});else {h.doc.visibilityState='hidden';h.advance();}
+ await p;assert.equal(h.scope.scrollY,540);assert.equal(h.messages.at(-1).status,'STOP');assert(!h.runtime.some(m=>m.type==='readResponse'));}
+});
+test('a delayed timer after the deadline performs no scroll',async()=>{
+ const h=harness();const p=h.send({...request,autoScrollConsent:true});await flush();h.jump(20000);h.advance();await flush();assert.equal(h.scope.scrollY,0);h.advance();await p;assert.equal(h.messages.at(-1).counts.responseScrollSteps,0);
+});
