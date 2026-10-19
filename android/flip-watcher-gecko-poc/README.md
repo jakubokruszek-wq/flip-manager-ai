@@ -1,3 +1,7 @@
+# Wersja 0.2.7
+
+[Diagnostyka kontenerów wokół tekstu — instrukcja i znaczenie liczników](docs/poc-027.md). Osobna jednorazowa zgoda, bez skanu i bez zapisu treści.
+
 # Wersja 0.2.6
 
 Poprawka po zerowym raporcie na Samsungu: [porównanie z rozszerzeniem i instrukcja](docs/poc-026.md). Wspólny parser linków, znaczniki treści z rozszerzenia i lokalne liczniki tekstu bez wymagania ceny. Bez skanu i odczytu odpowiedzi sieciowych.

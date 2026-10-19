@@ -1,7 +1,7 @@
 /* Local, one-shot rendered-DOM diagnosis. No storage, network or collector. */
 (function(root) {
   "use strict";
-  const keys = ["candidates", "semanticCandidates", "heuristicCandidates", "links", "confirmedIds", "permalinks", "priceCandidates", "areaCandidates", "roomCandidates", "districtCandidates", "photoCandidates", "visibleTextBlocks", "desktopMessageBlocks", "mobileTextBlocks", "fallbackTextBlocks", "ambiguousCards"];
+  const keys = ["candidates", "semanticCandidates", "heuristicCandidates", "links", "confirmedIds", "permalinks", "priceCandidates", "areaCandidates", "roomCandidates", "districtCandidates", "photoCandidates", "visibleTextBlocks", "desktopMessageBlocks", "mobileTextBlocks", "fallbackTextBlocks", "ambiguousCards", "ancestorContainers", "ancestorWithLinks", "ancestorWithExactId", "ancestorWithPhotos", "ancestorWithPrice", "ancestorWithArea", "ancestorSharedContainers", "ancestorAmbiguousContainers", "ancestorForeignContainers", "ancestorExactAndPhoto", "ancestorFeedStops", "ancestorDepthStops", "ancestorMaxDepth"];
   function context(href, group, fixture) {
     try {
       const u = new URL(href);
@@ -47,6 +47,48 @@
     counts.confirmedIds = ids.size;
     return {status:"GROUP_OK", counts};
   }
+  // Count ancestor evidence separately. These are NOT confirmed post records.
+  // Shared containers are observed but never promoted or used to infer ownership.
+  function ancestors(seeds, universe, doc, groupId, visible) {
+    const names = ["ancestorContainers", "ancestorWithLinks", "ancestorWithExactId", "ancestorWithPhotos", "ancestorWithPrice", "ancestorWithArea", "ancestorSharedContainers", "ancestorAmbiguousContainers", "ancestorForeignContainers", "ancestorExactAndPhoto", "ancestorFeedStops", "ancestorDepthStops", "ancestorMaxDepth"];
+    const out = Object.fromEntries(names.map(k => [k,0]));
+    const visited = new Set();
+    for (const seed of seeds.slice(0,20)) {
+      let node = seed.parentElement, depth = 1;
+      for (; node && depth <= 6; node = node.parentElement, depth++) {
+        if (node === doc.body || node === doc.documentElement || node.matches?.('main,nav,[role="feed"],[role="main"],[role="navigation"],[data-pagelet*="Feed"],[data-pagelet*="feed"]')) {
+          out.ancestorFeedStops++; break;
+        }
+        if (typeof node.querySelectorAll !== "function" || !visible(node)) break;
+        out.ancestorMaxDepth = Math.max(out.ancestorMaxDepth,depth);
+        if (!visited.has(node)) {
+          visited.add(node);out.ancestorContainers++;
+          const shared = universe.filter(el => node === el || node.contains(el)).length > 1;
+          const anchors = Array.from(node.querySelectorAll('a[href]')).slice(0,100).filter(visible);
+          const ids = new Set(anchors.map(a=>exact(a.href,groupId)).filter(Boolean));
+          const foreign = anchors.some(a=>{const link=root.FlipFacebookCollectorCore?.parsePostLink(a.href);return link?.sourceType === "GROUP" && link.sourceId !== groupId;});
+          const photos = Array.from(node.querySelectorAll('img')).slice(0,100).filter(visible).length;
+          if (shared) out.ancestorSharedContainers++;
+          if (ids.size > 1) out.ancestorAmbiguousContainers++;
+          if (foreign) out.ancestorForeignContainers++;
+          if (!shared && ids.size <= 1 && !foreign) {
+            if (anchors.length) out.ancestorWithLinks++;
+            if (ids.size === 1) out.ancestorWithExactId++;
+            if (photos) out.ancestorWithPhotos++;
+            if (ids.size === 1 && photos) out.ancestorExactAndPhoto++;
+            // Reuse existing field-presence heuristics transiently; no strings leave JS.
+            const fields = analyze({consent:true,href:"https://www.facebook.com/groups/"+groupId+"/",groupId,visible:true,cards:[{text:node.innerText,hrefs:[],photos:0}]}).counts;
+            if (fields?.priceCandidates) out.ancestorWithPrice++;
+            if (fields?.areaCandidates) out.ancestorWithArea++;
+          }
+          // Do not climb past a shared/ambiguous/foreign wrapper into the feed.
+          if (shared || ids.size > 1 || foreign) break;
+        } else break;
+      }
+      if (node && depth > 6) out.ancestorDepthStops++;
+    }
+    return out;
+  }
   function read(win, request) {
     const doc = win.document;
     const blocked = () => !!doc.querySelector('input[type="password"],form[action*="login"],iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="captcha"],[data-testid*="checkpoint"]') || /checkpoint|captcha|zaloguj się|log in|log into facebook|content isn.t available|group is private|join group to see|ta zawartość jest niedostępna|ta treść jest niedostępna|dołącz do grupy, aby/i.test((doc.title || "") + " " + ((doc.body && doc.body.innerText) || "").slice(0, 4000));
@@ -81,8 +123,10 @@
     }
     let cards = articles;
     if (!cards.length) cards = desktop.length ? desktop : mobile.length ? mobile : fallback;
+    const universe = [...new Set([...cards,...desktop,...mobile,...fallback])].slice(0,2000);
     cards = [...new Set(cards)].filter(el => !cards.some(other => other !== el && el.contains(other))).slice(0,20);
     const result = analyze({consent:true, href:win.location.href, groupId:request.groupId, fixture:request.allowLoopback, visible:true, blocked:blocked(), cards:cards.slice(0,20).map(el => ({semantic:semantic(el), text:el.innerText, hrefs:Array.from(el.querySelectorAll('a[href]')).filter(visible).map(a=>a.href), photos:Array.from(el.querySelectorAll('img')).filter(visible).length}))});
+    if (result.counts) Object.assign(result.counts, ancestors(cards,universe,doc,request.groupId,visible));
     if (blocked() || !context(win.location.href, request.groupId, request.allowLoopback) || doc.visibilityState !== "visible" || !(win.innerWidth > 0 && win.innerHeight > 0)) return {status:"STOP"};
     if (result.counts) Object.assign(result.counts, {
       visibleTextBlocks: Math.min(2000, desktop.length + mobile.length + fallback.length),
@@ -107,7 +151,7 @@
     check();
     return () => finish(false);
   }
-  const api = {context, exact, analyze, read, watch, keys};
+  const api = {context, exact, analyze, read, watch, keys, ancestors};
   if (typeof module !== "undefined") module.exports = api;
   else root.FlipVisiblePosts = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

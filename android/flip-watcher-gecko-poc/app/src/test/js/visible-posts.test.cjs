@@ -48,3 +48,35 @@ for(const mode of ["desktop","mobile","fallback"]) test(`rendered ${mode} text w
  assert.equal(out.counts[mode==="desktop"?"desktopMessageBlocks":mode==="mobile"?"mobileTextBlocks":"fallbackTextBlocks"],1);
  assert.ok(!JSON.stringify(out).includes("Sprzedam"));
 });
+function ancestorFixture(options={}) {
+ const seed={};
+ const second={};
+ const group=groupId;
+ const links=options.links || [`${href}posts/123456789/`];
+ const wrapper={innerText:"Cena 450 000 zł i 54 m²",parentElement:null,matches(){return false},contains(el){return el===seed || options.shared && el===second},querySelectorAll(s){return s==='a[href]' ? links.map(href=>({href})) : options.photo ? [{}] : []}};
+ seed.parentElement=wrapper;
+ return {seed,second,wrapper,doc:{body:{},documentElement:{}}};
+}
+test("ancestor links and sibling image found without upgrading confirmed IDs",()=>{
+ const f=ancestorFixture({photo:true});const out=v.ancestors([f.seed],[f.seed],f.doc,groupId,()=>true);
+ assert.equal(out.ancestorWithExactId,1);assert.equal(out.ancestorWithPhotos,1);assert.equal(out.ancestorExactAndPhoto,1);assert.equal(out.ancestorWithPrice,1);assert.equal(out.ancestorWithArea,1);
+ assert.ok(!JSON.stringify(out).includes("123456789"));assert.ok(!JSON.stringify(out).includes("450 000"));
+});
+test("shared wrapper counted once and never attributed to either text block",()=>{
+ const f=ancestorFixture({shared:true,photo:true});f.second.parentElement=f.wrapper;
+ const out=v.ancestors([f.seed,f.second],[f.seed,f.second],f.doc,groupId,()=>true);
+ assert.equal(out.ancestorContainers,1);assert.equal(out.ancestorSharedContainers,1);assert.equal(out.ancestorWithExactId,0);assert.equal(out.ancestorWithPhotos,0);
+});
+test("ambiguous and foreign ancestor links do not bind identity",()=>{
+ for(const links of [[href+"posts/123456789/",href+"posts/987654321/"],[href+"posts/123456789/",href.replace(groupId,"othergroup")+"posts/987654321/"]]){
+ const f=ancestorFixture({links});const out=v.ancestors([f.seed],[f.seed],f.doc,groupId,()=>true);assert.equal(out.ancestorWithExactId,0);assert.ok(out.ancestorAmbiguousContainers+out.ancestorForeignContainers>0);
+ }
+});
+test("feed/root boundary stops without inspecting contents",()=>{
+ const f=ancestorFixture();f.wrapper.matches=()=>true;f.wrapper.querySelectorAll=()=>{throw Error("feed inspected")};const out=v.ancestors([f.seed],[f.seed],f.doc,groupId,()=>true);assert.equal(out.ancestorContainers,0);assert.equal(out.ancestorFeedStops,1);
+});
+test("ancestor traversal depth and hidden containers are bounded",()=>{
+ const f=ancestorFixture({links:[]});let node=f.wrapper;for(let i=0;i<10;i++){node.parentElement={...f.wrapper,parentElement:null};node=node.parentElement;}
+ const out=v.ancestors([f.seed],[f.seed],f.doc,groupId,()=>true);assert.equal(out.ancestorContainers,6);assert.equal(out.ancestorMaxDepth,6);assert.equal(out.ancestorDepthStops,1);
+ assert.equal(v.ancestors([f.seed],[f.seed],f.doc,groupId,()=>false).ancestorContainers,0);
+});
