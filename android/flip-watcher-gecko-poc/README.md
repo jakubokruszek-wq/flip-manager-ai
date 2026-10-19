@@ -1,3 +1,7 @@
+# Aktualizacja 0.3.0
+
+Pasywne liczniki przyczyn zerowego okna odpowiedzi, bez poszerzania odczytu treści. [Instrukcja i interpretacja](docs/poc-030.md). Nowa jednorazowa zgoda. Poprzednie sekcje opisują historię.
+
 # Aktualizacja 0.2.9
 
 Osobna diagnostyka odpowiedzi sieciowych po nowej zgodzie operatora; [zakres i instrukcja](docs/poc-029.md). Nie uruchamia kolektora ani LIVE. Wcześniejsze sekcje opisują historię poprzednich wersji.

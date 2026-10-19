@@ -513,6 +513,7 @@ class GeckoFixtureTest {
                     Log.i("GeckoPocTest", "RESPONSE_STREAM $report")
                     assertTrue("report=$report", report?.contains("responseApiAvailable: 1") == true)
                     assertTrue("report=$report", report?.contains("responseExactIds: 1") == true)
+                    assertTrue("no passive endpoint rejection: $report", (Regex("responseEndpointRejected: ([0-9]+)").find(report.orEmpty())?.groupValues?.get(1)?.toIntOrNull() ?: 0) > 0)
                     assertTrue(report?.contains("responsePriceSignals: 1") == true)
                     assertTrue(report?.contains("responseAreaSignals: 1") == true)
                     assertFalse(report.orEmpty().contains("PRIVATE")); assertFalse(report.orEmpty().contains("550000000000003"))

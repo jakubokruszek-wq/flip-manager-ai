@@ -143,7 +143,7 @@ class PocActivity : ComponentActivity() {
         val approvedUrl = url
         visibleDialog = AlertDialog.Builder(this)
             .setTitle("Nowa zgoda: treść odpowiedzi sieciowych")
-            .setMessage("Przez 15 sekund analizować lokalnie odpowiedzi danych tej zatwierdzonej grupy? Do 8 odpowiedzi, 512 KiB na odpowiedź i 2 MiB łącznie, maksymalnie 20 dokładnych ID. Tylko pamięć i liczniki: bez zapisu surowych odpowiedzi, tekstów, ID, cookies i tokenów; bez uploadu, skanu, galerii i kolektora. Strona otrzyma niezmienione bajty. Możesz ręcznie przewinąć grupę. Zmiana strony, LOGIN/CAPTCHA/CHECKPOINT i wygaszenie przerywają próbę. To osobna zgoda, niezależna od DOM i starego skanu.")
+            .setMessage("Przez 15 sekund analizować lokalnie odpowiedzi danych tej zatwierdzonej grupy? Dodatkowo policzyć zdarzenia Facebook/CDN i powody pominięcia (karta, ramka, typ, host, ścieżka, kontekst), także zbiorczo ruch bez karty lub innej karty, bez jego treści i adresów? Do 8 odpowiedzi, 512 KiB na odpowiedź i 2 MiB łącznie, maksymalnie 20 dokładnych ID. Tylko pamięć i liczniki: bez zapisu surowych odpowiedzi, tekstów, ID, cookies i tokenów; bez uploadu, skanu, galerii i kolektora. Strona otrzyma niezmienione bajty. Możesz ręcznie przewinąć grupę. Zmiana strony, LOGIN/CAPTCHA/CHECKPOINT i wygaszenie przerywają próbę. To osobna zgoda, niezależna od DOM i starego skanu.")
             .setNegativeButton("Anuluj", null)
             .setPositiveButton("Zgadzam się jednorazowo") { _, _ ->
                 if (epoch != visibleEpoch || current !== channel || approvedUrl != url || kind != PageKind.APPROVED_GROUP) return@setPositiveButton

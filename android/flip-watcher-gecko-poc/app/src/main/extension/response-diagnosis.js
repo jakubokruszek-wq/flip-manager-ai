@@ -1,7 +1,7 @@
 /* Opt-in response diagnostic. No body, record, URL or ID ever leaves this module. */
 (function(scope) {
   "use strict";
-  const keys = ["responseApiAvailable","responseArmed","responseRequestsSeen","responseOriginRejected","responseFiltered","responseCompleted","responseBytes","responseOversize","responseDecodeErrors","responseStreamErrors","responseLimitSkipped","responseKeyPostId","responseKeyStoryId","responseExactIds","responseDuplicateIds","responseRecordsWithText","responseRecordsWithAuthor","responseRecordsWithImages","responsePriceSignals","responseAreaSignals","responseStopped"];
+  const keys = ["responseObserved","responseBoundTab","responseOtherTab","responseNoTab","responseTabXhr","responseFrameRejected","responseHostRejected","responseEndpointRejected","responseMissingOrigin","responseApiAvailable","responseArmed","responseRequestsSeen","responseOriginRejected","responseFiltered","responseCompleted","responseBytes","responseOversize","responseDecodeErrors","responseStreamErrors","responseLimitSkipped","responseKeyPostId","responseKeyStoryId","responseExactIds","responseDuplicateIds","responseRecordsWithText","responseRecordsWithAuthor","responseRecordsWithImages","responsePriceSignals","responseAreaSignals","responseStopped"];
   const MAX_BODY=524288, MAX_TOTAL=2097152;
   function groupURL(raw, group, fixture) {
     try { const u=new URL(raw); return /^[A-Za-z0-9._-]{1,100}$/.test(group) && !u.username && !u.password && !u.hash &&
@@ -70,15 +70,33 @@
         if(/\d+(?:[,.]\d+)?\s*m(?:²|2)(?!\w)/i.test(text))inc(s,"responseAreaSignals");
       }
     }
+    function allowedHost(u,s) {
+      return (u.protocol==="https:" && !u.port && ["facebook.com","www.facebook.com","m.facebook.com"].includes(u.hostname)) || (s.fixture && u.protocol==="http:" && u.hostname==="127.0.0.1");
+    }
+    const allowedPath=p=>/^\/ajax\//.test(p) || /^\/api\/graphql\/?$/.test(p) || /^\/graphql\/?$/.test(p);
+    // Separate PASSIVE listener: see events before the body listener's gates.
+    // Only bounded counts; no addresses, IDs, headers or content retained.
+    function observe(d) {
+      const s=current;if(!s || s.closed || s.expired)return;
+      inc(s,"responseObserved");
+      if(!Number.isInteger(d.tabId) || d.tabId<0){inc(s,"responseNoTab");return;}
+      if(d.tabId!==s.tab){inc(s,"responseOtherTab");return;}
+      inc(s,"responseBoundTab");
+      if(d.type!=="xmlhttprequest")return;
+      inc(s,"responseTabXhr");
+      if(d.frameId!==0){inc(s,"responseFrameRejected");return;}
+      let u;try{u=new URL(d.url);}catch{return;}
+      if(!allowedHost(u,s)){inc(s,"responseHostRejected");return;}
+      if(!allowedPath(u.pathname))inc(s,"responseEndpointRejected");
+    }
     function before(d) {
       const s=current;if(!s || s.closed || s.expired || d.tabId!==s.tab) return;
       if(d.type==="main_frame"){abort();return;}
-      if(d.type!=="xmlhttprequest" || d.frameId!==0) return;
+      if(d.type!=="xmlhttprequest" || d.frameId!==0)return;
       let u;try{u=new URL(d.url);}catch{return;}
-      const host=(u.protocol==="https:" && !u.port && ["facebook.com","www.facebook.com","m.facebook.com"].includes(u.hostname)) || (s.fixture && u.protocol==="http:" && u.hostname==="127.0.0.1");
-      if(!host || !(/^\/ajax\//.test(u.pathname) || /^\/api\/graphql\/?$/.test(u.pathname) || /^\/graphql\/?$/.test(u.pathname)))return;
+      if(!allowedHost(u,s) || !allowedPath(u.pathname))return;
       inc(s,"responseRequestsSeen");
-      if(!groupURL(d.documentUrl || d.originUrl,s.group,s.fixture)){inc(s,"responseOriginRejected");return;}
+      if(!groupURL(d.documentUrl || d.originUrl,s.group,s.fixture)){if(!d.documentUrl && !d.originUrl)inc(s,"responseMissingOrigin");inc(s,"responseOriginRejected");return;}
       if(s.counts.responseFiltered>=8 || s.streams.size>=4 || s.counts.responseBytes>=MAX_TOTAL){inc(s,"responseLimitSkipped");return;}
       let filter;try{filter=api.webRequest.filterResponseData(d.requestId);}catch{inc(s,"responseStreamErrors");return;}
       const stream={filter,parts:[],decoder:new TextDecoder("utf-8",{fatal:true}),bytes:0};s.streams.set(d.requestId,stream);inc(s,"responseFiltered");
@@ -100,9 +118,13 @@
       filter.onerror=()=>{if(current===s&&!s.closed)inc(s,"responseStreamErrors");drop();};
     }
     if(typeof api?.webRequest?.filterResponseData==="function") {
-      try{api.webRequest.onBeforeRequest.addListener(before,{urls:["https://www.facebook.com/*","https://m.facebook.com/*","https://facebook.com/*","http://127.0.0.1/*"]},["blocking"]);listenerReady=true;}catch{}
+      try{
+        api.webRequest.onBeforeRequest.addListener(observe,{urls:["https://*.facebook.com/*","https://facebook.com/*","https://*.fbcdn.net/*","http://127.0.0.1/*"]});
+        api.webRequest.onBeforeRequest.addListener(before,{urls:["https://www.facebook.com/*","https://m.facebook.com/*","https://facebook.com/*","http://127.0.0.1/*"]},["blocking"]);
+        listenerReady=true;
+      }catch{}
     }
-    return {arm,read,abort,before,stop(m,sender){if(current && current.nonce===m.nonce && current.tab===sender?.tab?.id && sender.frameId===0)abort();}};
+    return {arm,read,abort,before,observe,stop(m,sender){if(current && current.nonce===m.nonce && current.tab===sender?.tab?.id && sender.frameId===0)abort();}};
   }
   const exported={create,keys,groupURL};
   if(typeof module!=="undefined")module.exports=exported;

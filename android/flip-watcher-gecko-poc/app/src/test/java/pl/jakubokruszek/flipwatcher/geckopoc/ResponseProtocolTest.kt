@@ -6,7 +6,7 @@ import org.junit.Test
 
 class ResponseProtocolTest {
     private fun reply() = JSONObject().put("type", "responseDiagnosisResult").put("nonce", "fresh").put("status", "OK").put("counts", JSONObject().apply { ResponseProtocol.keys.forEach { put(it, 0) } })
-    @Test fun onlyCountsAreDisplayed() { assertTrue(ResponseProtocol.report(reply(), "fresh")!!.startsWith("ODPOWIEDZI 0.2.9")) }
+    @Test fun onlyCountsAreDisplayed() { assertTrue(ResponseProtocol.report(reply(), "fresh")!!.startsWith("ODPOWIEDZI 0.3.0")) }
     @Test fun wrongNonceTypeAndStatusAreRejected() {
         assertNull(ResponseProtocol.report(reply(), "old"))
         assertNull(ResponseProtocol.report(reply().put("type", "scanResult"), "fresh"))
@@ -36,4 +36,15 @@ class ResponseProtocolTest {
     @Test fun unavailableAndStoppedAreExplicit() {
         for (status in listOf("STOP", "UNSUPPORTED", "BUSY")) assertTrue(ResponseProtocol.report(reply().put("status", status), "fresh")!!.contains(status))
     }
+    @Test fun zeroRequestsAreNotReportedAsParserFailure() {
+        val r = reply()
+        assertTrue(ResponseProtocol.report(r, "fresh")!!.contains("BRAK ZDARZEŃ"))
+        r.getJSONObject("counts").put("responseObserved", 1)
+        assertTrue(ResponseProtocol.report(r, "fresh")!!.contains("BRAK POWIĄZANIA Z KARTĄ"))
+        r.getJSONObject("counts").put("responseBoundTab", 1)
+        assertTrue(ResponseProtocol.report(r, "fresh")!!.contains("BRAK XHR W KARCIE"))
+        r.getJSONObject("counts").put("responseTabXhr", 1)
+        assertTrue(ResponseProtocol.report(r, "fresh")!!.contains("BRAK BEZPIECZNEJ ODPOWIEDZI"))
+    }
+
 }

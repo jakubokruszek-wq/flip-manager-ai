@@ -9,7 +9,7 @@ function harness(apiAvailable=true){
  const api={webRequest:{onBeforeRequest:{addListener(fn){this.listener=fn;}}}};
  if(apiAvailable)api.webRequest.filterResponseData=id=>{const f={id,writes:[],write(b){this.writes.push(Buffer.from(b));},close(){this.closed=true;},disconnect(){this.disconnected=true;}};filters.push(f);return f;};
  const d=create(api,core,{setTimeout(fn,ms){timers.push({fn,ms});return timers.length;},clearTimeout(){}});
- const request=(extra={})=>d.before({tabId:7,frameId:0,type:'xmlhttprequest',url:'https://www.facebook.com/ajax/feed/',documentUrl:url,requestId:String(filters.length),...extra});
+ const request=(extra={})=>{const details={tabId:7,frameId:0,type:'xmlhttprequest',url:'https://www.facebook.com/ajax/feed/',documentUrl:url,requestId:String(filters.length),...extra};d.observe(details);return d.before(details);};
  const stream=(body,extra={})=>{request(extra);const f=filters.at(-1);const b=Buffer.from(body);for(let i=0;i<b.length;i+=7)f.ondata({data:Uint8Array.from(b.subarray(i,i+7)).buffer});f.onstop();return f;};
  return {d,filters,timers,request,stream,arm:(m=msg,s=sender)=>d.arm(m,s),read:(m=msg,s=sender)=>d.read(m,s)};
 }
@@ -31,3 +31,18 @@ test('unsafe context on read clears session; fixture allowance never permits for
 
 test('desktop source fallback cannot invent a group for profile or generic permalinks',()=>{const h=harness();h.arm();h.stream(JSON.stringify([{...story('123456789'),permalink_url:'https://www.facebook.com/profile/posts/123456789/'},{...story('223456789'),permalink_url:'https://www.facebook.com/posts/223456789/'},{...story('323456789'),permalink_url:'https://www.facebook.com/?fbid=323456789'}]));assert.equal(h.read().counts.responseExactIds,0);});
 test('escaped JSON group links bind exactly; URLs inside message text do not bind',()=>{const h=harness();h.arm();h.stream(JSON.stringify(story()).replaceAll('/',String.raw`\/`));assert.equal(h.read().counts.responseExactIds,1);const p=harness();p.arm();p.stream(JSON.stringify({...story(),permalink_url:'https://www.facebook.com/posts/123456789/',message:JSON.stringify({url:'https://www.facebook.com/groups/'+group+'/posts/123456789/'})}));assert.equal(p.read().counts.responseExactIds,0);});
+
+test('passive counters distinguish no-tab, other tab, type, frame, host and endpoint gates',()=>{
+ const h=harness();h.arm();
+ for(const x of [{tabId:-1},{tabId:8},{type:'image'},{frameId:2},{url:'https://graph.facebook.com/ajax/feed/'},{url:'https://www.facebook.com/not-approved/'},{documentUrl:undefined}])h.request(x);
+ const c=h.read().counts;
+ assert.equal(h.filters.length,0);assert.equal(c.responseObserved,7);assert.equal(c.responseNoTab,1);assert.equal(c.responseOtherTab,1);assert.equal(c.responseBoundTab,5);assert.equal(c.responseTabXhr,4);assert.equal(c.responseFrameRejected,1);assert.equal(c.responseHostRejected,1);assert.equal(c.responseEndpointRejected,1);assert.equal(c.responseMissingOrigin,1);assert.equal(c.responseOriginRejected,1);assert.equal(c.responseRequestsSeen,1);
+});
+test('passive observation never reads a body and is inactive without consent or after deadline',()=>{
+ const h=harness();const d={tabId:7,frameId:0,type:'xmlhttprequest',url:'https://www.facebook.com/ajax/feed/'};
+ h.d.observe(d);h.arm();h.d.observe(d);assert.equal(h.filters.length,0);h.timers[0].fn();h.d.observe(d);assert.equal(h.read().counts.responseObserved,1);h.d.observe(d);assert.equal(h.read().counts.responseObserved,0);
+});
+test('passive registration covers existing hosts; body listener retains its narrower URL scope',()=>{
+ const regs=[];create({webRequest:{filterResponseData(){throw Error('must remain idle');},onBeforeRequest:{addListener(...args){regs.push(args);}}}},core,{setTimeout(){},clearTimeout(){}});
+ assert.equal(regs.length,2);assert.equal(regs[0].length,2);assert(regs[0][1].urls.includes('https://*.fbcdn.net/*'));assert.deepEqual(regs[1][2],['blocking']);assert(!regs[1][1].urls.some(u=>u.includes('fbcdn') || u.includes('*.facebook')));
+});
