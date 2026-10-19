@@ -1,7 +1,7 @@
 (function installGeckoPocBackground(scope) {
   "use strict";
   // Count-only network diagnostics. This script NEVER reads response bodies
-  // (no filterResponseData, no webRequestBlocking permission), headers,
+  // or headers (the separate opt-in module owns response streaming),
   // cookies or full URLs. It counts request events only while one diagnosis
   // window is armed for the tab showing the approved group; see
   // FlipGeckoPocAdapter.createTrafficCounter for what is counted.

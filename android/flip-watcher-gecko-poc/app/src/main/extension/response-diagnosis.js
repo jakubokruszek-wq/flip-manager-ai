@@ -27,7 +27,7 @@
     }
     function read(m,sender) {
       const s=current;
-      if(!s || m.nonce!==s.nonce || sender?.tab?.id!==s.tab) return {status:"STOP",counts:fresh(true)};
+      if(!s || m.nonce!==s.nonce || sender?.tab?.id!==s.tab || sender.frameId!==0) return {status:"STOP",counts:fresh(true)};
       if(!senderOK({...sender}, {...m,consent:true,groupId:s.group,fixture:s.fixture})){abort();return {status:"STOP",counts:fresh(true)};}
       const counts={...s.counts};current=null;release(s);return {status:"OK",counts};
     }
@@ -83,7 +83,7 @@
     if(typeof api?.webRequest?.filterResponseData==="function") {
       try{api.webRequest.onBeforeRequest.addListener(before,{urls:["https://www.facebook.com/*","https://m.facebook.com/*","https://facebook.com/*","http://127.0.0.1/*"]},["blocking"]);listenerReady=true;}catch{}
     }
-    return {arm,read,abort,before,stop(m,sender){if(current && current.nonce===m.nonce && current.tab===sender?.tab?.id)abort();}};
+    return {arm,read,abort,before,stop(m,sender){if(current && current.nonce===m.nonce && current.tab===sender?.tab?.id && sender.frameId===0)abort();}};
   }
   const exported={create,keys,groupURL};
   if(typeof module!=="undefined")module.exports=exported;
