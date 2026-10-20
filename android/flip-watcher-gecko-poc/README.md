@@ -1,3 +1,5 @@
+Aktualna diagnostyka: [0.3.5 — osobna zgoda na odpowiedzi Beacon](docs/poc-035.md).
+
 Aktualna diagnostyka: [0.3.4 — dokładne typy i endpointy](docs/poc-034.md).
 
 Aktualna diagnostyka: [0.3.3 — otwarcie i przewijanie](docs/poc-033.md).

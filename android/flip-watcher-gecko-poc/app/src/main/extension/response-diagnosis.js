@@ -1,7 +1,7 @@
 /* Opt-in response diagnostic. No body, record, URL or ID ever leaves this module. */
 (function(scope) {
   "use strict";
-  const keys = ["responseLoadMode","responseLoadNavigation","responseLoadVerified","responseQueuedBodies","responseTabFetch","responseTabOther","responseTabUnhandled","responseAutoScroll","responseScrollSteps","responseScrollMoves","responseObserved","responseBoundTab","responseOtherTab","responseNoTab","responseTabXhr","responseFrameRejected","responseHostRejected","responseEndpointRejected","responseMissingOrigin","responseApiAvailable","responseArmed","responseRequestsSeen","responseOriginRejected","responseFiltered","responseCompleted","responseBytes","responseOversize","responseDecodeErrors","responseStreamErrors","responseLimitSkipped","responseKeyPostId","responseKeyStoryId","responseExactIds","responseDuplicateIds","responseRecordsWithText","responseRecordsWithAuthor","responseRecordsWithImages","responsePriceSignals","responseAreaSignals","responseStopped","responseTypeDocument","responseTypeSubFrame","responseTypeScript","responseTypeImage","responseTypeImageSet","responseTypeStylesheet","responseTypeFont","responseTypeMedia","responseTypePing","responseTypeBeacon","responseTypeWebsocket","responseTypeObject","responseTypeObjectSubrequest","responseTypeCspReport","responseTypeSpeculative","responseTypeManifest","responseTypeXslt","responseTypeUnknown","responseDataEndpoints","responseDataXhr","responseDataFetch","responseDataOther","responseDataPing","responseDataBeacon","responseDataUnhandled","responseDataEligiblePing","responseDataEligibleBeacon","responseDataEligibleUnhandled","responseDataFrameRejected","responseDataOriginRejected","responseDataMissingOrigin","responseAjaxBz","responseAjaxOther","responseDataPath"];
+  const keys = ["responseLoadMode","responseLoadNavigation","responseLoadVerified","responseQueuedBodies","responseTabFetch","responseTabOther","responseTabUnhandled","responseAutoScroll","responseScrollSteps","responseScrollMoves","responseObserved","responseBoundTab","responseOtherTab","responseNoTab","responseTabXhr","responseFrameRejected","responseHostRejected","responseEndpointRejected","responseMissingOrigin","responseApiAvailable","responseArmed","responseRequestsSeen","responseOriginRejected","responseFiltered","responseCompleted","responseBytes","responseOversize","responseDecodeErrors","responseStreamErrors","responseLimitSkipped","responseKeyPostId","responseKeyStoryId","responseExactIds","responseDuplicateIds","responseRecordsWithText","responseRecordsWithAuthor","responseRecordsWithImages","responsePriceSignals","responseAreaSignals","responseStopped","responseTypeDocument","responseTypeSubFrame","responseTypeScript","responseTypeImage","responseTypeImageSet","responseTypeStylesheet","responseTypeFont","responseTypeMedia","responseTypePing","responseTypeBeacon","responseTypeWebsocket","responseTypeObject","responseTypeObjectSubrequest","responseTypeCspReport","responseTypeSpeculative","responseTypeManifest","responseTypeXslt","responseTypeUnknown","responseDataEndpoints","responseDataXhr","responseDataFetch","responseDataOther","responseDataPing","responseDataBeacon","responseDataUnhandled","responseDataEligiblePing","responseDataEligibleBeacon","responseDataEligibleUnhandled","responseDataFrameRejected","responseDataOriginRejected","responseDataMissingOrigin","responseAjaxBz","responseAjaxOther","responseDataPath","responseBeaconRead","responseBeaconFiltered","responseBeaconCompleted","responseBeaconBytes","responseBeaconEmpty"];
   const MAX_BODY=524288, MAX_TOTAL=2097152;
   function groupURL(raw, group, fixture) {
     try { const u=new URL(raw); return /^[A-Za-z0-9._-]{1,100}$/.test(group) && !u.username && !u.password && !u.hash &&
@@ -22,8 +22,8 @@
       if(revoked.has(m.nonce))return {status:"STOP",counts:fresh(true)};
       if(!available()) return {status:"UNSUPPORTED",counts:fresh()};
       if(current) return {status:"BUSY",counts:fresh()};
-      const s={nonce:m.nonce,tab:sender.tab.id,group:m.groupId,fixture:m.fixture===true,counts:fresh(),streams:new Map(),ids:new Set(),pending:[],load:m.reloadConsent===true,target:sender.url,navigated:false,verified:false,scrollConsent:m.reloadConsent===true && m.autoScrollConsent===true,deadline:now()+Math.max(500,Math.min(m.reloadConsent===true?25000:15000,Number(m.windowMs)||15000)),closed:false,expired:false};
-      s.counts.responseArmed=1;s.counts.responseLoadMode=s.load?1:0;s.counts.responseAutoScroll=s.scrollConsent?1:0;current=s;
+      const s={nonce:m.nonce,tab:sender.tab.id,group:m.groupId,fixture:m.fixture===true,counts:fresh(),streams:new Map(),ids:new Set(),pending:[],load:m.reloadConsent===true,beaconConsent:m.reloadConsent===true && m.beaconConsent===true,target:sender.url,navigated:false,verified:false,scrollConsent:m.reloadConsent===true && m.autoScrollConsent===true,deadline:now()+Math.max(500,Math.min(m.reloadConsent===true?25000:15000,Number(m.windowMs)||15000)),closed:false,expired:false};
+      s.counts.responseBeaconRead=s.beaconConsent?1:0;s.counts.responseArmed=1;s.counts.responseLoadMode=s.load?1:0;s.counts.responseAutoScroll=s.scrollConsent?1:0;current=s;
       s.timer=timers.setTimeout(()=>{if(current!==s)return;for(const stream of s.streams.values())discard(stream);s.streams.clear();s.ids.clear();s.pending.length=0;s.expired=true;},Math.max(500,Math.min(s.load?25000:15000,Number(m.windowMs)||15000)));
       return {status:"ARMED",counts:{...s.counts}};
     }
@@ -143,6 +143,7 @@
       if(d.type==="xmlhttprequest")inc(s,"responseTabXhr");
       else if(d.type==="fetch")inc(s,"responseTabFetch");
       else if(d.type==="other")inc(s,"responseTabOther");
+      else if(d.type==="beacon" && s.beaconConsent){/* separately consented; fixed type counter already incremented */}
       else {inc(s,"responseTabUnhandled");return;}
       if(d.frameId!==0){inc(s,"responseFrameRejected");return;}
       let u;try{u=new URL(d.url);}catch{return;}
@@ -158,28 +159,28 @@
         abort();return;
       }
       if(s.load && !s.navigated)return;
-      if(!(d.type==="xmlhttprequest" || (s.load && ["fetch","other"].includes(d.type))) || d.frameId!==0)return;
+      if(!(d.type==="xmlhttprequest" || (s.load && ["fetch","other"].includes(d.type)) || (s.beaconConsent && d.type==="beacon")) || d.frameId!==0)return;
       let u;try{u=new URL(d.url);}catch{return;}
       if(!allowedHost(u,s) || !allowedPath(u.pathname))return;
       inc(s,"responseRequestsSeen");
       if(!groupURL(d.documentUrl || d.originUrl,s.group,s.fixture)){if(!d.documentUrl && !d.originUrl)inc(s,"responseMissingOrigin");inc(s,"responseOriginRejected");return;}
       if(s.counts.responseFiltered>=8 || s.streams.size>=4 || s.counts.responseBytes>=MAX_TOTAL){inc(s,"responseLimitSkipped");return;}
       let filter;try{filter=api.webRequest.filterResponseData(d.requestId);}catch{inc(s,"responseStreamErrors");return;}
-      const stream={filter,parts:[],decoder:new TextDecoder("utf-8",{fatal:true}),bytes:0};s.streams.set(d.requestId,stream);inc(s,"responseFiltered");
+      const stream={beacon:d.type==="beacon",filter,parts:[],decoder:new TextDecoder("utf-8",{fatal:true}),bytes:0};s.streams.set(d.requestId,stream);inc(s,"responseFiltered");if(stream.beacon)inc(s,"responseBeaconFiltered");
       const drop=()=>{discard(stream);s.streams.delete(d.requestId);};
       filter.ondata=e=>{
         // Forward the original bytes FIRST, without any rewrite or re-encoding.
         try{filter.write(e.data);}catch{if(current===s)inc(s,"responseStreamErrors");drop();return;}
         if(current!==s || s.closed || s.expired || now()>=s.deadline){drop();return;}
         if(stream.bytes+e.data.byteLength>MAX_BODY || s.counts.responseBytes+e.data.byteLength>MAX_TOTAL){inc(s,"responseOversize");drop();return;}
-        stream.bytes+=e.data.byteLength;s.counts.responseBytes+=e.data.byteLength;
+        stream.bytes+=e.data.byteLength;s.counts.responseBytes+=e.data.byteLength;if(stream.beacon)s.counts.responseBeaconBytes+=e.data.byteLength;
         try{stream.parts.push(stream.decoder.decode(e.data,{stream:true}));}catch{inc(s,"responseDecodeErrors");drop();}
       };
       filter.onstop=()=>{
         try{filter.close();}catch{}s.streams.delete(d.requestId);
         if(current!==s || s.closed || s.expired || now()>=s.deadline || !stream.decoder){stream.parts.length=0;return;}
         let body="";try{body=stream.parts.join("")+stream.decoder.decode();}catch{inc(s,"responseDecodeErrors");}
-        stream.parts.length=0;stream.decoder=null;inc(s,"responseCompleted");if(body)receive(s,body);
+        stream.parts.length=0;stream.decoder=null;inc(s,"responseCompleted");if(stream.beacon){inc(s,"responseBeaconCompleted");if(stream.bytes===0)inc(s,"responseBeaconEmpty");}if(body)receive(s,body);
       };
       filter.onerror=()=>{if(current===s&&!s.closed)inc(s,"responseStreamErrors");drop();};
     }

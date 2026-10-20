@@ -46,8 +46,8 @@ android {
         applicationId = "pl.jakubokruszek.flipwatcher.geckopoc"
         minSdk = 26
         targetSdk = 36
-        versionCode = providers.gradleProperty("GECKO_POC_VERSION_CODE").orElse("1900").get().toInt()
-        versionName = "0.3.4-gecko-poc"
+        versionCode = providers.gradleProperty("GECKO_POC_VERSION_CODE").orElse("2100").get().toInt()
+        versionName = "0.3.5-gecko-poc"
         buildConfigField("String", "COLLECTOR_CORE_SHA256", "\"$collectorCoreSha256\"")
         // No backend in this POC: there is no API URL, token or upload code at all.
         buildConfigField("boolean", "LIVE_UPLOAD_ENABLED", "false")

@@ -56,3 +56,7 @@ test('load scroll stops on cancellation, disconnect, hidden page and changed bac
 test('prepare forwards only boolean scroll consent and never scrolls the old document',async()=>{
  for(const value of [undefined,false,'true',true]){const h=harness();await h.send({...request,type:'prepareResponseLoad',reloadConsent:true,autoScrollConsent:value});assert.equal(h.runtime.find(m=>m.type==='armResponse').autoScrollConsent,value===true);assert.equal(h.scope.scrollY,0);}
 });
+
+test('Beacon consent is forwarded only for an explicit true in separately consented reload',async()=>{
+ for(const value of [undefined,false,'true',true]){const h=harness();await h.send({...request,type:'prepareResponseLoad',reloadConsent:true,beaconConsent:value});assert.equal(h.runtime.find(m=>m.type==='armResponse').beaconConsent,value===true);assert.equal(h.scope.scrollY,0);}
+});

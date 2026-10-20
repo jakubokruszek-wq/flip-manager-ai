@@ -633,4 +633,40 @@ class GeckoFixtureTest {
         }
     }
 
+    @Test fun beaconResponseReadNeedsNewConsentAndDistinguishesEmptyBodies() {
+        ActivityScenario.launch(GeckoTestHostActivity::class.java).use { scenario ->
+            var host: GeckoTestHostActivity? = null
+            scenario.onActivity { host = it }
+            runBlocking { withTimeout(120_000) { withContext(Dispatchers.Main) {
+                val server = LoopbackFixtureServer { name -> runCatching { context.assets.open(name).bufferedReader().use { it.readText() } }.getOrNull() }
+                val session = GeckoSession(GeckoSessionSettings.Builder().build())
+                val channel = CollectorChannel(session, fixtureMode = true)
+                val background = GeckoHost.background
+                try {
+                    channel.attach(GeckoHost.collectorExtension(context));assertTrue(background.awaitPort(10_000))
+                    session.open(GeckoHost.runtime(context));host!!.geckoView.setSession(session);session.setActive(true)
+                    val target = server.url(groupPath,"response-beacon")
+                    session.loadUri(target);assertTrue(channel.awaitPort(30_000));delay(1_000)
+                    val passive = ResponseLoadRunner(background).run(session,channel,target,FIXTURE_GROUP_ID,4_000,alive={true},willLoad={})
+                    assertTrue("passive=$passive",passive?.contains("Beacon=1")==true)
+                    assertTrue(passive?.contains("Read=0, Filtered=0, Completed=0, Bytes=0, Empty=0")==true)
+                    assertTrue(passive?.contains("responseExactIds: 0")==true)
+                    val report = ResponseLoadRunner(background).run(session,channel,target,FIXTURE_GROUP_ID,4_000,beaconConsent=true,alive={true},willLoad={})
+                    Log.i("GeckoPocTest","BEACON_RESPONSE $report")
+                    assertTrue("report=$report",report?.contains("Read=1, Filtered=1, Completed=1")==true)
+                    assertTrue(report?.contains("responseExactIds: 1")==true)
+                    assertTrue(report?.contains("responseCompleted: 1")==true)
+                    assertFalse(report.orEmpty().contains("PRIVATE"));assertFalse(report.orEmpty().contains("550000000000005"))
+                    val emptyTarget=server.url(groupPath,"response-beacon-empty")
+                    session.loadUri(emptyTarget);delay(1_000);assertTrue(channel.awaitPort(30_000))
+                    val empty=ResponseLoadRunner(background).run(session,channel,emptyTarget,FIXTURE_GROUP_ID,4_000,beaconConsent=true,alive={true},willLoad={})
+                    Log.i("GeckoPocTest","BEACON_EMPTY $empty")
+                    assertTrue("empty=$empty",empty?.contains("Read=1, Filtered=1, Completed=1, Bytes=0, Empty=1")==true)
+                    assertTrue(empty?.contains("BEACON UKOŃCZONE BEZ TREŚCI")==true)
+                    assertTrue(empty?.contains("responseExactIds: 0")==true)
+                } finally {background.abortResponses();channel.close();host!!.geckoView.releaseSession();session.close();server.close()}
+            } } }
+        }
+    }
+
 }

@@ -6,7 +6,7 @@ import org.junit.Test
 
 class ResponseProtocolTest {
     private fun reply() = JSONObject().put("type", "responseDiagnosisResult").put("nonce", "fresh").put("status", "OK").put("counts", JSONObject().apply { ResponseProtocol.keys.forEach { put(it, 0) } })
-    @Test fun onlyCountsAreDisplayed() { assertTrue(ResponseProtocol.report(reply(), "fresh")!!.startsWith("ODPOWIEDZI 0.3.4")) }
+    @Test fun onlyCountsAreDisplayed() { assertTrue(ResponseProtocol.report(reply(), "fresh")!!.startsWith("ODPOWIEDZI 0.3.5")) }
     @Test fun wrongNonceTypeAndStatusAreRejected() {
         assertNull(ResponseProtocol.report(reply(), "old"))
         assertNull(ResponseProtocol.report(reply().put("type", "scanResult"), "fresh"))
@@ -82,5 +82,26 @@ class ResponseProtocolTest {
             val r=reply();r.getJSONObject("counts").put(key,1);assertNull(ResponseProtocol.report(r,"fresh"))
         }
         val r=reply();r.getJSONObject("counts").put("resourceType","private");assertNull(ResponseProtocol.report(r,"fresh"))
+    }
+    @Test fun beaconRequiresSeparateFlagAndLoadMode() {
+        for (key in listOf("responseBeaconFiltered","responseBeaconCompleted","responseBeaconBytes","responseBeaconEmpty")) {
+            val r=reply();r.getJSONObject("counts").put(key,1);assertNull(ResponseProtocol.report(r,"fresh"))
+        }
+        val r=reply();r.getJSONObject("counts").put("responseBeaconRead",1);assertNull(ResponseProtocol.report(r,"fresh"))
+    }
+    @Test fun emptyBeaconIsNotReportedAsMissingXhrOrParserFailure() {
+        val r=reply();val c=r.getJSONObject("counts")
+        c.put("responseLoadMode",1).put("responseLoadNavigation",1).put("responseLoadVerified",1).put("responseBeaconRead",1)
+        c.put("responseObserved",1).put("responseBoundTab",1).put("responseTypeBeacon",1).put("responseFiltered",1).put("responseCompleted",1)
+        c.put("responseBeaconFiltered",1).put("responseBeaconCompleted",1).put("responseBeaconEmpty",1)
+        val report=ResponseProtocol.report(r,"fresh")!!
+        assertTrue(report.contains("BEACON UKOŃCZONE BEZ TREŚCI"));assertFalse(report.contains("BRAK XHR W KARCIE"))
+        c.put("responseBeaconEmpty",2);assertNull(ResponseProtocol.report(r,"fresh"))
+    }
+    @Test fun beaconBytesShareTotalBudgetAndCannotExceedIt() {
+        val r=reply();val c=r.getJSONObject("counts")
+        c.put("responseLoadMode",1).put("responseLoadNavigation",1).put("responseLoadVerified",1).put("responseBeaconRead",1)
+        c.put("responseFiltered",1).put("responseBeaconFiltered",1).put("responseBytes",2097152).put("responseBeaconBytes",2097152)
+        assertNotNull(ResponseProtocol.report(r,"fresh"));c.put("responseBytes",1);assertNull(ResponseProtocol.report(r,"fresh"))
     }
 }

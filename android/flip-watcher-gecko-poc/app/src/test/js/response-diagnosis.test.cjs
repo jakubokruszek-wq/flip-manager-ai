@@ -127,3 +127,30 @@ test('coarse path buckets never retain queries or expand body endpoint scope',()
 test('passive type classification stops without consent, after deadline and after release',()=>{
  const h=harness();const d={tabId:7,frameId:0,type:'ping',url:'https://www.facebook.com/ajax/bz/',documentUrl:url};h.d.observe(d);h.arm();h.d.observe(d);h.jump(15001);h.d.observe(d);assert.equal(h.read().counts.responseTypePing,1);h.d.observe(d);assert.equal(h.read().counts.responseTypePing,0);
 });
+
+const beaconMsg={...loadMsg,beaconConsent:true};
+test('Beacon body read is default OFF and needs strict new consent plus reload consent',()=>{
+ for(const m of [msg,{...msg,beaconConsent:true},loadMsg,{...loadMsg,beaconConsent:'true'}]){const h=harness();h.arm(m);if(m.reloadConsent)navigate(h);h.request({type:'beacon'});assert.equal(h.filters.length,0);const c=(m.reloadConsent?(verify(h),h.d.readLoad(m)):h.read(m)).counts;assert.equal(c.responseBeaconRead,0);}
+});
+test('consented Beacon preserves bytes and parses only after safe new document confirmation',()=>{
+ const h=harness();h.arm(beaconMsg);navigate(h);const body=JSON.stringify(story());const f=h.stream(body,{type:'beacon'});assert.equal(Buffer.concat(f.writes).toString(),body);assert.equal(h.d.loadContext(sender).active,true);verify(h);
+ const c=h.d.readLoad(msg).counts;assert.equal(c.responseBeaconRead,1);assert.equal(c.responseBeaconFiltered,1);assert.equal(c.responseBeaconCompleted,1);assert.equal(c.responseBeaconBytes,Buffer.byteLength(body));assert.equal(c.responseBeaconEmpty,0);assert.equal(c.responseExactIds,1);assert.equal(c.responseTabUnhandled,1);assert(!JSON.stringify(c).includes('PRIVATE'));
+});
+test('Beacon consent never allows ping, document, script, data, foreign tab/frame/host/origin',()=>{
+ const h=harness();h.arm(beaconMsg);navigate(h);verify(h);
+ for(const extra of [{type:'ping'},{type:'script'},{type:'image'},{url:'https://www.facebook.com/data/'},{url:'https://fbcdn.net/ajax/feed/'},{documentUrl:undefined},{documentUrl:url.replace(group,'foreign')},{frameId:1},{tabId:8}])h.request({type:'beacon',...extra});
+ assert.equal(h.filters.length,0);h.request({type:'beacon'});assert.equal(h.filters.length,1);
+});
+test('Beacon reports empty completion separately from non-empty unrecognized content',()=>{
+ for(const body of ['', '{}']){const h=harness();h.arm(beaconMsg);navigate(h);verify(h);h.stream(body,{type:'beacon'});const c=h.d.readLoad(msg).counts;assert.equal(c.responseBeaconCompleted,1);assert.equal(c.responseBeaconEmpty,body===''?1:0);assert.equal(c.responseBeaconBytes,Buffer.byteLength(body));assert.equal(c.responseExactIds,0);}
+});
+test('Beacon shares existing body, total, stream and response budgets',()=>{
+ const h=harness();h.arm(beaconMsg);navigate(h);verify(h);for(let i=0;i<5;i++)h.request({type:'beacon'});assert.equal(h.filters.length,4);h.filters.forEach(f=>f.onstop());for(let i=0;i<6;i++){const n=h.filters.length;h.request({type:'beacon'});if(h.filters.length>n)h.filters.at(-1).onstop();}assert.equal(h.filters.length,8);assert.equal(h.d.readLoad(msg).counts.responseBeaconFiltered,8);
+ const t=harness();t.arm(beaconMsg);navigate(t);verify(t);t.request({type:'beacon'});t.filters[0].ondata({data:new Uint8Array(524289).buffer});assert.equal(t.filters[0].disconnected,true);assert.equal(t.d.readLoad(msg).counts.responseBeaconBytes,0);
+});
+test('Beacon abort, deadline and late callbacks cannot retain or expose records',()=>{
+ for(const action of ['abort','deadline','unverified']){const h=harness();h.arm(beaconMsg);navigate(h);h.request({type:'beacon'});const f=h.filters[0];if(action==='abort')h.d.abort();if(action==='deadline')h.jump(25001);f.ondata({data:Uint8Array.from(Buffer.from(JSON.stringify(story()))).buffer});f.onstop();assert.equal(h.d.readLoad(msg).counts.responseExactIds,0);}
+});
+test('Beacon cannot promote bare IDs or foreign permalinks and deduplicates exact IDs',()=>{
+ const h=harness();h.arm(beaconMsg);navigate(h);verify(h);h.stream(JSON.stringify([story(),story('223456789','foreign'),{post_id:'323456789'}]),{type:'beacon'});h.stream(JSON.stringify(story()),{type:'beacon'});const c=h.d.readLoad(msg).counts;assert.equal(c.responseExactIds,1);assert.equal(c.responseDuplicateIds,1);assert.equal(c.responseBeaconCompleted,2);
+});
