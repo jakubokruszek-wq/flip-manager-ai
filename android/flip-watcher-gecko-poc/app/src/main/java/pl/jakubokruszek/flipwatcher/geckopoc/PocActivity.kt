@@ -74,6 +74,8 @@ class PocActivity : ComponentActivity() {
     private var visibleEpoch = 0L
     private var visibleBusy = false
     private var shareResolver: ShareLinkResolver? = null
+    internal var lastShareResultDialog: AlertDialog? = null; private set
+    private val shareResults by lazy { ShareLinkResultStore(this) }
     private var shareBusy = false
     private var shareJob: Job? = null
     private var shareDialog: AlertDialog? = null
@@ -108,12 +110,14 @@ class PocActivity : ComponentActivity() {
 
     override fun onDestroy() {
         diagnosticsDialog?.dismiss()
+        lastShareResultDialog?.dismiss()
         closeSession()
         super.onDestroy()
     }
 
     override fun onPause() {
         shareDialog?.dismiss(); shareDialog = null
+        lastShareResultDialog?.dismiss(); lastShareResultDialog = null
         finishShare("PAUSED", clear = true)
         stopVisiblePosts()
         super.onPause()
@@ -133,14 +137,34 @@ class PocActivity : ComponentActivity() {
 
     private fun finishShare(reason: String? = null, clear: Boolean = false) {
         val resolver = shareResolver ?: return
+        val wasBusy = shareBusy
         if (reason != null && resolver.active) resolver.stop(reason)
         shareJob?.cancel(); shareJob = null
         channel?.stopShareLinkContext()
-        if (shareBusy && resolver.status != ShareLinkResolver.Status.CONFIRMED) session?.stop()
         shareBusy = false
+        if (wasBusy && resolver.status != ShareLinkResolver.Status.CONFIRMED) session?.stop()
         if (::output.isInitialized) output.text = if (clear) "" else resolver.report()
+        if (wasBusy) ShareLinkResult.snapshot(resolver)?.let { publishShareResult(it, showImmediately = !clear) }
         if (clear) shareResolver = null
         if (::banner.isInitialized) render()
+    }
+
+    internal fun publishShareResult(result: ShareLinkResult, showImmediately: Boolean) {
+        val saved = shareResults.save(result)
+        if (::output.isInitialized) output.text = result.report() + if (saved) "" else "\nUWAGA: wynik nie został zapisany; skopiuj raport teraz."
+        if (showImmediately && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) showLastShareResult(result, saved)
+    }
+
+    internal fun showLastShareResult(result: ShareLinkResult? = shareResults.read(), saved: Boolean = true) {
+        lastShareResultDialog?.dismiss()
+        val text = result?.report()?.let { it + if (saved) "" else "\nUWAGA: zapis nie powiódł się." }
+            ?: "Brak zapisanego wyniku sprawdzania linku. Samo ręczne otwarcie posta nie uruchamia tej funkcji. Wyników z wersji 0.4.0 nie można odtworzyć."
+        lastShareResultDialog = AlertDialog.Builder(this).setTitle("Ostatni wynik linku")
+            .setMessage(text).setPositiveButton("Zamknij", null)
+            .setNeutralButton("Kopiuj raport") { _, _ ->
+                getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("Raport linku", text))
+            }.create()
+        lastShareResultDialog?.show()
     }
 
     private fun checkSharedLink() {
@@ -155,15 +179,15 @@ class PocActivity : ComponentActivity() {
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         }
         shareDialog = AlertDialog.Builder(this).setTitle("Sprawdź jeden udostępniony link")
-            .setMessage("NOWA JEDNORAZOWA ZGODA: otworzyć w tej sesji jeden wklejony link /share/p/ i sprawdzić jego przekierowanie? Do 20 s i 8 żądań nawigacji. Obejmuje adres poza stroną główną grupy, wyłącznie w celu rozpoznania dokładnego permalinku zatwierdzonej grupy. Bez odczytu treści postów, skryptów, odpowiedzi sieciowych, nagłówków i danych logowania. Kontrola bezpieczeństwa strony: tylko tytuł i obecność formularzy weryfikacji. Aplikacja nie zapisuje linku ani wyniku w historii lub plikach i niczego nie wysyła. Przeglądarka korzysta z istniejącego profilu jak przy ręcznym otwarciu. Bez kolektora. Raport zawiera status i liczby, nie adres ani ID. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu lub wygaszenie: STOP. Zgoda nie uruchamia skanu.")
+            .setMessage("NOWA JEDNORAZOWA ZGODA: otworzyć w tej sesji jeden wklejony link /share/p/ i sprawdzić jego przekierowanie? Do 20 s i 8 żądań nawigacji. Obejmuje adres poza stroną główną grupy, wyłącznie w celu rozpoznania dokładnego permalinku zatwierdzonej grupy. Bez odczytu treści postów, skryptów, odpowiedzi sieciowych, nagłówków i danych logowania. Kontrola bezpieczeństwa strony: tylko tytuł i obecność formularzy weryfikacji. Aplikacja zapisze lokalnie wyłącznie status, powód i liczniki ostatniej zakończonej próby, aby wynik nie zniknął po powrocie do grupy lub zamknięciu aplikacji. Nie zapisuje linku, ID ani treści posta i niczego nie wysyła. Przeglądarka korzysta z istniejącego profilu jak przy ręcznym otwarciu. Bez kolektora. Raport zawiera status i liczby, nie adres ani ID. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu lub wygaszenie: STOP. Zgoda nie uruchamia skanu.")
             .setView(input).setNegativeButton("Anuluj", null)
             .setPositiveButton("Zgadzam się — sprawdź") { _, _ ->
                 val raw = input.text.toString().trim(); input.text.clear()
                 if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) || session !== currentSession || channel !== currentChannel || kind != PageKind.APPROVED_GROUP || shareBusy || responseBusy || scanning) return@setPositiveButton
                 val resolver = ShareLinkResolver(now = { android.os.SystemClock.elapsedRealtime() })
-                if (!resolver.begin(raw, true)) { output.text = resolver.report(); return@setPositiveButton }
+                if (!resolver.begin(raw, true)) { ShareLinkResult.snapshot(resolver)?.let { publishShareResult(it, true) }; return@setPositiveButton }
                 stopVisiblePosts(); shareResolver = resolver; shareBusy = true
-                output.text = "LINK 0.4.0: sprawdzanie przekierowania, maksymalnie 20 s."; render()
+                output.text = "LINK 0.4.1: sprawdzanie przekierowania, maksymalnie 20 s."; render()
                 currentSession.loadUri(raw)
                 shareJob = lifecycleScope.launch {
                     while (shareBusy && shareResolver === resolver && resolver.tick()) {
@@ -467,6 +491,7 @@ class PocActivity : ComponentActivity() {
         val scans = runs.filter { it.kind.startsWith("GROUP_SCAN") }
         val other = runs.filterNot { it.kind.startsWith("GROUP_SCAN") }
         output.text = buildString {
+            shareResults.read()?.let { appendLine(it.report()); appendLine() }
             appendLine(scanAttemptSummary())
             appendLine()
             if (scans.isEmpty()) appendLine("Brak zapisanego GROUP_SCAN. Sam limit jednorazowy NIE potwierdza odczytu postów.")
@@ -873,6 +898,7 @@ class PocActivity : ComponentActivity() {
         }
         val toolPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            addView(row(button("lastShareLinkResult", "Ostatni wynik linku") { showLastShareResult() }))
             addView(row(button("sharedLink", "Sprawdź udostępniony link") { checkSharedLink() }))
             addView(row(button("mainTransport", "Mechanizm rozszerzenia • 20 s") { checkMainTransport() }))
             addView(fastScrollOption)

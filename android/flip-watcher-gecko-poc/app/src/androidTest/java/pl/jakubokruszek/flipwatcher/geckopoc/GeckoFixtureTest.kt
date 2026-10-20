@@ -111,6 +111,42 @@ class GeckoFixtureTest {
         }
     }
 
+    @Test fun terminalLinkReportSurvivesPauseRecreationAndCanBeCopiedWithoutOpeningFacebook() {
+        val prefs=context.getSharedPreferences("share_link_terminal_result_v1",Context.MODE_PRIVATE)
+        val original=prefs.getString("last",null)
+        try {
+            ActivityScenario.launch(PocActivity::class.java).use { scenario ->
+                val gate=ShareLinkResolver(now={0L})
+                assertTrue(gate.begin("https://www.facebook.com/share/p/syntheticToken01/",true));gate.stop("PAUSED")
+                val terminal=ShareLinkResult.snapshot(gate)!!
+                scenario.onActivity { activity ->
+                    activity.publishShareResult(terminal,true)
+                    assertTrue(activity.lastShareResultDialog!!.isShowing)
+                    val message=activity.lastShareResultDialog!!.findViewById<android.widget.TextView>(android.R.id.message).text.toString()
+                    assertTrue(message.contains("LINK 0.4.1"));assertTrue(message.contains("PAUSED"));assertFalse(message.contains("synthetic"));assertFalse(message.contains("https:"))
+                    activity.lastShareResultDialog!!.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).performClick()
+                    val clipboard=activity.getSystemService(android.content.ClipboardManager::class.java)
+                    assertEquals(message,clipboard.primaryClip!!.getItemAt(0).text.toString())
+                }
+                scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+                assertEquals("PAUSED",ShareLinkResultStore(context).read()!!.reason)
+                scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+                scenario.recreate()
+                scenario.onActivity { activity ->
+                    activity.showLastShareResult()
+                    val message=activity.lastShareResultDialog!!.findViewById<android.widget.TextView>(android.R.id.message).text.toString()
+                    assertTrue(message.contains("PAUSED"));assertFalse(message.contains("synthetic"));assertEquals("PAUSED",ShareLinkResultStore(context).read()!!.reason)
+                    activity.lastShareResultDialog!!.dismiss()
+                    val root=activity.findViewById<android.view.ViewGroup>(android.R.id.content)
+                    root.findViewWithTag<android.widget.Button>("poc.tool.tools").performClick()
+                    assertTrue(activity.diagnosticsDialog!!.window!!.decorView.findViewWithTag<android.widget.Button>("poc.tool.lastShareLinkResult").isEnabled)
+                }
+            }
+        } finally {
+            prefs.edit().apply { if(original==null)remove("last")else putString("last",original) }.commit()
+        }
+    }
+
     @Test fun builtInExtensionInstallsAndConnects() {
         val result = scan(groupPath, "feed-basic")
         assertTrue("extension port did not connect", result.portConnected)

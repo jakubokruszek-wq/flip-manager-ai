@@ -67,7 +67,7 @@ class ShareLinkResolver(
     fun disconnected() { if (active && !awaitingDocument) stop("PORT_LOST") }
     fun stop(why: String = "CANCELLED") { if (status == Status.CONFIRMED) return; status = Status.STOP; reason = why; clear() }
     private fun clear() { target = null; requested = null; location = null; awaitingDocument = false }
-    fun report() = "LINK 0.4.0 • tylko lokalnie • ${status.name}\n" +
+    fun report() = "LINK 0.4.1 • tylko lokalnie • ${status.name}\n" +
         "Wynik: $reason\nŻądania nawigacji: $requests/8\nPotwierdzone ID z adresu zatwierdzonej grupy: ${if (status == Status.CONFIRMED) 1 else 0}\n" +
         "Potwierdzenie dotyczy adresu, nie treści ani kompletności oferty. Bez skanu, zapisu linku/ID i uploadu. Inna lub niezweryfikowana numeryczna grupa: STOP."
 }
