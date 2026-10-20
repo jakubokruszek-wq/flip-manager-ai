@@ -155,7 +155,7 @@ class PocActivity : ComponentActivity() {
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         }
         shareDialog = AlertDialog.Builder(this).setTitle("Sprawdź jeden udostępniony link")
-            .setMessage("NOWA JEDNORAZOWA ZGODA: otworzyć w tej sesji jeden wklejony link /share/p/ i sprawdzić jego przekierowanie? Do 20 s i 8 żądań nawigacji. Obejmuje adres poza stroną główną grupy, wyłącznie w celu rozpoznania dokładnego permalinku zatwierdzonej grupy. Bez odczytu treści postów, skryptów, odpowiedzi sieciowych, nagłówków i danych logowania. Kontrola bezpieczeństwa strony: tylko tytuł i obecność formularzy weryfikacji. Link i wynik tylko w RAM, bez zapisu ID/URL, uploadu i kolektora. Raport zawiera status i liczby, nie adres ani ID. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu lub wygaszenie: STOP. Zgoda nie uruchamia skanu.")
+            .setMessage("NOWA JEDNORAZOWA ZGODA: otworzyć w tej sesji jeden wklejony link /share/p/ i sprawdzić jego przekierowanie? Do 20 s i 8 żądań nawigacji. Obejmuje adres poza stroną główną grupy, wyłącznie w celu rozpoznania dokładnego permalinku zatwierdzonej grupy. Bez odczytu treści postów, skryptów, odpowiedzi sieciowych, nagłówków i danych logowania. Kontrola bezpieczeństwa strony: tylko tytuł i obecność formularzy weryfikacji. Aplikacja nie zapisuje linku ani wyniku w historii lub plikach i niczego nie wysyła. Przeglądarka korzysta z istniejącego profilu jak przy ręcznym otwarciu. Bez kolektora. Raport zawiera status i liczby, nie adres ani ID. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu lub wygaszenie: STOP. Zgoda nie uruchamia skanu.")
             .setView(input).setNegativeButton("Anuluj", null)
             .setPositiveButton("Zgadzam się — sprawdź") { _, _ ->
                 val raw = input.text.toString().trim(); input.text.clear()
@@ -710,7 +710,6 @@ class PocActivity : ComponentActivity() {
 
     private val navigationDelegate = object : GeckoSession.NavigationDelegate {
         override fun onLocationChange(session: GeckoSession, url: String?, perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
-            if (shareBusy && hasUserGesture) finishShare("MANUAL_NAVIGATION")
             if (shareResolver == null) recordStep(NavStep(PocPolicy.sanitize(url), isRedirect = false, hasUserGesture = hasUserGesture, viaHistory = true))
             onUrl(url)
         }

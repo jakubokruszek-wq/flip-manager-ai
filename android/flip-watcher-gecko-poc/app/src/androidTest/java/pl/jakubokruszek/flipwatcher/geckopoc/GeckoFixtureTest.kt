@@ -53,8 +53,16 @@ class GeckoFixtureTest {
                 var currentUrl: String? = null
                 var complete = false
                 session.navigationDelegate = object : GeckoSession.NavigationDelegate {
-                    override fun onLoadRequest(s: GeckoSession, r: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny> = GeckoResult.fromValue(if(gate.request(r.uri,r.isRedirect,r.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW,r.hasUserGesture)) AllowOrDeny.ALLOW else AllowOrDeny.DENY)
-                    override fun onLocationChange(s: GeckoSession, u: String?, p: MutableList<GeckoSession.PermissionDelegate.ContentPermission>, gesture: Boolean) { currentUrl=u;gate.location(u) }
+                    override fun onLoadRequest(s: GeckoSession, r: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny> {
+                        // Fixture-only trace. Production code never logs navigation URLs.
+                        Log.i("GeckoPocTest", "SHARE_REQUEST uri=${r.uri} redirect=${r.isRedirect} gesture=${r.hasUserGesture}")
+                        val warmup=gate.status==ShareLinkResolver.Status.IDLE && r.uri==server.url(groupPath,"other")
+                        return GeckoResult.fromValue(if(warmup || gate.request(r.uri,r.isRedirect,r.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW,r.hasUserGesture)) AllowOrDeny.ALLOW else AllowOrDeny.DENY)
+                    }
+                    override fun onLocationChange(s: GeckoSession, u: String?, p: MutableList<GeckoSession.PermissionDelegate.ContentPermission>, gesture: Boolean) {
+                        Log.i("GeckoPocTest", "SHARE_LOCATION uri=$u gesture=$gesture")
+                        currentUrl=u;if(gate.active)gate.location(u)
+                    }
                 }
                 session.progressDelegate = object : GeckoSession.ProgressDelegate {
                     override fun onPageStart(s: GeckoSession, u: String) { complete=false }
@@ -62,6 +70,10 @@ class GeckoFixtureTest {
                 }
                 try {
                     channel.attach(GeckoHost.collectorExtension(context));session.open(GeckoHost.runtime(context));host!!.geckoView.setSession(session);session.setActive(true)
+                    // Match the real entry point: a fully loaded approved group, not a just-opened about:blank session.
+                    session.loadUri(server.url(groupPath,"other"));assertTrue(channel.awaitPort(15_000))
+                    withTimeout(15_000){while(!complete || currentUrl!=server.url(groupPath,"other"))delay(100)}
+                    delay(200);currentUrl=null;complete=false
                     assertTrue(gate.begin(origin+sharePath,true));session.loadUri(origin+sharePath)
                     withTimeout(30_000) { while(gate.active) {
                         val u=currentUrl
