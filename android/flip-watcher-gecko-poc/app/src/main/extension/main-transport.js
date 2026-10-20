@@ -27,7 +27,7 @@
     const wrappedFetch=async function(...args){
       const read=alive()&&allowed(typeof args[0]==='string'?args[0]:args[0]?.url);
       const response=await originalFetch.apply(this,args);
-      if(!read||!alive())return response;
+      if(!read||!alive()||!allowed(response.url))return response;
       if(reserved>=8){metrics.limitSkipped=Math.min(2000,metrics.limitSkipped+1);return response;}reserved++;
       try{const reader=response.clone().body?.getReader();if(!reader)return response;readers.add(reader);
         void(async()=>{let body='',bytes=0;const decoder=new TextDecoder('utf-8',{fatal:true});
@@ -40,7 +40,7 @@
     const wrappedSend=function(...args){
       if(alive()&&requests.get(this)){
         if(reserved>=8)metrics.limitSkipped=Math.min(2000,metrics.limitSkipped+1);
-        else {reserved++;this.addEventListener('load',()=>{if(!alive())return;if(this.responseType&&this.responseType!=='text')return;try{const body=this.responseText;if(body.length>524288){metrics.oversize=Math.min(2000,metrics.oversize+1);return;}const bytes=new TextEncoder().encode(body).byteLength;if(bytes>524288){metrics.oversize=Math.min(2000,metrics.oversize+1);return;}accept(body,'xhrBodies',bytes);}catch{if(alive())metrics.errors=Math.min(2000,metrics.errors+1);}},{once:true});}
+        else {reserved++;this.addEventListener('load',()=>{if(!alive()||!allowed(this.responseURL))return;if(this.responseType&&this.responseType!=='text')return;try{const body=this.responseText;if(body.length>524288){metrics.oversize=Math.min(2000,metrics.oversize+1);return;}const bytes=new TextEncoder().encode(body).byteLength;if(bytes>524288){metrics.oversize=Math.min(2000,metrics.oversize+1);return;}accept(body,'xhrBodies',bytes);}catch{if(alive())metrics.errors=Math.min(2000,metrics.errors+1);}},{once:true});}
       }
       return originalSend.apply(this,args);
     };
