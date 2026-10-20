@@ -21,8 +21,10 @@ class CollectorChannel(
     private val onVisibleStop: () -> Unit = {},
     private val onPageDisconnect: () -> Unit = onVisibleStop,
     private val onPageConnected: () -> Unit = {},
+    private val onShareStop: () -> Unit = {},
     private val onProbe: (PageProbe) -> Unit = {},
 ) {
+    private var shareNonce: String? = null
     private var port: WebExtension.Port? = null
     private var portReady: CompletableDeferred<Unit> = CompletableDeferred()
     private val pending = HashMap<String, CompletableDeferred<JSONObject?>>()
@@ -31,6 +33,7 @@ class CollectorChannel(
     var untrustedPorts = 0
         private set
 
+    var connectedUrl: String? = null; private set
     val isConnected: Boolean get() = port != null
 
     private val portDelegate = object : WebExtension.PortDelegate {
@@ -38,9 +41,10 @@ class CollectorChannel(
             if (port !== this@CollectorChannel.port) return
             val json = ScanProtocol.asJson(message) ?: return
             when (json.optString("type")) {
+                "shareLinkStop" -> if (json.optString("nonce") == shareNonce) onShareStop()
                 "visiblePostsStop" -> onVisibleStop()
                 "ready" -> ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
-                "mainTransportResult", "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
+                "shareLinkContextResult", "mainTransportResult", "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                     pending.remove(json.optString("nonce"))?.complete(json)
                 }
@@ -51,6 +55,7 @@ class CollectorChannel(
             if (port !== this@CollectorChannel.port) return
             onPageDisconnect()
             this@CollectorChannel.port = null
+            connectedUrl = null
             portReady = CompletableDeferred()
             // The page went away: every waiting request ends now.
             pending.values.forEach { it.complete(null) }
@@ -68,6 +73,7 @@ class CollectorChannel(
             }
             this@CollectorChannel.port?.let { old -> runCatching { old.disconnect() } }
             this@CollectorChannel.port = port
+            connectedUrl = sender.url
             port.setDelegate(portDelegate)
             portReady.complete(Unit)
             onPageConnected()
@@ -81,6 +87,20 @@ class CollectorChannel(
     }
 
     suspend fun awaitPort(timeoutMs: Long): Boolean = withTimeoutOrNull(timeoutMs) { portReady.await(); true } ?: false
+
+    suspend fun shareLinkContext(expectedUrl: String, consent: Boolean): Pair<Boolean, Boolean>? {
+        if (!consent) return null
+        val nonce = UUID.randomUUID().toString(); shareNonce = nonce
+        val reply = request(nonce, JSONObject().put("type", "shareLinkContext").put("nonce", nonce).put("consent", true)
+            .put("expectedUrl", expectedUrl).put("groupId", if (fixtureMode) FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID).put("fixture", fixtureMode), 1_500) ?: return null
+        if (reply.optString("type") != "shareLinkContextResult" || reply.optString("nonce") != nonce ||
+            reply.keys().asSequence().toSet() != setOf("type", "nonce", "safe", "complete") || reply.opt("safe") !is Boolean || reply.opt("complete") !is Boolean) return null
+        return reply.getBoolean("safe") to reply.getBoolean("complete")
+    }
+    fun stopShareLinkContext() {
+        shareNonce = null
+        runCatching { port?.postMessage(JSONObject().put("type", "stopShareLinkContext").put("nonce", UUID.randomUUID().toString())) }
+    }
 
     suspend fun probe(timeoutMs: Long = 5_000): PageProbe? {
         val nonce = UUID.randomUUID().toString()

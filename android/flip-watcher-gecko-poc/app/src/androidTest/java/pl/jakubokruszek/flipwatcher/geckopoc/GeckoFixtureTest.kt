@@ -37,6 +37,57 @@ class GeckoFixtureTest {
 
     private fun expectedId(n: Int) = (500_000_000_000_000L + n).toString()
 
+    @Test fun shareResolverFollowsRealHttpRedirectWithPrivateContextAndRejectsForeignGroup() {
+        ActivityScenario.launch(GeckoTestHostActivity::class.java).use { scenario ->
+            var host: GeckoTestHostActivity? = null
+            scenario.onActivity { host = it }
+            runBlocking { withTimeout(90_000) { withContext(Dispatchers.Main) {
+                val sharePath = "/share/p/fixture1/"
+                val postPath = "/groups/$FIXTURE_GROUP_ID/posts/550000000000099/"
+                val foreignPath = "/groups/other/posts/550000000000099/"
+                val server = LoopbackFixtureServer(redirects = mapOf(sharePath to postPath, "/share/p/fixture2/" to foreignPath), pages = mapOf(postPath to "share-link-post", foreignPath to "share-link-post")) { name -> runCatching { context.assets.open(name).bufferedReader().use { it.readText() } }.getOrNull() }
+                val origin = "http://127.0.0.1:${server.port}"
+                val session = GeckoSession(GeckoSessionSettings.Builder().build())
+                var gate = ShareLinkResolver(FIXTURE_GROUP_ID, { android.os.SystemClock.elapsedRealtime() }, origin)
+                val channel = CollectorChannel(session, fixtureMode = true, onShareStop = { gate.stop("UNSAFE_DOCUMENT") })
+                var currentUrl: String? = null
+                var complete = false
+                session.navigationDelegate = object : GeckoSession.NavigationDelegate {
+                    override fun onLoadRequest(s: GeckoSession, r: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny> = GeckoResult.fromValue(if(gate.request(r.uri,r.isRedirect,r.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW,r.hasUserGesture)) AllowOrDeny.ALLOW else AllowOrDeny.DENY)
+                    override fun onLocationChange(s: GeckoSession, u: String?, p: MutableList<GeckoSession.PermissionDelegate.ContentPermission>, gesture: Boolean) { currentUrl=u;gate.location(u) }
+                }
+                session.progressDelegate = object : GeckoSession.ProgressDelegate {
+                    override fun onPageStart(s: GeckoSession, u: String) { complete=false }
+                    override fun onPageStop(s: GeckoSession, success: Boolean) { complete=success }
+                }
+                try {
+                    channel.attach(GeckoHost.collectorExtension(context));session.open(GeckoHost.runtime(context));host!!.geckoView.setSession(session);session.setActive(true)
+                    assertTrue(gate.begin(origin+sharePath,true));session.loadUri(origin+sharePath)
+                    withTimeout(30_000) { while(gate.active) {
+                        val u=currentUrl
+                        if(u!=null && complete && channel.isConnected && channel.connectedUrl==u) {
+                            val c=channel.shareLinkContext(u,true);if(c!=null)gate.confirm(u,c.first,c.second)
+                        }
+                        gate.tick();delay(100)
+                    } }
+                    Log.i("GeckoPocTest", "SHARE_RESOLVER ${gate.report()}")
+                    assertEquals(ShareLinkResolver.Status.CONFIRMED,gate.status);assertEquals(2,gate.requests)
+                    assertFalse(gate.report().contains("550000000000099"));assertFalse(gate.report().contains(origin))
+                    assertNull(channel.shareLinkContext(origin+postPath,false))
+                    channel.stopShareLinkContext()
+                    gate=ShareLinkResolver(FIXTURE_GROUP_ID,{android.os.SystemClock.elapsedRealtime()},origin)
+                    assertTrue(gate.begin(origin+"/share/p/fixture2/",true));session.loadUri(origin+"/share/p/fixture2/")
+                    withTimeout(10_000){while(gate.active){gate.tick();delay(100)}}
+                    assertEquals(ShareLinkResolver.Status.STOP,gate.status);assertEquals("UNVERIFIED_DESTINATION",gate.reason)
+                    // Paused/cancelled sessions reject any late document or redirect confirmation.
+                    val cancelled=ShareLinkResolver(FIXTURE_GROUP_ID,{android.os.SystemClock.elapsedRealtime()},origin)
+                    assertTrue(cancelled.begin(origin+sharePath,true));cancelled.stop("PAUSED")
+                    assertFalse(cancelled.request(origin+postPath,true));assertFalse(cancelled.confirm(origin+postPath,true,true))
+                } finally { channel.stopShareLinkContext();channel.close();host!!.geckoView.releaseSession();session.close();server.close() }
+            } } }
+        }
+    }
+
     @Test fun builtInExtensionInstallsAndConnects() {
         val result = scan(groupPath, "feed-basic")
         assertTrue("extension port did not connect", result.portConnected)
@@ -829,6 +880,7 @@ class GeckoFixtureTest {
                 assertFalse(panel.findViewWithTag<android.widget.Button>("poc.tool.scan").isEnabled)
                 assertFalse(panel.findViewWithTag<android.widget.Button>("poc.tool.document").isEnabled)
                 assertFalse(panel.findViewWithTag<android.widget.Button>("poc.tool.mainTransport").isEnabled)
+                assertFalse(panel.findViewWithTag<android.widget.Button>("poc.tool.sharedLink").isEnabled)
                 val fast=panel.findViewWithTag<android.widget.CheckBox>("poc.fastScroll")
                 assertFalse(fast.isChecked);fast.isChecked=true
                 val root=activity.findViewById<android.view.ViewGroup>(android.R.id.content)

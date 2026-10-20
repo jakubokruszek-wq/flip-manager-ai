@@ -13,6 +13,11 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
+import android.widget.EditText
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import android.text.InputType
+import android.view.inputmethod.EditorInfo
 import android.widget.CheckBox
 import android.widget.Button
 import android.widget.LinearLayout
@@ -68,6 +73,10 @@ class PocActivity : ComponentActivity() {
     private var scanning = false
     private var visibleEpoch = 0L
     private var visibleBusy = false
+    private var shareResolver: ShareLinkResolver? = null
+    private var shareBusy = false
+    private var shareJob: Job? = null
+    private var shareDialog: AlertDialog? = null
     private var responseBusy = false
     private val responseReloadGate = ResponseReloadGate()
     private var visibleDialog: AlertDialog? = null
@@ -104,6 +113,8 @@ class PocActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        shareDialog?.dismiss(); shareDialog = null
+        finishShare("PAUSED", clear = true)
         stopVisiblePosts()
         super.onPause()
     }
@@ -118,6 +129,58 @@ class PocActivity : ComponentActivity() {
         visibleDialog?.dismiss()
         visibleDialog = null
         if (::output.isInitialized) output.text = ""
+    }
+
+    private fun finishShare(reason: String? = null, clear: Boolean = false) {
+        val resolver = shareResolver ?: return
+        if (reason != null && resolver.active) resolver.stop(reason)
+        shareJob?.cancel(); shareJob = null
+        channel?.stopShareLinkContext()
+        if (shareBusy && resolver.status != ShareLinkResolver.Status.CONFIRMED) session?.stop()
+        shareBusy = false
+        if (::output.isInitialized) output.text = if (clear) "" else resolver.report()
+        if (clear) shareResolver = null
+        if (::banner.isInitialized) render()
+    }
+
+    private fun checkSharedLink() {
+        if (shareBusy || responseBusy || visibleBusy || scanning || inspectingDom || measuringLoad || kind != PageKind.APPROVED_GROUP || channel?.isConnected != true || progress != 100) return
+        val currentSession = session ?: return
+        val currentChannel = channel ?: return
+        val input = EditText(this).apply {
+            hint = "https://www.facebook.com/share/p/…/"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            imeOptions = EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+            isSingleLine = true; isSaveEnabled = false
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+        }
+        shareDialog = AlertDialog.Builder(this).setTitle("Sprawdź jeden udostępniony link")
+            .setMessage("NOWA JEDNORAZOWA ZGODA: otworzyć w tej sesji jeden wklejony link /share/p/ i sprawdzić jego przekierowanie? Do 20 s i 8 żądań nawigacji. Obejmuje adres poza stroną główną grupy, wyłącznie w celu rozpoznania dokładnego permalinku zatwierdzonej grupy. Bez odczytu treści postów, skryptów, odpowiedzi sieciowych, nagłówków i danych logowania. Kontrola bezpieczeństwa strony: tylko tytuł i obecność formularzy weryfikacji. Link i wynik tylko w RAM, bez zapisu ID/URL, uploadu i kolektora. Raport zawiera status i liczby, nie adres ani ID. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu lub wygaszenie: STOP. Zgoda nie uruchamia skanu.")
+            .setView(input).setNegativeButton("Anuluj", null)
+            .setPositiveButton("Zgadzam się — sprawdź") { _, _ ->
+                val raw = input.text.toString().trim(); input.text.clear()
+                if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) || session !== currentSession || channel !== currentChannel || kind != PageKind.APPROVED_GROUP || shareBusy || responseBusy || scanning) return@setPositiveButton
+                val resolver = ShareLinkResolver(now = { android.os.SystemClock.elapsedRealtime() })
+                if (!resolver.begin(raw, true)) { output.text = resolver.report(); return@setPositiveButton }
+                stopVisiblePosts(); shareResolver = resolver; shareBusy = true
+                output.text = "LINK 0.4.0: sprawdzanie przekierowania, maksymalnie 20 s."; render()
+                currentSession.loadUri(raw)
+                shareJob = lifecycleScope.launch {
+                    while (shareBusy && shareResolver === resolver && resolver.tick()) {
+                        val expected = url
+                        if (expected != null && currentChannel.isConnected && currentChannel.connectedUrl == expected) {
+                            val context = currentChannel.shareLinkContext(expected, true)
+                            if (shareResolver !== resolver || !shareBusy) return@launch
+                            if (url == expected && context != null) resolver.confirm(expected, context.first, context.second && progress == 100)
+                            if (!resolver.active) break
+                        }
+                        delay(200)
+                    }
+                    if (shareResolver === resolver && shareBusy) finishShare()
+                }
+            }.create()
+        shareDialog?.setOnDismissListener { input.text.clear(); shareDialog = null }
+        shareDialog?.show()
     }
 
     private fun checkVisiblePosts() {
@@ -237,7 +300,7 @@ class PocActivity : ComponentActivity() {
         val ext = extension ?: run { output.text = "Rozszerzenie kolektora nie jest gotowe: ${extensionError ?: "instalacja w toku"}"; return }
         // Default settings: normal mobile Firefox user agent, JavaScript and cookies as in the browser. No override, no spoofing.
         val newSession = GeckoSession(GeckoSessionSettings.Builder().build())
-        val newChannel = CollectorChannel(newSession, fixtureMode = false, onVisibleStop = { stopVisiblePosts() }, onPageDisconnect = { if (!responseReloadGate.allowOldDisconnect()) stopVisiblePosts() }, onPageConnected = { responseReloadGate.connected() }) { value -> probe = value; render() }
+        val newChannel = CollectorChannel(newSession, fixtureMode = false, onVisibleStop = { stopVisiblePosts() }, onPageDisconnect = { shareResolver?.disconnected(); if (!responseReloadGate.allowOldDisconnect()) stopVisiblePosts(); if (shareBusy && shareResolver?.active != true) finishShare() }, onPageConnected = { responseReloadGate.connected() }, onShareStop = { if (shareBusy) finishShare("UNSAFE_DOCUMENT") }) { value -> probe = value; render() }
         newChannel.attach(ext)
         newSession.progressDelegate = progressDelegate
         newSession.contentDelegate = contentDelegate
@@ -253,6 +316,7 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun closeSession() {
+        finishShare("SESSION_CLOSED", clear = true)
         stopVisiblePosts()
         channel?.close()
         channel = null
@@ -271,6 +335,8 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun load(target: String, login: Boolean) {
+        finishShare("MANUAL_NAVIGATION", clear = true)
+        shareResolver = null
         val current = session ?: return
         loginRequested = login
         haltMessage = null
@@ -618,6 +684,7 @@ class PocActivity : ComponentActivity() {
         }
 
         override fun onPageStop(session: GeckoSession, success: Boolean) {
+            if (!success && shareBusy) finishShare("LOAD_ERROR")
             if (!success && responseBusy) stopVisiblePosts()
             render()
             val current = channel ?: return
@@ -632,6 +699,7 @@ class PocActivity : ComponentActivity() {
 
     private val contentDelegate = object : GeckoSession.ContentDelegate {
         override fun onTitleChange(session: GeckoSession, title: String?) {
+            if (shareBusy && Regex("log in|logowanie|captcha|checkpoint|security check|potwierdź.*tożsamość", RegexOption.IGNORE_CASE).containsMatchIn(title.orEmpty())) finishShare("VERIFICATION_OR_LOGIN")
             this@PocActivity.title = title?.take(120)
             render()
         }
@@ -642,13 +710,20 @@ class PocActivity : ComponentActivity() {
 
     private val navigationDelegate = object : GeckoSession.NavigationDelegate {
         override fun onLocationChange(session: GeckoSession, url: String?, perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
-            recordStep(NavStep(PocPolicy.sanitize(url), isRedirect = false, hasUserGesture = hasUserGesture, viaHistory = true))
+            if (shareBusy && hasUserGesture) finishShare("MANUAL_NAVIGATION")
+            if (shareResolver == null) recordStep(NavStep(PocPolicy.sanitize(url), isRedirect = false, hasUserGesture = hasUserGesture, viaHistory = true))
             onUrl(url)
         }
 
         override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny> {
+            val resolver = shareResolver
+            if (shareBusy && resolver != null && !resolver.request(request.uri, request.isRedirect, request.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW, request.hasUserGesture)) {
+                finishShare(); return GeckoResult.fromValue(AllowOrDeny.DENY)
+            }
+            if (!shareBusy && resolver != null && request.isRedirect) return GeckoResult.fromValue(AllowOrDeny.DENY)
+            if (!shareBusy && resolver != null && !request.isRedirect) shareResolver = null
             if (responseBusy && !responseReloadGate.allowRequest(request.uri, request.isRedirect, request.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW)) stopVisiblePosts()
-            recordStep(NavStep(PocPolicy.sanitize(request.uri), request.isRedirect, request.hasUserGesture))
+            if (shareResolver == null) recordStep(NavStep(PocPolicy.sanitize(request.uri), request.isRedirect, request.hasUserGesture))
             if (!PocPolicy.allowNavigation(request.uri)) {
                 blockedNavigations++
                 lastBlockedHost = runCatching { Uri.parse(request.uri).host }.getOrNull()
@@ -664,6 +739,7 @@ class PocActivity : ComponentActivity() {
         }
 
         override fun onLoadError(session: GeckoSession, uri: String?, error: WebRequestError): GeckoResult<String>? {
+            if (shareBusy) finishShare("LOAD_ERROR")
             if (responseBusy) stopVisiblePosts()
             lastLoadError = "kategoria ${error.category}, kod ${error.code} (${PocPolicy.sanitize(uri)})"
             render()
@@ -672,9 +748,12 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun onUrl(value: String?) {
+        if (!shareBusy && shareResolver != null && value != url) shareResolver = null
+        val shareFailed = shareBusy && shareResolver?.location(value) != true
         if (!responseReloadGate.allowLocation(value)) stopVisiblePosts()
         url = value
         kind = PocPolicy.classify(value)
+        if (shareFailed) finishShare()
         if (kind == PageKind.APPROVED_GROUP) loginRequested = false
         render()
     }
@@ -689,12 +768,14 @@ class PocActivity : ComponentActivity() {
     private fun render() {
         if (!::banner.isInitialized) return
         val open = session != null
-        val stop = haltMessage ?: if (open) PocPolicy.stopMessage(kind, loginRequested) else null
+        val stop = haltMessage ?: if (open && !shareBusy && shareResolver?.status != ShareLinkResolver.Status.CONFIRMED) PocPolicy.stopMessage(kind, loginRequested) else null
         banner.text = when {
             stop != null -> stop
             !open -> "Sesja zamknięta. „Otwórz sesję” uruchamia przeglądarkę tylko dla grupy ${PocPolicy.APPROVED_GROUP_ID}."
             loginRequested && kind == PageKind.LOGIN -> "Logowanie ręczne na stronie Facebooka. Po zalogowaniu użyj „Wróć do grupy”."
+            shareBusy -> "Sprawdzanie jednego linku: do 20 s. Bez skanu."
             responseBusy -> if (responseReloadGate.active) "Trwa diagnostyka od otwarcia (25 s)." else "Trwa lokalna diagnostyka odpowiedzi (15 s)."
+            shareResolver?.status == ShareLinkResolver.Status.CONFIRMED -> "Link zatwierdzonej grupy potwierdzony. Bez skanu."
             scanning -> "Trwa skan (max ${PocPolicy.MAX_POSTS} postów, ${PocPolicy.SCAN_TIMEOUT_MS / 1000} s)…"
             kind == PageKind.APPROVED_GROUP && preferences.getBoolean(KEY_ONE_SCAN_USED, false) ->
                 "Zatwierdzona grupa otwarta. Limit jednego skanu testowego wykorzystany; wyniki dostępne lokalnie."
@@ -703,7 +784,7 @@ class PocActivity : ComponentActivity() {
         }
         banner.setBackgroundColor(if (stop != null) Color.parseColor("#B3261E") else Color.parseColor("#1E5AA8"))
 
-        val canScan = open && !responseBusy && !scanning && stop == null && !preferences.getBoolean(KEY_ONE_SCAN_USED, false) && PocPolicy.canScan(kind) && channel?.isConnected == true
+        val canScan = open && !shareBusy && !responseBusy && !scanning && stop == null && !preferences.getBoolean(KEY_ONE_SCAN_USED, false) && PocPolicy.canScan(kind) && channel?.isConnected == true
         buttons["open"]?.text = if (open) "Zamknij sesję" else "Otwórz sesję"
         listOf("group", "login", "back").forEach { buttons[it]?.isEnabled = open && !scanning }
         listOf("scan", "scan3").forEach { buttons[it]?.isEnabled = canScan }
@@ -716,7 +797,8 @@ class PocActivity : ComponentActivity() {
         buttons["dom"]?.isEnabled = open && !responseBusy && !scanning && !inspectingDom &&
             kind == PageKind.APPROVED_GROUP && channel?.isConnected == true
 
-        buttons["tools"]?.isEnabled = !responseBusy && !visibleBusy && !scanning && !inspectingDom && !measuringLoad
+        buttons["sharedLink"]?.isEnabled = buttons["responses"]?.isEnabled == true
+        buttons["tools"]?.isEnabled = !shareBusy && !responseBusy && !visibleBusy && !scanning && !inspectingDom && !measuringLoad
         val p = probe
         diagnostics.text = buildString {
             appendLine("STAN: ${banner.text}")
@@ -725,11 +807,11 @@ class PocActivity : ComponentActivity() {
             appendLine("Silnik: GeckoView ${org.mozilla.geckoview.BuildConfig.MOZ_APP_VERSION} • rozszerzenie: ${if (extension != null) "zainstalowane" else extensionError ?: "instalacja…"}")
             appendLine("User-Agent: ${userAgent ?: "—"}")
             appendLine("UA zawiera „; wv”: ${userAgent?.contains("; wv") ?: "—"} • nadpisany: nie")
-            appendLine("Adres: ${PocPolicy.sanitize(url)} • typ: $kind • ładowanie: $progress%")
-            appendLine("Tytuł: ${title ?: "—"}")
+            appendLine("Adres: ${if (shareResolver != null) "link operatora (ukryty)" else PocPolicy.sanitize(url)} • typ: $kind • ładowanie: $progress%")
+            appendLine("Tytuł: ${if (shareResolver != null) "—" else title ?: "—"}")
             appendLine("Port rozszerzenia: ${if (channel?.isConnected == true) "połączony" else "brak"} • odrzucone porty: ${channel?.untrustedPorts ?: 0}")
-            if (p != null) appendLine("DOM (${p.host}${p.path}): elementy ${p.elements}, formularze ${p.forms}, pola ${p.inputs}, hasła ${p.passwordInputs}, posty ${p.articles}, iframe ${p.iframes}, stan ${p.readyState}")
-            appendLine("Błąd ładowania: ${lastLoadError ?: "brak"}")
+            if (p != null && shareResolver == null) appendLine("DOM (${p.host}${p.path}): elementy ${p.elements}, formularze ${p.forms}, pola ${p.inputs}, hasła ${p.passwordInputs}, posty ${p.articles}, iframe ${p.iframes}, stan ${p.readyState}")
+            appendLine("Błąd ładowania: ${if (shareResolver != null && lastLoadError != null) "błąd (adres ukryty)" else lastLoadError ?: "brak"}")
             append("Zablokowane przejścia: $blockedNavigations${lastBlockedHost?.let { " (ostatnie: $it)" } ?: ""}")
         }
     }
@@ -792,6 +874,7 @@ class PocActivity : ComponentActivity() {
         }
         val toolPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            addView(row(button("sharedLink", "Sprawdź udostępniony link") { checkSharedLink() }))
             addView(row(button("mainTransport", "Mechanizm rozszerzenia • 20 s") { checkMainTransport() }))
             addView(fastScrollOption)
             addView(row(button("login", "Zaloguj się") { load(PocPolicy.LOGIN_URL, login = true) },

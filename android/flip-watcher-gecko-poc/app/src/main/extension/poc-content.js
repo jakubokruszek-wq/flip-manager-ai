@@ -422,11 +422,14 @@
       if(!ack?.recorded)return;
     }
   }
+  const shareContext=scope.FlipShareContext.create();
   let activeResponseAbort=null;
-  port.onDisconnect.addListener(()=>{if(activeLoadAbort)activeLoadAbort();clearLoadWatch();if(activeResponseAbort)activeResponseAbort();void browser.runtime.sendMessage({type:"stopResponse",nonce:activeResponseNonce}).catch(()=>{});});
+  port.onDisconnect.addListener(()=>{shareContext.stop();if(activeLoadAbort)activeLoadAbort();clearLoadWatch();if(activeResponseAbort)activeResponseAbort();void browser.runtime.sendMessage({type:"stopResponse",nonce:activeResponseNonce}).catch(()=>{});});
   let activeResponseNonce="";
   port.onMessage.addListener(async message => {
     if (!message || typeof message !== "object" || typeof message.nonce !== "string") return;
+    if(message.type==="stopShareLinkContext"){shareContext.stop();return;}
+    if(message.type==="shareLinkContext"){port.postMessage(shareContext.check(scope,message,m=>{try{port.postMessage(m);}catch{}}));return;}
     if(message.type==="abortResponseDiagnosis"){if(activeLoadAbort)activeLoadAbort();clearLoadWatch();if(activeResponseAbort)activeResponseAbort();return;}
     if(message.type==="prepareResponseLoad"){
       if(message.consent!==true || message.reloadConsent!==true || activeResponseNonce || !responsePageSafe(message)){
