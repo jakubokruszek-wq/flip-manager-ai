@@ -347,6 +347,7 @@
     let stopWatch=null,invalid=false,wake;
     let scrollSteps=0,scrollMoves=0;
     const autoScroll=request.autoScrollConsent===true;
+    const fast=autoScroll && request.fastScrollConsent===true;
     const deadline=scope.performance.now()+message.windowMs;
     const cancelled=new Promise(resolve=>{wake=resolve;});
     const abort=()=>{if(invalid)return;invalid=true;wake();void browser.runtime.sendMessage({type:"stopResponse",nonce:request.nonce}).catch(()=>{});try{port.postMessage({type:"visiblePostsStop"});}catch{}};
@@ -360,7 +361,7 @@
       // Monotonic deadline starts BEFORE arming; suspension cannot extend it.
       if(autoScroll) {
         for(let i=0;i<5;i++) {
-          const pause=i===0?1000:2000;
+          const pause=i===0?(fast?250:1000):(fast?500:2000);
           if(deadline-scope.performance.now()<=pause)break;
           await Promise.race([sleep(pause),cancelled]);
           if(invalid || !responsePageSafe(request)){abort();return stopped();}
@@ -375,7 +376,7 @@
       if(invalid || !responsePageSafe(request)){abort();return stopped();}
       const result=await browser.runtime.sendMessage({type:"readResponse",...message});
       if(!result)return stopped();
-      if(result.status==="OK" && result.counts)Object.assign(result.counts,{responseAutoScroll:autoScroll?1:0,responseScrollSteps:scrollSteps,responseScrollMoves:scrollMoves});
+      if(result.status==="OK" && result.counts)Object.assign(result.counts,{responseFastScroll:fast?1:0,responseScrollCadenceMs:autoScroll?(fast?500:2000):0,responseAutoScroll:autoScroll?1:0,responseScrollSteps:scrollSteps,responseScrollMoves:scrollMoves});
       return result;
     } catch {return stopped();}
     finally {
@@ -401,10 +402,11 @@
     const confirmed=await browser.runtime.sendMessage({type:"confirmResponseLoad",nonce:info.nonce,safe:true});
     if(!confirmed?.confirmed){abort();return;}
     if(info.autoScrollConsent!==true)return;
+    const fast=info.fastScrollConsent===true;
     // Both a local monotonic deadline and a fresh bound-background check BEFORE each step.
     // Reload time consumes the same 25-second budget; no timer can renew consent.
     for(let i=0;i<5;i++) {
-      const pause=i===0?1000:2000;
+      const pause=i===0?(fast?250:1000):(fast?500:2000);
       if(deadline-scope.performance.now()<=pause)return;
       await Promise.race([sleep(pause),cancelled]);
       if(stopped)return;
@@ -413,7 +415,7 @@
       const active=await browser.runtime.sendMessage({type:"responseLoadContext"});
       if(stopped)return;
       if(!responsePageSafe(request)){abort();return;}
-      if(!active?.active || active.nonce!==info.nonce || active.autoScrollConsent!==true || active.remainingMs<=0 || scope.performance.now()>=deadline)return;
+      if(!active?.active || active.nonce!==info.nonce || active.autoScrollConsent!==true || (active.fastScrollConsent===true)!==fast || active.remainingMs<=0 || scope.performance.now()>=deadline)return;
       const before=scope.scrollY;
       scope.scrollBy({left:0,top:Math.max(400,Math.min(900,Math.round(scope.innerHeight*0.9))),behavior:"instant"});
       const ack=await browser.runtime.sendMessage({type:"recordResponseLoadScroll",nonce:info.nonce,step:i+1,moved:scope.scrollY!==before});
@@ -431,7 +433,7 @@
         port.postMessage({type:"responseLoadArmed",nonce:message.nonce,status:"STOP"});return;
       }
       if(stopVisibleWatch)stopVisibleWatch();stopVisibleWatch=null;clearLoadWatch();
-      const armed=await browser.runtime.sendMessage({type:"armResponse",nonce:message.nonce,consent:true,reloadConsent:true,beaconConsent:message.beaconConsent===true,autoScrollConsent:message.autoScrollConsent===true,groupId:message.groupId,fixture:message.allowLoopback===true,windowMs:message.windowMs});
+      const armed=await browser.runtime.sendMessage({type:"armResponse",nonce:message.nonce,consent:true,reloadConsent:true,beaconConsent:message.beaconConsent===true,fastScrollConsent:message.fastScrollConsent===true,autoScrollConsent:message.autoScrollConsent===true,groupId:message.groupId,fixture:message.allowLoopback===true,windowMs:message.windowMs});
       port.postMessage({type:"responseLoadArmed",nonce:message.nonce,status:armed?.status||"STOP"});return;
     }
     if (message.type === "responseDiagnosis") {

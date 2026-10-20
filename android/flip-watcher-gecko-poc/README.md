@@ -1,3 +1,5 @@
+Aktualny interfejs: [0.3.6 — większy Facebook i opcjonalne przewijanie 4×](docs/poc-036.md).
+
 Wynik transportu: [0.3.5 — Beacon NO_GO, bez odczytu w zwykłej aplikacji](docs/poc-035.md).
 
 Aktualna diagnostyka: [0.3.4 — dokładne typy i endpointy](docs/poc-034.md).

@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
+import android.widget.CheckBox
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -45,6 +46,8 @@ class PocActivity : ComponentActivity() {
     private lateinit var banner: TextView
     private lateinit var diagnostics: TextView
     private lateinit var output: TextView
+    internal var diagnosticsDialog: AlertDialog? = null; private set
+    private lateinit var fastScrollOption: CheckBox
     private val buttons = mutableMapOf<String, Button>()
 
     private var session: GeckoSession? = null
@@ -95,6 +98,7 @@ class PocActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        diagnosticsDialog?.dismiss()
         closeSession()
         super.onDestroy()
     }
@@ -139,13 +143,14 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun checkResponses(autoScroll: Boolean = false) {
+        val fast = autoScroll && fastScrollOption.isChecked
         if (responseBusy || visibleBusy || scanning || inspectingDom || measuringLoad || kind != PageKind.APPROVED_GROUP || progress < 100 || haltMessage != null) return
         val current = channel ?: return
         val epoch = visibleEpoch
         val approvedUrl = url
         visibleDialog = AlertDialog.Builder(this)
             .setTitle(if (autoScroll) "Nowa zgoda: odpowiedzi i przewijanie" else "Nowa zgoda: treść odpowiedzi sieciowych")
-            .setMessage((if (autoScroll) "ZEZWOLIĆ NA AUTOMATYCZNE PRZEWIJANIE? Maksymalnie 5 kroków po 400–900 px, pierwszy po 1 s, następne co 2 s; łącznie do 4500 px. Tylko okno diagnostyki 15 s, bez klikania, skanu i kolektora. " else "Bez automatycznego przewijania. ") + "Przez 15 sekund analizować lokalnie odpowiedzi danych tej zatwierdzonej grupy? Dodatkowo policzyć zdarzenia Facebook/CDN i powody pominięcia (karta, ramka, typ, host, ścieżka, kontekst), także zbiorczo ruch bez karty lub innej karty, bez jego treści i adresów? Do 8 odpowiedzi, 512 KiB na odpowiedź i 2 MiB łącznie, maksymalnie 20 dokładnych ID. Tylko pamięć i liczniki: bez zapisu surowych odpowiedzi, tekstów, ID, cookies i tokenów; bez uploadu, skanu, galerii i kolektora. Strona otrzyma niezmienione bajty. Możesz ręcznie przewinąć grupę. Zmiana strony, LOGIN/CAPTCHA/CHECKPOINT i wygaszenie przerywają próbę. To osobna zgoda, niezależna od DOM i starego skanu.")
+            .setMessage((if (autoScroll) "ZEZWOLIĆ NA AUTOMATYCZNE PRZEWIJANIE? Maksymalnie 5 kroków po 400–900 px, pierwszy po ${if (fast) "0,25 s" else "1 s"}, następne co ${if (fast) "0,5 s" else "2 s"}; łącznie do 4500 px. Tylko okno diagnostyki 15 s, bez klikania, skanu i kolektora. " else "Bez automatycznego przewijania. ") + "Przez 15 sekund analizować lokalnie odpowiedzi danych tej zatwierdzonej grupy? Dodatkowo policzyć zdarzenia Facebook/CDN i powody pominięcia (karta, ramka, typ, host, ścieżka, kontekst), także zbiorczo ruch bez karty lub innej karty, bez jego treści i adresów? Do 8 odpowiedzi, 512 KiB na odpowiedź i 2 MiB łącznie, maksymalnie 20 dokładnych ID. Tylko pamięć i liczniki: bez zapisu surowych odpowiedzi, tekstów, ID, cookies i tokenów; bez uploadu, skanu, galerii i kolektora. Strona otrzyma niezmienione bajty. Możesz ręcznie przewinąć grupę. Zmiana strony, LOGIN/CAPTCHA/CHECKPOINT i wygaszenie przerywają próbę. To osobna zgoda, niezależna od DOM i starego skanu.")
             .setNegativeButton("Anuluj", null)
             .setPositiveButton("Zgadzam się jednorazowo") { _, _ ->
                 if (epoch != visibleEpoch || current !== channel || approvedUrl != url || kind != PageKind.APPROVED_GROUP) return@setPositiveButton
@@ -153,7 +158,7 @@ class PocActivity : ComponentActivity() {
                 output.text = if (autoScroll) "Diagnostyka: 15 sekund, do 5 automatycznych przewinięć. Zmiana kontekstu lub wygaszenie: STOP." else "Diagnostyka odpowiedzi: 15 sekund. Możesz ręcznie przewinąć zatwierdzoną grupę."
                 render()
                 lifecycleScope.launch {
-                    val report = runCatching { current.responseDiagnosis(consent = true, autoScrollConsent = autoScroll) }.getOrNull()
+                    val report = runCatching { current.responseDiagnosis(consent = true, autoScrollConsent = autoScroll, fastScrollConsent = fast) }.getOrNull()
                     if (epoch == visibleEpoch && current === channel && approvedUrl == url && kind == PageKind.APPROVED_GROUP) {
                         output.text = report ?: "STOP: przerwana diagnostyka odpowiedzi."
                         responseBusy = false
@@ -164,13 +169,14 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun checkResponseLoad(autoScroll: Boolean = false) {
+        val fast = autoScroll && fastScrollOption.isChecked
         if (responseBusy || visibleBusy || scanning || inspectingDom || measuringLoad || kind != PageKind.APPROVED_GROUP || progress < 100 || haltMessage != null) return
         val currentSession = session ?: return
         val current = channel ?: return
         val approvedUrl = url ?: return
         val epoch = visibleEpoch
         visibleDialog = AlertDialog.Builder(this).setTitle(if (autoScroll) "Nowa zgoda: otwarcie + przewijanie" else "Nowa zgoda: jedno otwarcie i odpowiedzi")
-            .setMessage((if (autoScroll) "ZEZWOLIĆ TAKŻE NA AUTOMATYCZNE PRZEWIJANIE? Do 5 kroków po 400–900 px, maksymalnie 4500 px. Pierwszy po sprawdzeniu nowego dokumentu i 1 s, kolejne co 2 s. Przeładowanie i przewijanie dzielą JEDNO okno do 25 s; wolne ładowanie zmniejsza liczbę kroków. " else "Bez automatycznego przewijania. ") + "Otworzyć ponownie DOKŁADNIE tę zatwierdzoną grupę w tej samej karcie i przez 25 s odczytywać lokalnie jej odpowiedzi danych? Obejmuje typy XHR, fetch i other, wyłącznie dozwolone endpointy, top-frame i dokładny kontekst grupy. Osobno policzyć dokładne typy zasobów (w tym ping/beacon), klasy /ajax/bz, inne /ajax i /data oraz zgodność ramki/origin? To wyłącznie liczniki metadanych, bez odczytu treści dodatkowych typów. To nowy zakres, niezależny od skanu i przewijania. Do 8 odpowiedzi, 512 KiB na odpowiedź, 2 MiB łącznie i 20 ID. Wcześniejsze odpowiedzi pozostaną w ograniczonej pamięci RAM do sprawdzenia nowego dokumentu; bez potwierdzenia zostaną usunięte bez analizy postów. Bez odczytu dokumentu HTML, nagłówków, cookies i tokenów, zapisu, uploadu, skanu i kolektora. Tylko jedno zatwierdzone otwarcie; kolejne przejście, LOGIN/CAPTCHA/CHECKPOINT, pauza, wygaszenie lub utrata kontekstu: STOP.")
+            .setMessage((if (autoScroll) "ZEZWOLIĆ TAKŻE NA AUTOMATYCZNE PRZEWIJANIE? Do 5 kroków po 400–900 px, maksymalnie 4500 px. Pierwszy po sprawdzeniu nowego dokumentu i ${if (fast) "0,25 s" else "1 s"}, kolejne co ${if (fast) "0,5 s" else "2 s"}. Przeładowanie i przewijanie dzielą JEDNO okno do 25 s; wolne ładowanie zmniejsza liczbę kroków. " else "Bez automatycznego przewijania. ") + "Otworzyć ponownie DOKŁADNIE tę zatwierdzoną grupę w tej samej karcie i przez 25 s odczytywać lokalnie jej odpowiedzi danych? Obejmuje typy XHR, fetch i other, wyłącznie dozwolone endpointy, top-frame i dokładny kontekst grupy. Osobno policzyć dokładne typy zasobów (w tym ping/beacon), klasy /ajax/bz, inne /ajax i /data oraz zgodność ramki/origin? To wyłącznie liczniki metadanych, bez odczytu treści dodatkowych typów. To nowy zakres, niezależny od skanu i przewijania. Do 8 odpowiedzi, 512 KiB na odpowiedź, 2 MiB łącznie i 20 ID. Wcześniejsze odpowiedzi pozostaną w ograniczonej pamięci RAM do sprawdzenia nowego dokumentu; bez potwierdzenia zostaną usunięte bez analizy postów. Bez odczytu dokumentu HTML, nagłówków, cookies i tokenów, zapisu, uploadu, skanu i kolektora. Tylko jedno zatwierdzone otwarcie; kolejne przejście, LOGIN/CAPTCHA/CHECKPOINT, pauza, wygaszenie lub utrata kontekstu: STOP.")
             .setNegativeButton("Anuluj", null).setPositiveButton("Zgadzam się jednorazowo") { _, _ ->
                 if (epoch != visibleEpoch || current !== channel || currentSession !== session || approvedUrl != url || kind != PageKind.APPROVED_GROUP) return@setPositiveButton
                 responseReloadGate.begin(approvedUrl); responseBusy = true
@@ -178,7 +184,7 @@ class PocActivity : ComponentActivity() {
                 render()
                 lifecycleScope.launch {
                     val report = runCatching { ResponseLoadRunner(GeckoHost.background).run(currentSession, current, approvedUrl,
-                        PocPolicy.APPROVED_GROUP_ID, autoScrollConsent = autoScroll, alive = { epoch == visibleEpoch && currentSession === session && responseReloadGate.active },
+                        PocPolicy.APPROVED_GROUP_ID, autoScrollConsent = autoScroll, fastScrollConsent = fast, alive = { epoch == visibleEpoch && currentSession === session && responseReloadGate.active },
                         willLoad = { responseReloadGate.willLoad() }) }.getOrNull()
                     if (epoch == visibleEpoch && currentSession === session && responseReloadGate.active) {
                         responseReloadGate.cancel(); responseBusy = false
@@ -689,8 +695,10 @@ class PocActivity : ComponentActivity() {
         buttons["dom"]?.isEnabled = open && !responseBusy && !scanning && !inspectingDom &&
             kind == PageKind.APPROVED_GROUP && channel?.isConnected == true
 
+        buttons["tools"]?.isEnabled = !responseBusy && !visibleBusy && !scanning && !inspectingDom && !measuringLoad
         val p = probe
         diagnostics.text = buildString {
+            appendLine("STAN: ${banner.text}")
             appendLine("PRÓBA SKANU: " + scanAttemptSummary())
             appendLine()
             appendLine("Silnik: GeckoView ${org.mozilla.geckoview.BuildConfig.MOZ_APP_VERSION} • rozszerzenie: ${if (extension != null) "zainstalowane" else extensionError ?: "instalacja…"}")
@@ -711,7 +719,11 @@ class PocActivity : ComponentActivity() {
             text = label
             isAllCaps = false
             textSize = 13f
-            setOnClickListener { onClick() }
+            tag = "poc.tool.$key"
+            setOnClickListener {
+                if (key in setOf("open", "group", "tools")) onClick()
+                else { diagnosticsDialog?.dismiss(); geckoView.postOnAnimation { if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) onClick() } }
+            }
             buttons[key] = this
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
@@ -720,11 +732,14 @@ class PocActivity : ComponentActivity() {
             views.forEach(::addView)
         }
         banner = TextView(this).apply {
+            maxLines = 3
+            ellipsize = android.text.TextUtils.TruncateAt.END
             setTextColor(Color.WHITE)
             textSize = 14f
             setPadding((12 * dp).toInt(), (8 * dp).toInt(), (12 * dp).toInt(), (8 * dp).toInt())
         }
         geckoView = GeckoView(this).apply {
+            tag = "poc.browser"
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         }
         diagnostics = TextView(this).apply {
@@ -739,8 +754,9 @@ class PocActivity : ComponentActivity() {
             setTextColor(Color.parseColor("#1B1B1F"))
             setTextIsSelectable(true)
         }
-        val info = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (190 * dp).toInt())
+        val info = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             setPadding((8 * dp).toInt(), (4 * dp).toInt(), (8 * dp).toInt(), (4 * dp).toInt())
             addView(LinearLayout(this@PocActivity).apply {
                 orientation = LinearLayout.VERTICAL
@@ -748,17 +764,16 @@ class PocActivity : ComponentActivity() {
                 addView(output)
             })
         }
-        val root = LinearLayout(this).apply {
+        fastScrollOption = CheckBox(this).apply {
+            tag = "poc.fastScroll"
+            text = "Przewijanie 4×: co 0,5 s (max 5 kroków)"
+            isChecked = false
+        }
+        val toolPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#FAFAFC"))
-            addView(banner)
-            addView(row(
-                button("open", "Otwórz sesję") { if (session == null) askConsentAndOpen() else closeSession() },
-                button("group", "Otwórz grupę") { load(PocPolicy.APPROVED_GROUP_URL, login = false) },
-                button("login", "Zaloguj się") { load(PocPolicy.LOGIN_URL, login = true) },
-                button("back", "Wróć do grupy") { load(PocPolicy.APPROVED_GROUP_URL, login = false) },
-            ))
-            addView(geckoView)
+            addView(fastScrollOption)
+            addView(row(button("login", "Zaloguj się") { load(PocPolicy.LOGIN_URL, login = true) },
+                button("back", "Wróć do grupy") { load(PocPolicy.APPROVED_GROUP_URL, login = false) }))
             addView(row(
                 button("scan", "Skanuj widoczne") { scan(scrolls = 0) },
                 button("scan3", "Skanuj + przewiń 3×") { scan(scrolls = 3) },
@@ -781,7 +796,23 @@ class PocActivity : ComponentActivity() {
                 button("testNow", "Test teraz") { runScreenOffTestNow() },
                 button("clear", "Wyloguj i usuń dane") { clearSessionData() },
             ))
+            addView(TextView(this@PocActivity).apply { text = "Raport i stan sesji"; textSize = 16f })
             addView(info)
+        }
+        val menuScroll = ScrollView(this).apply { addView(toolPanel) }
+        diagnosticsDialog = AlertDialog.Builder(this).setTitle("Narzędzia i raport")
+            .setView(menuScroll).setNegativeButton("Wróć do Facebooka", null).create()
+        val root = LinearLayout(this).apply {
+            tag = "poc.root"
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#FAFAFC"))
+            addView(banner)
+            addView(row(
+                button("open", "Otwórz sesję") { if (session == null) askConsentAndOpen() else closeSession() },
+                button("group", "Otwórz grupę") { load(PocPolicy.APPROVED_GROUP_URL, login = false) },
+                button("tools", "Narzędzia / raport") { diagnosticsDialog?.show() },
+            ))
+            addView(geckoView)
         }
         // Edge-to-edge (targetSdk 35+): keep the UI clear of the status/navigation bars and the keyboard.
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->

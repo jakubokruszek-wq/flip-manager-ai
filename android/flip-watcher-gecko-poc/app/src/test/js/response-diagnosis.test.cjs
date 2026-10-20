@@ -159,3 +159,7 @@ test('Beacon cannot promote bare IDs or foreign permalinks and deduplicates exac
 test('real Facebook context cannot activate lab-only Beacon reads even with every consent flag',()=>{
  const h=harness();h.arm(beaconMsg);navigate(h);verify(h);h.request({type:'beacon'});assert.equal(h.filters.length,0);assert.equal(h.d.readLoad(msg).counts.responseBeaconRead,0);
 });
+
+test('fast load cadence requires strict scroll and speed consent in the same window',()=>{
+ for(const [autoScrollConsent,fastScrollConsent] of [[false,true],[true,'true'],[true,true]]){const h=harness();h.arm({...loadMsg,autoScrollConsent,fastScrollConsent});navigate(h);const c=h.d.loadContext(sender);assert.equal(c.fastScrollConsent,autoScrollConsent===true && fastScrollConsent===true);verify(h);const r=h.d.readLoad(msg).counts;assert.equal(r.responseFastScroll,c.fastScrollConsent?1:0);assert.equal(r.responseScrollCadenceMs,autoScrollConsent?(c.fastScrollConsent?500:2000):0);}
+});

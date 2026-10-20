@@ -604,14 +604,14 @@ class GeckoFixtureTest {
                     val target = server.url(groupPath, "response-load-scroll")
                     session.loadUri(target); assertTrue(channel.awaitPort(30_000)); delay(1_000)
                     gate.begin(target)
-                    val report = ResponseLoadRunner(background).run(session,channel,target,FIXTURE_GROUP_ID,12_000,autoScrollConsent=true,
+                    val report = ResponseLoadRunner(background).run(session,channel,target,FIXTURE_GROUP_ID,12_000,autoScrollConsent=true,fastScrollConsent=true,
                         alive={gate.active},willLoad={gate.willLoad()})
                     assertFalse("unexpected native STOP: $report", unexpectedStop)
                     Log.i("GeckoPocTest", "RESPONSE_COMBINED $report")
                     assertTrue("beacon not classified: $report", report?.contains("Ping=1")==true || report?.contains("Beacon=1")==true)
                     assertTrue("beacon endpoint not counted: $report", report?.contains("AjaxBz=1")==true)
                     assertTrue("beacon must not be read: $report", report?.contains("responseFiltered: 2")==true)
-                    for (field in listOf("responseLoadMode: 1","responseLoadNavigation: 1","responseLoadVerified: 1","responseAutoScroll: 1","responseScrollSteps: 5","responseScrollMoves: 5","responseExactIds: 2","responseCompleted: 2"))
+                    for (field in listOf("responseLoadMode: 1","responseLoadNavigation: 1","responseLoadVerified: 1","responseAutoScroll: 1","responseFastScroll: 1","responseScrollCadenceMs: 500","responseScrollSteps: 5","responseScrollMoves: 5","responseExactIds: 2","responseCompleted: 2"))
                         assertTrue("missing $field: $report", report?.contains(field)==true)
                     gate.cancel()
                     val started = android.os.SystemClock.elapsedRealtime()
@@ -673,6 +673,44 @@ class GeckoFixtureTest {
                     assertTrue(empty?.contains("responseExactIds: 0")==true)
                 } finally {background.abortResponses();channel.close();host!!.geckoView.releaseSession();session.close();server.close()}
             } } }
+        }
+    }
+
+    @Test fun compactPocLayoutGivesBrowserMostOfScreenAndKeepsToolsOutsideViewport() {
+        ActivityScenario.launch(PocActivity::class.java).use { scenario ->
+            runBlocking { delay(1_000) }
+            var browserHeight = 0
+            scenario.onActivity { activity ->
+                val root = activity.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.view.ViewGroup>("poc.root")
+                val browser = root.findViewWithTag<android.view.View>("poc.browser")
+                val usable = root.height-root.paddingTop-root.paddingBottom
+                browserHeight=browser.height
+                Log.i("GeckoPocTest","POC_VIEWPORT browser=${browser.height} usable=$usable ratio=${browser.height.toDouble()/usable}")
+                assertTrue("browser too small: ${browser.height}/$usable",usable>0 && browser.height>=usable*0.70)
+                assertEquals(3,root.childCount)
+                assertNull(root.findViewWithTag<android.view.View>("poc.tool.scan"))
+                assertFalse(activity.diagnosticsDialog!!.isShowing)
+                root.findViewWithTag<android.widget.Button>("poc.tool.tools").performClick()
+            }
+            runBlocking { delay(300) }
+            scenario.onActivity { activity ->
+                val dialog=activity.diagnosticsDialog!!
+                assertTrue(dialog.isShowing)
+                val panel=dialog.window!!.decorView
+                assertFalse(panel.findViewWithTag<android.widget.Button>("poc.tool.scan").isEnabled)
+                val fast=panel.findViewWithTag<android.widget.CheckBox>("poc.fastScroll")
+                assertFalse(fast.isChecked);fast.isChecked=true
+                val root=activity.findViewById<android.view.ViewGroup>(android.R.id.content)
+                assertEquals(browserHeight,root.findViewWithTag<android.view.View>("poc.browser").height)
+                dialog.dismiss()
+            }
+            scenario.recreate();runBlocking { delay(600) }
+            scenario.onActivity { activity ->
+                assertFalse(activity.diagnosticsDialog!!.isShowing)
+                activity.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.widget.Button>("poc.tool.tools").performClick()
+                assertFalse(activity.diagnosticsDialog!!.window!!.decorView.findViewWithTag<android.widget.CheckBox>("poc.fastScroll").isChecked)
+                activity.diagnosticsDialog!!.dismiss()
+            }
         }
     }
 

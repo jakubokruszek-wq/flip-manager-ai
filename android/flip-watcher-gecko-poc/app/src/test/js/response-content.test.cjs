@@ -60,3 +60,11 @@ test('prepare forwards only boolean scroll consent and never scrolls the old doc
 test('Beacon consent is forwarded only for an explicit true in separately consented reload',async()=>{
  for(const value of [undefined,false,'true',true]){const h=harness();await h.send({...request,type:'prepareResponseLoad',reloadConsent:true,beaconConsent:value});assert.equal(h.runtime.find(m=>m.type==='armResponse').beaconConsent,value===true);assert.equal(h.scope.scrollY,0);}
 });
+
+test('4x manual-window scrolling needs strict separate consent and uses 250/500ms pauses',async()=>{
+ for(const value of [undefined,false,'true',true]){const h=harness();const p=h.send({...request,autoScrollConsent:true,fastScrollConsent:value});await flush();const fast=value===true;for(let i=0;i<5;i++){assert.equal(h.timers[0].ms,i===0?(fast?250:1000):(fast?500:2000));h.advance();await flush();}h.advance();await p;const c=h.messages.at(-1).counts;assert.equal(c.responseFastScroll,fast?1:0);assert.equal(c.responseScrollCadenceMs,fast?500:2000);assert.equal(c.responseScrollSteps,5);}
+});
+test('fast load scroll keeps all five-step and stop protections',async()=>{
+ const h=harness({active:true,nonce:'fast-load-consent',groupId:'group',remainingMs:25000,autoScrollConsent:true,fastScrollConsent:true});await flush();assert.equal(h.timers[0].ms,250);h.advance();await flush();assert.equal(h.scope.scrollY,540);assert.equal(h.timers[0].ms,500);h.disconnect();h.advance();await flush();assert.equal(h.scope.scrollY,540);assert.equal(h.runtime.filter(m=>m.type==='recordResponseLoadScroll').length,1);
+});
+test('fast flag alone never starts scrolling',async()=>{const h=harness();const p=h.send({...request,fastScrollConsent:true});await flush();h.advance();await p;assert.equal(h.scope.scrollY,0);assert.equal(h.messages.at(-1).counts.responseFastScroll,0);assert.equal(h.messages.at(-1).counts.responseScrollCadenceMs,0);});
