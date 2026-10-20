@@ -204,3 +204,6 @@ test('only valid inert JSON blocks are parsed, with bounded block count and reco
 test('document block byte budget applies to multibyte UTF8, not character count',()=>{
  const h=harness();h.arm(documentMsg);const large=JSON.stringify({...story(),padding:'ż'.repeat(270000)});assert(large.length<524288);assert(Buffer.byteLength(large)>524288);documentStream(h,`<html><script type="application/json">${large}</script></html>`);verify(h);const c=h.d.readLoad(msg).counts;assert.equal(c.responseDocumentJsonBlocks,0);assert.equal(c.responseExactIds,0);
 });
+test('comments, raw-text HTML and quoted fake type or href attributes cannot confirm records or links',()=>{
+ const h=harness();h.arm(documentMsg);const json=JSON.stringify(story());documentStream(h,`<html><!-- ${documentBody()} --><textarea>${documentBody()}</textarea><style>${documentBody()}</style><script data-label="type='application/json'">${json}</script><a data-label="href='/groups/${group}/posts/123456789/'">x</a><script type="text/javascript" type="application/json">${json}</script></html>`);verify(h);const c=h.d.readLoad(msg).counts;assert.equal(c.responseDocumentJsonBlocks,0);assert.equal(c.responseDocumentPermalinks,0);assert.equal(c.responseExactIds,0);
+});

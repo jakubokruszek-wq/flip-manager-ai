@@ -105,15 +105,30 @@
         if(/\d+(?:[,.]\d+)?\s*m(?:²|2)(?!\w)/i.test(text))inc(s,"responseAreaSignals");
       }
     }
+    // Quoted attribute values are consumed whole; text inside data-* cannot impersonate type/href.
+    function attributes(raw) {
+      const attrs=new Map();let pos=0;
+      const item=/([^\s"'<>\/=]+)(?:\s*=\s*(?:"([^"<>]*)"|'([^'<>]*)'|([^\s"'=<>`]+)))?/y;
+      while(pos<raw.length) {
+        while(/\s/.test(raw[pos]||"") && pos<raw.length)pos++;
+        if(pos===raw.length)break;
+        item.lastIndex=pos;const m=item.exec(raw);if(!m)return null;
+        const name=m[1].toLowerCase();if(attrs.has(name))return null;
+        attrs.set(name,m[2]??m[3]??m[4]??"");pos=item.lastIndex;
+      }
+      return attrs;
+    }
     function parseDocument(s,body) {
       if(current!==s || s.closed || s.expired || now()>=s.deadline)return;
       if(/captcha_response|id=["']login_form|\/checkpoint\//i.test(body)){abort();return;}
       const links=new Set();let visited=0;
-      const markup=body.replace(/<!--[\s\S]*?-->/g," ").replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi," ");
-      for(const m of markup.matchAll(/<a\b[^>]{0,4096}?\bhref\s*=\s*(["'])([^"']{1,4096})\1/gi)) {
+      const documentMarkup=body.replace(/<!--[\s\S]*?-->/g," ").replace(/<(textarea|style|title|noscript)\b[^>]*>[\s\S]*?<\/\1\s*>/gi," ");
+      const markup=documentMarkup.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi," ");
+      for(const m of markup.matchAll(/<a\b([^>]{0,4096})>/gi)) {
         if(++visited>400)break;
         try {
-          const u=new URL(m[2].replaceAll("&amp;","&"),s.target);
+          const href=attributes(m[1])?.get("href");if(!href || href.length>4096)continue;
+          const u=new URL(href.replaceAll("&amp;","&"),s.target);
           if(u.protocol!=="https:" || u.port || u.username || u.password || !["facebook.com","www.facebook.com","m.facebook.com"].includes(u.hostname))continue;
           const exact=u.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d{5,30})\/?$/);
           if(exact?.[1]===s.group)links.add(exact[2]);
@@ -122,9 +137,10 @@
       }
       s.counts.responseDocumentPermalinks=links.size;
       let blocks=0;
-      for(const m of body.matchAll(/<script\b([^>]{0,4096})>([\s\S]*?)<\/script\s*>/gi)) {
+      for(const m of documentMarkup.matchAll(/<script\b([^>]{0,4096})>([\s\S]*?)<\/script\s*>/gi)) {
         if(++blocks>64)break;
-        if(!/\btype\s*=\s*(["'])application\/json\1/i.test(m[1]) || /\bsrc\s*=/i.test(m[1]) || new TextEncoder().encode(m[2]).byteLength>MAX_BODY)continue;
+        const attrs=attributes(m[1]);
+        if(!attrs || attrs.get("type")?.toLowerCase()!=="application/json" || attrs.has("src") || new TextEncoder().encode(m[2]).byteLength>MAX_BODY)continue;
         // Require complete JSON, not an executable snippet. Never evaluate it.
         try{JSON.parse(m[2]);}catch{continue;}
         inc(s,"responseDocumentJsonBlocks");parse(s,m[2]);

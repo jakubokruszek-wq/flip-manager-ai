@@ -735,6 +735,7 @@ class GeckoFixtureTest {
                 assertTrue(dialog.isShowing)
                 val panel=dialog.window!!.decorView
                 assertFalse(panel.findViewWithTag<android.widget.Button>("poc.tool.scan").isEnabled)
+                assertFalse(panel.findViewWithTag<android.widget.Button>("poc.tool.document").isEnabled)
                 val fast=panel.findViewWithTag<android.widget.CheckBox>("poc.fastScroll")
                 assertFalse(fast.isChecked);fast.isChecked=true
                 val root=activity.findViewById<android.view.ViewGroup>(android.R.id.content)
