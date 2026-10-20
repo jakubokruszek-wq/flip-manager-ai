@@ -124,7 +124,7 @@
       let blocks=0;
       for(const m of body.matchAll(/<script\b([^>]{0,4096})>([\s\S]*?)<\/script\s*>/gi)) {
         if(++blocks>64)break;
-        if(!/\btype\s*=\s*(["'])application\/json\1/i.test(m[1]) || /\bsrc\s*=/i.test(m[1]) || m[2].length>MAX_BODY)continue;
+        if(!/\btype\s*=\s*(["'])application\/json\1/i.test(m[1]) || /\bsrc\s*=/i.test(m[1]) || new TextEncoder().encode(m[2]).byteLength>MAX_BODY)continue;
         // Require complete JSON, not an executable snippet. Never evaluate it.
         try{JSON.parse(m[2]);}catch{continue;}
         inc(s,"responseDocumentJsonBlocks");parse(s,m[2]);

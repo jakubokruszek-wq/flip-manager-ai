@@ -201,3 +201,6 @@ test('document has a 2 MiB ceiling and next attempt is clean without reusing con
 test('only valid inert JSON blocks are parsed, with bounded block count and record deduplication',()=>{
  const h=harness();h.arm(documentMsg);documentStream(h,'<html><body>'+`<script type="application/json" src="/x">${JSON.stringify(story())}</script><script type="application/json">invalid</script>`+Array.from({length:70},()=>`<script type="application/json">${JSON.stringify(story())}</script>`).join('')+'</body></html>');verify(h);const c=h.d.readLoad(msg).counts;assert.equal(c.responseDocumentJsonBlocks,62);assert.equal(c.responseExactIds,1);assert(c.responseDuplicateIds>0);
 });
+test('document block byte budget applies to multibyte UTF8, not character count',()=>{
+ const h=harness();h.arm(documentMsg);const large=JSON.stringify({...story(),padding:'ż'.repeat(270000)});assert(large.length<524288);assert(Buffer.byteLength(large)>524288);documentStream(h,`<html><script type="application/json">${large}</script></html>`);verify(h);const c=h.d.readLoad(msg).counts;assert.equal(c.responseDocumentJsonBlocks,0);assert.equal(c.responseExactIds,0);
+});

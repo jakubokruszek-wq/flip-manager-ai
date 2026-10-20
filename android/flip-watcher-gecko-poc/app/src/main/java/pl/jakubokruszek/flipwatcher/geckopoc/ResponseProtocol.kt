@@ -30,6 +30,8 @@ object ResponseProtocol {
         if (document == 0 && listOf("responseDocumentCompleted", "responseDocumentBytes", "responseDocumentJsonBlocks", "responseDocumentPermalinks").any { counts.getInt(it) != 0 }) return null
         if (document == 1 && (counts.getInt("responseLoadMode") != 1 || counts.getInt("responseAutoScroll") != 0 || counts.getInt("responseBeaconRead") != 0)) return null
         if (counts.getInt("responseDocumentCompleted") > 1 || counts.getInt("responseDocumentCompleted") > counts.getInt("responseCompleted") || counts.getInt("responseDocumentBytes") > counts.getInt("responseBytes") || counts.getInt("responseDocumentJsonBlocks") > 64 || counts.getInt("responseDocumentPermalinks") > 20) return null
+        if (document == 1 && counts.getInt("responseFiltered") > 1) return null
+        if ((counts.getInt("responseDocumentJsonBlocks") > 0 || counts.getInt("responseDocumentPermalinks") > 0) && counts.getInt("responseDocumentCompleted") != 1) return null
         val documentSummary = keys.take(5).joinToString(", ") { "${it.removePrefix("responseDocument")}=${counts.getInt(it)}" }
         val beaconSummary = listOf("responseBeaconRead", "responseBeaconFiltered", "responseBeaconCompleted", "responseBeaconBytes", "responseBeaconNoData").joinToString(", ") { "${it.removePrefix("responseBeacon")}=${counts.getInt(it)}" }
         if (counts.getInt("responseFastScroll") !in 0..1) return null
@@ -47,6 +49,7 @@ object ResponseProtocol {
         val transport = when {
             status != "OK" -> status
             document == 1 && counts.getInt("responseDocumentBytes") == 0 -> "DOKUMENT: BRAK DOSTARCZONYCH BAJTÓW; nie dowodzi pustej odpowiedzi. Możliwy cache lub ograniczenie filtra."
+            document == 1 && counts.getInt("responseDocumentCompleted") == 0 -> "DOKUMENT NIEUKOŃCZONY; analiza rekordów niewykonana. Sprawdź limit i błędy."
             document == 1 && counts.getInt("responseExactIds") == 0 -> "DOKUMENT ODCZYTANY; brak potwierdzonych rekordów z ID. Linki liczone osobno."
             document == 1 -> "DOKUMENT: POTWIERDZONE ID w JSON; kompletność ofert niepotwierdzona."
             counts.getInt("responseObserved") == 0 -> "BRAK ZDARZEŃ w oknie; parser nie otrzymał danych."
