@@ -212,6 +212,8 @@ class CollectorChannel(
     }
 
     fun close() {
+        stopShareLinkContext()
+        connectedUrl = null
         port?.let { runCatching { it.disconnect() } }
         port = null
         pending.values.forEach { it.complete(null) }
