@@ -131,7 +131,7 @@ class CollectorChannel(
     }
 
     suspend fun prepareResponseLoad(consent: Boolean, groupId: String, windowMs: Int, nonce: String = UUID.randomUUID().toString(), autoScrollConsent: Boolean = false, beaconConsent: Boolean = false): String? {
-        if (!consent) return null
+        if (!consent || (beaconConsent && !fixtureMode)) return null
         val reply = request(nonce, JSONObject().put("type", "prepareResponseLoad").put("nonce", nonce)
             .put("consent", true).put("reloadConsent", true).put("beaconConsent", beaconConsent).put("autoScrollConsent", autoScrollConsent).put("groupId", groupId).put("allowLoopback", fixtureMode)
             .put("windowMs", windowMs.coerceIn(1_000, 25_000)), 8_000) ?: return null

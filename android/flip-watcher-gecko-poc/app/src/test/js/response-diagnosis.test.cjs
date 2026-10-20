@@ -4,14 +4,15 @@ const core=globalThis.FlipFacebookCollectorCore;
 const {create,keys,groupURL}=require('../../main/extension/response-diagnosis.js');
 const group='lodzsprzedazzakupwynajem',url=`https://www.facebook.com/groups/${group}/`;
 const sender={tab:{id:7},frameId:0,url},msg={consent:true,nonce:'fresh-consent-123',groupId:group,windowMs:15000};
-function harness(apiAvailable=true){
+function harness(apiAvailable=true,fixture=false){
+ const boundSender=fixture?{...sender,url:"http://127.0.0.1:1234/groups/"+group+"/?fixture=beacon"}:sender;
  const filters=[],timers=[];let clock=0;
  const api={webRequest:{onBeforeRequest:{addListener(fn){this.listener=fn;}}}};
  if(apiAvailable)api.webRequest.filterResponseData=id=>{const f={id,writes:[],write(b){this.writes.push(Buffer.from(b));},close(){this.closed=true;},disconnect(){this.disconnected=true;}};filters.push(f);return f;};
  const d=create(api,core,{performance:{now:()=>clock},setTimeout(fn,ms){timers.push({fn,ms});return timers.length;},clearTimeout(){}});
- const request=(extra={})=>{const details={tabId:7,frameId:0,type:'xmlhttprequest',url:'https://www.facebook.com/ajax/feed/',documentUrl:url,requestId:String(filters.length),...extra};d.observe(details);return d.before(details);};
+ const request=(extra={})=>{const details={tabId:7,frameId:0,type:'xmlhttprequest',url:'https://www.facebook.com/ajax/feed/',documentUrl:boundSender.url,requestId:String(filters.length),...extra};d.observe(details);return d.before(details);};
  const stream=(body,extra={})=>{request(extra);const f=filters.at(-1);const b=Buffer.from(body);for(let i=0;i<b.length;i+=7)f.ondata({data:Uint8Array.from(b.subarray(i,i+7)).buffer});f.onstop();return f;};
- return {d,filters,timers,request,stream,jump(ms){clock+=ms;},arm:(m=msg,s=sender)=>d.arm(m,s),read:(m=msg,s=sender)=>d.read(m,s)};
+ return {d,filters,timers,request,stream,sender:boundSender,jump(ms){clock+=ms;},arm:(m=msg,s=boundSender)=>d.arm(m,s),read:(m=msg,s=boundSender)=>d.read(m,s)};
 }
 const story=(id='123456789',g=group)=>({__typename:'Story',post_id:id,permalink_url:`https://www.facebook.com/groups/${g}/posts/${id}/`,message:{text:'PRIVATE żółć 450 000 zł 54 m²'},actors:[{name:'PRIVATE_AUTHOR',id:'987654321'}]});
 test('idle and absent consent never instantiate a response filter',()=>{const h=harness();h.request();assert.equal(h.filters.length,0);for(const consent of [false,undefined,'true'])assert.equal(h.arm({...msg,consent}).status,'STOP');h.request();assert.equal(h.filters.length,0);});
@@ -47,8 +48,8 @@ test('passive registration covers existing hosts; body listener retains its narr
  assert.equal(regs.length,2);assert.equal(regs[0].length,2);assert(regs[0][1].urls.includes('https://*.fbcdn.net/*'));assert.deepEqual(regs[1][2],['blocking']);assert(!regs[1][1].urls.some(u=>u.includes('fbcdn') || u.includes('*.facebook')));
 });
 const loadMsg={...msg,reloadConsent:true,windowMs:25000};
-const navigate=h=>h.request({type:'main_frame',url});
-const verify=h=>h.d.confirmLoad({nonce:msg.nonce,safe:true},sender);
+const navigate=h=>h.request({type:'main_frame',url:h.sender.url});
+const verify=h=>h.d.confirmLoad({nonce:msg.nonce,safe:true},h.sender);
 test('controlled load buffers data until the new approved document is verified',()=>{
  const h=harness();h.arm(loadMsg);h.request({type:'other'});assert.equal(h.filters.length,0);
  navigate(h);h.stream(JSON.stringify(story()),{type:'other'});
@@ -128,29 +129,33 @@ test('passive type classification stops without consent, after deadline and afte
  const h=harness();const d={tabId:7,frameId:0,type:'ping',url:'https://www.facebook.com/ajax/bz/',documentUrl:url};h.d.observe(d);h.arm();h.d.observe(d);h.jump(15001);h.d.observe(d);assert.equal(h.read().counts.responseTypePing,1);h.d.observe(d);assert.equal(h.read().counts.responseTypePing,0);
 });
 
-const beaconMsg={...loadMsg,beaconConsent:true};
+const beaconMsg={...loadMsg,fixture:true,beaconConsent:true};
 test('Beacon body read is default OFF and needs strict new consent plus reload consent',()=>{
- for(const m of [msg,{...msg,beaconConsent:true},loadMsg,{...loadMsg,beaconConsent:'true'}]){const h=harness();h.arm(m);if(m.reloadConsent)navigate(h);h.request({type:'beacon'});assert.equal(h.filters.length,0);const c=(m.reloadConsent?(verify(h),h.d.readLoad(m)):h.read(m)).counts;assert.equal(c.responseBeaconRead,0);}
+ for(const m of [msg,{...msg,beaconConsent:true},loadMsg,{...loadMsg,beaconConsent:'true'}]){const h=harness(true,true);h.arm(m);if(m.reloadConsent)navigate(h);h.request({type:'beacon'});assert.equal(h.filters.length,0);const c=(m.reloadConsent?(verify(h),h.d.readLoad(m)):h.read(m)).counts;assert.equal(c.responseBeaconRead,0);}
 });
 test('consented Beacon preserves bytes and parses only after safe new document confirmation',()=>{
- const h=harness();h.arm(beaconMsg);navigate(h);const body=JSON.stringify(story());const f=h.stream(body,{type:'beacon'});assert.equal(Buffer.concat(f.writes).toString(),body);assert.equal(h.d.loadContext(sender).active,true);verify(h);
+ const h=harness(true,true);h.arm(beaconMsg);navigate(h);const body=JSON.stringify(story());const f=h.stream(body,{type:'beacon'});assert.equal(Buffer.concat(f.writes).toString(),body);assert.equal(h.d.loadContext(h.sender).active,true);verify(h);
  const c=h.d.readLoad(msg).counts;assert.equal(c.responseBeaconRead,1);assert.equal(c.responseBeaconFiltered,1);assert.equal(c.responseBeaconCompleted,1);assert.equal(c.responseBeaconBytes,Buffer.byteLength(body));assert.equal(c.responseBeaconNoData,0);assert.equal(c.responseExactIds,1);assert.equal(c.responseTabUnhandled,1);assert(!JSON.stringify(c).includes('PRIVATE'));
 });
 test('Beacon consent never allows ping, document, script, data, foreign tab/frame/host/origin',()=>{
- const h=harness();h.arm(beaconMsg);navigate(h);verify(h);
+ const h=harness(true,true);h.arm(beaconMsg);navigate(h);verify(h);
  for(const extra of [{type:'ping'},{type:'script'},{type:'image'},{url:'https://www.facebook.com/data/'},{url:'https://fbcdn.net/ajax/feed/'},{documentUrl:undefined},{documentUrl:url.replace(group,'foreign')},{frameId:1},{tabId:8}])h.request({type:'beacon',...extra});
  assert.equal(h.filters.length,0);h.request({type:'beacon'});assert.equal(h.filters.length,1);
 });
 test('Beacon reports empty completion separately from non-empty unrecognized content',()=>{
- for(const body of ['', '{}']){const h=harness();h.arm(beaconMsg);navigate(h);verify(h);h.stream(body,{type:'beacon'});const c=h.d.readLoad(msg).counts;assert.equal(c.responseBeaconCompleted,1);assert.equal(c.responseBeaconNoData,body===''?1:0);assert.equal(c.responseBeaconBytes,Buffer.byteLength(body));assert.equal(c.responseExactIds,0);}
+ for(const body of ['', '{}']){const h=harness(true,true);h.arm(beaconMsg);navigate(h);verify(h);h.stream(body,{type:'beacon'});const c=h.d.readLoad(msg).counts;assert.equal(c.responseBeaconCompleted,1);assert.equal(c.responseBeaconNoData,body===''?1:0);assert.equal(c.responseBeaconBytes,Buffer.byteLength(body));assert.equal(c.responseExactIds,0);}
 });
 test('Beacon shares existing body, total, stream and response budgets',()=>{
- const h=harness();h.arm(beaconMsg);navigate(h);verify(h);for(let i=0;i<5;i++)h.request({type:'beacon'});assert.equal(h.filters.length,4);h.filters.forEach(f=>f.onstop());for(let i=0;i<6;i++){const n=h.filters.length;h.request({type:'beacon'});if(h.filters.length>n)h.filters.at(-1).onstop();}assert.equal(h.filters.length,8);assert.equal(h.d.readLoad(msg).counts.responseBeaconFiltered,8);
- const t=harness();t.arm(beaconMsg);navigate(t);verify(t);t.request({type:'beacon'});t.filters[0].ondata({data:new Uint8Array(524289).buffer});assert.equal(t.filters[0].disconnected,true);assert.equal(t.d.readLoad(msg).counts.responseBeaconBytes,0);
+ const h=harness(true,true);h.arm(beaconMsg);navigate(h);verify(h);for(let i=0;i<5;i++)h.request({type:'beacon'});assert.equal(h.filters.length,4);h.filters.forEach(f=>f.onstop());for(let i=0;i<6;i++){const n=h.filters.length;h.request({type:'beacon'});if(h.filters.length>n)h.filters.at(-1).onstop();}assert.equal(h.filters.length,8);assert.equal(h.d.readLoad(msg).counts.responseBeaconFiltered,8);
+ const t=harness(true,true);t.arm(beaconMsg);navigate(t);verify(t);t.request({type:'beacon'});t.filters[0].ondata({data:new Uint8Array(524289).buffer});assert.equal(t.filters[0].disconnected,true);assert.equal(t.d.readLoad(msg).counts.responseBeaconBytes,0);
 });
 test('Beacon abort, deadline and late callbacks cannot retain or expose records',()=>{
- for(const action of ['abort','deadline','unverified']){const h=harness();h.arm(beaconMsg);navigate(h);h.request({type:'beacon'});const f=h.filters[0];if(action==='abort')h.d.abort();if(action==='deadline')h.jump(25001);f.ondata({data:Uint8Array.from(Buffer.from(JSON.stringify(story()))).buffer});f.onstop();assert.equal(h.d.readLoad(msg).counts.responseExactIds,0);}
+ for(const action of ['abort','deadline','unverified']){const h=harness(true,true);h.arm(beaconMsg);navigate(h);h.request({type:'beacon'});const f=h.filters[0];if(action==='abort')h.d.abort();if(action==='deadline')h.jump(25001);f.ondata({data:Uint8Array.from(Buffer.from(JSON.stringify(story()))).buffer});f.onstop();assert.equal(h.d.readLoad(msg).counts.responseExactIds,0);}
 });
 test('Beacon cannot promote bare IDs or foreign permalinks and deduplicates exact IDs',()=>{
- const h=harness();h.arm(beaconMsg);navigate(h);verify(h);h.stream(JSON.stringify([story(),story('223456789','foreign'),{post_id:'323456789'}]),{type:'beacon'});h.stream(JSON.stringify(story()),{type:'beacon'});const c=h.d.readLoad(msg).counts;assert.equal(c.responseExactIds,1);assert.equal(c.responseDuplicateIds,1);assert.equal(c.responseBeaconCompleted,2);
+ const h=harness(true,true);h.arm(beaconMsg);navigate(h);verify(h);h.stream(JSON.stringify([story(),story('223456789','foreign'),{post_id:'323456789'}]),{type:'beacon'});h.stream(JSON.stringify(story()),{type:'beacon'});const c=h.d.readLoad(msg).counts;assert.equal(c.responseExactIds,1);assert.equal(c.responseDuplicateIds,1);assert.equal(c.responseBeaconCompleted,2);
+});
+
+test('real Facebook context cannot activate lab-only Beacon reads even with every consent flag',()=>{
+ const h=harness();h.arm(beaconMsg);navigate(h);verify(h);h.request({type:'beacon'});assert.equal(h.filters.length,0);assert.equal(h.d.readLoad(msg).counts.responseBeaconRead,0);
 });

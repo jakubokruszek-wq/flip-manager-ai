@@ -1,4 +1,4 @@
-Aktualna diagnostyka: [0.3.5 — osobna zgoda na odpowiedzi Beacon](docs/poc-035.md).
+Wynik transportu: [0.3.5 — Beacon NO_GO, bez odczytu w zwykłej aplikacji](docs/poc-035.md).
 
 Aktualna diagnostyka: [0.3.4 — dokładne typy i endpointy](docs/poc-034.md).
 

@@ -22,7 +22,7 @@
       if(revoked.has(m.nonce))return {status:"STOP",counts:fresh(true)};
       if(!available()) return {status:"UNSUPPORTED",counts:fresh()};
       if(current) return {status:"BUSY",counts:fresh()};
-      const s={nonce:m.nonce,tab:sender.tab.id,group:m.groupId,fixture:m.fixture===true,counts:fresh(),streams:new Map(),ids:new Set(),pending:[],load:m.reloadConsent===true,beaconConsent:m.reloadConsent===true && m.beaconConsent===true,target:sender.url,navigated:false,verified:false,scrollConsent:m.reloadConsent===true && m.autoScrollConsent===true,deadline:now()+Math.max(500,Math.min(m.reloadConsent===true?25000:15000,Number(m.windowMs)||15000)),closed:false,expired:false};
+      const s={nonce:m.nonce,tab:sender.tab.id,group:m.groupId,fixture:m.fixture===true,counts:fresh(),streams:new Map(),ids:new Set(),pending:[],load:m.reloadConsent===true,beaconConsent:m.reloadConsent===true && m.beaconConsent===true && m.fixture===true && /^http:\/\/127\.0\.0\.1(?::\d+)?\//.test(sender.url),target:sender.url,navigated:false,verified:false,scrollConsent:m.reloadConsent===true && m.autoScrollConsent===true,deadline:now()+Math.max(500,Math.min(m.reloadConsent===true?25000:15000,Number(m.windowMs)||15000)),closed:false,expired:false};
       s.counts.responseBeaconRead=s.beaconConsent?1:0;s.counts.responseArmed=1;s.counts.responseLoadMode=s.load?1:0;s.counts.responseAutoScroll=s.scrollConsent?1:0;current=s;
       s.timer=timers.setTimeout(()=>{if(current!==s)return;for(const stream of s.streams.values())discard(stream);s.streams.clear();s.ids.clear();s.pending.length=0;s.expired=true;},Math.max(500,Math.min(s.load?25000:15000,Number(m.windowMs)||15000)));
       return {status:"ARMED",counts:{...s.counts}};

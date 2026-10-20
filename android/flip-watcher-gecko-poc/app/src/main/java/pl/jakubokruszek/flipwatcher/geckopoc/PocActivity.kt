@@ -163,14 +163,14 @@ class PocActivity : ComponentActivity() {
             }.show()
     }
 
-    private fun checkResponseLoad(autoScroll: Boolean = false, beacon: Boolean = false) {
+    private fun checkResponseLoad(autoScroll: Boolean = false) {
         if (responseBusy || visibleBusy || scanning || inspectingDom || measuringLoad || kind != PageKind.APPROVED_GROUP || progress < 100 || haltMessage != null) return
         val currentSession = session ?: return
         val current = channel ?: return
         val approvedUrl = url ?: return
         val epoch = visibleEpoch
-        visibleDialog = AlertDialog.Builder(this).setTitle(if (beacon) "NOWA zgoda: odpowiedzi Beacon" else if (autoScroll) "Nowa zgoda: otwarcie + przewijanie" else "Nowa zgoda: jedno otwarcie i odpowiedzi")
-            .setMessage((if (beacon) "NOWY ZAKRES: zezwolić także na odczyt TREŚCI ODPOWIEDZI żądań typu BEACON? Tylko te same dozwolone endpointy i zatwierdzona grupa/karta/top-frame. Nie czytamy wysyłanych payloadów Beacon, nagłówków, cookies/tokenów ani dokumentu HTML. Odpowiedzi mogą być puste lub nie zawierać postów — to eksperyment, nie skan. Wcześniejsza zgoda na liczenie Beacon NIE jest zgodą na ten odczyt. " else "") + (if (autoScroll) "ZEZWOLIĆ TAKŻE NA AUTOMATYCZNE PRZEWIJANIE? Do 5 kroków po 400–900 px, maksymalnie 4500 px. Pierwszy po sprawdzeniu nowego dokumentu i 1 s, kolejne co 2 s. Przeładowanie i przewijanie dzielą JEDNO okno do 25 s; wolne ładowanie zmniejsza liczbę kroków. " else "Bez automatycznego przewijania. ") + "Otworzyć ponownie DOKŁADNIE tę zatwierdzoną grupę w tej samej karcie i przez 25 s odczytywać lokalnie jej odpowiedzi danych? Obejmuje typy XHR, fetch i other, wyłącznie dozwolone endpointy, top-frame i dokładny kontekst grupy. Osobno policzyć dokładne typy zasobów (w tym ping/beacon), klasy /ajax/bz, inne /ajax i /data oraz zgodność ramki/origin? Sama klasyfikacja typów to wyłącznie metadane; odczyt Beacon wymaga osobnej zgody wskazanej w tytule dialogu. To nowy zakres, niezależny od skanu i przewijania. Do 8 odpowiedzi, 512 KiB na odpowiedź, 2 MiB łącznie i 20 ID. Wcześniejsze odpowiedzi pozostaną w ograniczonej pamięci RAM do sprawdzenia nowego dokumentu; bez potwierdzenia zostaną usunięte bez analizy postów. Bez odczytu dokumentu HTML, nagłówków, cookies i tokenów, zapisu, uploadu, skanu i kolektora. Tylko jedno zatwierdzone otwarcie; kolejne przejście, LOGIN/CAPTCHA/CHECKPOINT, pauza, wygaszenie lub utrata kontekstu: STOP.")
+        visibleDialog = AlertDialog.Builder(this).setTitle(if (autoScroll) "Nowa zgoda: otwarcie + przewijanie" else "Nowa zgoda: jedno otwarcie i odpowiedzi")
+            .setMessage((if (autoScroll) "ZEZWOLIĆ TAKŻE NA AUTOMATYCZNE PRZEWIJANIE? Do 5 kroków po 400–900 px, maksymalnie 4500 px. Pierwszy po sprawdzeniu nowego dokumentu i 1 s, kolejne co 2 s. Przeładowanie i przewijanie dzielą JEDNO okno do 25 s; wolne ładowanie zmniejsza liczbę kroków. " else "Bez automatycznego przewijania. ") + "Otworzyć ponownie DOKŁADNIE tę zatwierdzoną grupę w tej samej karcie i przez 25 s odczytywać lokalnie jej odpowiedzi danych? Obejmuje typy XHR, fetch i other, wyłącznie dozwolone endpointy, top-frame i dokładny kontekst grupy. Osobno policzyć dokładne typy zasobów (w tym ping/beacon), klasy /ajax/bz, inne /ajax i /data oraz zgodność ramki/origin? To wyłącznie liczniki metadanych, bez odczytu treści dodatkowych typów. To nowy zakres, niezależny od skanu i przewijania. Do 8 odpowiedzi, 512 KiB na odpowiedź, 2 MiB łącznie i 20 ID. Wcześniejsze odpowiedzi pozostaną w ograniczonej pamięci RAM do sprawdzenia nowego dokumentu; bez potwierdzenia zostaną usunięte bez analizy postów. Bez odczytu dokumentu HTML, nagłówków, cookies i tokenów, zapisu, uploadu, skanu i kolektora. Tylko jedno zatwierdzone otwarcie; kolejne przejście, LOGIN/CAPTCHA/CHECKPOINT, pauza, wygaszenie lub utrata kontekstu: STOP.")
             .setNegativeButton("Anuluj", null).setPositiveButton("Zgadzam się jednorazowo") { _, _ ->
                 if (epoch != visibleEpoch || current !== channel || currentSession !== session || approvedUrl != url || kind != PageKind.APPROVED_GROUP) return@setPositiveButton
                 responseReloadGate.begin(approvedUrl); responseBusy = true
@@ -178,7 +178,7 @@ class PocActivity : ComponentActivity() {
                 render()
                 lifecycleScope.launch {
                     val report = runCatching { ResponseLoadRunner(GeckoHost.background).run(currentSession, current, approvedUrl,
-                        PocPolicy.APPROVED_GROUP_ID, autoScrollConsent = autoScroll, beaconConsent = beacon, alive = { epoch == visibleEpoch && currentSession === session && responseReloadGate.active },
+                        PocPolicy.APPROVED_GROUP_ID, autoScrollConsent = autoScroll, alive = { epoch == visibleEpoch && currentSession === session && responseReloadGate.active },
                         willLoad = { responseReloadGate.willLoad() }) }.getOrNull()
                     if (epoch == visibleEpoch && currentSession === session && responseReloadGate.active) {
                         responseReloadGate.cancel(); responseBusy = false
@@ -685,7 +685,6 @@ class PocActivity : ComponentActivity() {
         buttons["responses"]?.isEnabled = open && !responseBusy && !visibleBusy && !scanning && !inspectingDom && kind == PageKind.APPROVED_GROUP && progress == 100 && channel?.isConnected == true
         buttons["responseLoad"]?.isEnabled = buttons["responses"]?.isEnabled == true
         buttons["responseLoadScroll"]?.isEnabled = buttons["responses"]?.isEnabled == true
-        buttons["responseBeacon"]?.isEnabled = buttons["responses"]?.isEnabled == true
         buttons["responseScroll"]?.isEnabled = buttons["responses"]?.isEnabled == true
         buttons["dom"]?.isEnabled = open && !responseBusy && !scanning && !inspectingDom &&
             kind == PageKind.APPROVED_GROUP && channel?.isConnected == true
@@ -765,7 +764,7 @@ class PocActivity : ComponentActivity() {
                 button("scan3", "Skanuj + przewiń 3×") { scan(scrolls = 3) },
             ))
             addView(row(button("responses", "Sprawdź dane sieciowe") { checkResponses() }, button("responseScroll", "Dane + przewijanie") { checkResponses(autoScroll = true) }))
-            addView(row(button("responseBeacon", "Odpowiedzi Beacon — nowa zgoda") { checkResponseLoad(autoScroll = true, beacon = true) }))
+            addView(row(button("beaconNoGo", "Beacon: wynik NO_GO") { AlertDialog.Builder(this@PocActivity).setTitle("Beacon — NO_GO").setMessage("Test kontrolny GeckoView: serwer zwrócił niepuste dane, ale filtr Beacon nie otrzymał bajtów. Silnik przerywa odbiór odpowiedzi Beacon. Nie włączamy tego odczytu na Facebooku; kolejne przewijanie nie naprawi transportu. Brak dostarczonych bajtów nie dowodzi pustej odpowiedzi serwera ani braku postów. Dotychczasowe tryby pozostają bez zmian.").setPositiveButton("Zamknij", null).show() }))
             addView(row(button("responseLoad", "Odpowiedzi od otwarcia") { checkResponseLoad() }, button("responseLoadScroll", "Otwarcie + przewijanie") { checkResponseLoad(autoScroll = true) }))
             addView(row(button("visiblePosts", "Sprawdź widoczne posty") { checkVisiblePosts() }))
             addView(row(

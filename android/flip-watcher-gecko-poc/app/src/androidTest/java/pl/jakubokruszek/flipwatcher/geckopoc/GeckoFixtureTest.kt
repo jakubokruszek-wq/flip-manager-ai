@@ -633,7 +633,7 @@ class GeckoFixtureTest {
         }
     }
 
-    @Test fun beaconResponseReadNeedsNewConsentAndDistinguishesEmptyBodies() {
+    @Test fun beaconTransportNoGoDespiteNonEmptyHttpControl() {
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use { scenario ->
             var host: GeckoTestHostActivity? = null
             scenario.onActivity { host = it }
@@ -649,6 +649,7 @@ class GeckoFixtureTest {
                     val control = withContext(Dispatchers.IO) { java.net.URL(server.url("/ajax/beacon/","response-beacon-data")).readBytes() }
                     assertTrue("fixture server returned no content", control.size > 200)
                     assertTrue(String(control,Charsets.UTF_8).contains("550000000000005"))
+                    Log.i("GeckoPocTest","BEACON_HTTP_CONTROL bytes=${control.size}")
                     val target = server.url(groupPath,"response-beacon")
                     session.loadUri(target);assertTrue(channel.awaitPort(30_000));delay(1_000)
                     val passive = ResponseLoadRunner(background).run(session,channel,target,FIXTURE_GROUP_ID,4_000,alive={true},willLoad={})
@@ -657,8 +658,10 @@ class GeckoFixtureTest {
                     assertTrue(passive?.contains("responseExactIds: 0")==true)
                     val report = ResponseLoadRunner(background).run(session,channel,target,FIXTURE_GROUP_ID,4_000,beaconConsent=true,alive={true},willLoad={})
                     Log.i("GeckoPocTest","BEACON_RESPONSE $report")
-                    assertTrue("report=$report",report?.contains("Read=1, Filtered=1, Completed=1")==true)
-                    assertTrue(report?.contains("responseExactIds: 1")==true)
+                    assertTrue("report=$report",report?.contains("Read=1, Filtered=1, Completed=1, Bytes=0, NoData=1")==true)
+                    // A non-empty endpoint is independently proved above. Gecko Beacon still delivers ZERO bytes.
+                    // This is a negative transport regression, NOT an empty-response or parser success claim.
+                    assertTrue(report?.contains("responseExactIds: 0")==true)
                     assertTrue(report?.contains("responseCompleted: 1")==true)
                     assertFalse(report.orEmpty().contains("PRIVATE"));assertFalse(report.orEmpty().contains("550000000000005"))
                     val emptyTarget=server.url(groupPath,"response-beacon-empty")
