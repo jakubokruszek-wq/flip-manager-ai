@@ -6,7 +6,7 @@ import org.junit.Test
 
 class ResponseProtocolTest {
     private fun reply() = JSONObject().put("type", "responseDiagnosisResult").put("nonce", "fresh").put("status", "OK").put("counts", JSONObject().apply { ResponseProtocol.keys.forEach { put(it, 0) } })
-    @Test fun onlyCountsAreDisplayed() { assertTrue(ResponseProtocol.report(reply(), "fresh")!!.startsWith("ODPOWIEDZI 0.3.6")) }
+    @Test fun onlyCountsAreDisplayed() { assertTrue(ResponseProtocol.report(reply(), "fresh")!!.startsWith("ODPOWIEDZI 0.3.7")) }
     @Test fun wrongNonceTypeAndStatusAreRejected() {
         assertNull(ResponseProtocol.report(reply(), "old"))
         assertNull(ResponseProtocol.report(reply().put("type", "scanResult"), "fresh"))
@@ -109,5 +109,26 @@ class ResponseProtocolTest {
         c.put("responseAutoScroll",1).put("responseScrollCadenceMs",2000);assertNull(ResponseProtocol.report(r,"fresh"))
         c.put("responseScrollCadenceMs",500);assertNotNull(ResponseProtocol.report(r,"fresh"))
         c.put("responseScrollCadenceMs",250);assertNull(ResponseProtocol.report(r,"fresh"))
+    }
+    @Test fun documentScopeCannotLeakIntoOldModesOrBeCombinedWithBeaconOrScroll() {
+        for (key in listOf("responseDocumentCompleted", "responseDocumentBytes", "responseDocumentJsonBlocks", "responseDocumentPermalinks")) {
+            val r=reply();r.getJSONObject("counts").put(key,1);assertNull(ResponseProtocol.report(r,"fresh"))
+        }
+        val r=reply();val c=r.getJSONObject("counts");c.put("responseDocumentRead",1)
+        assertNull(ResponseProtocol.report(r,"fresh"))
+        c.put("responseLoadMode",1).put("responseLoadNavigation",1).put("responseLoadVerified",1)
+        assertNotNull(ResponseProtocol.report(r,"fresh"))
+        c.put("responseBeaconRead",1);assertNull(ResponseProtocol.report(r,"fresh"));c.put("responseBeaconRead",0)
+        c.put("responseAutoScroll",1).put("responseScrollCadenceMs",2000);assertNull(ResponseProtocol.report(r,"fresh"))
+    }
+    @Test fun documentReportSeparatesBytesLinksAndOfferRecordsAndBoundsAllCounters() {
+        val r=reply();val c=r.getJSONObject("counts")
+        c.put("responseDocumentRead",1).put("responseLoadMode",1).put("responseLoadNavigation",1).put("responseLoadVerified",1)
+        assertTrue(ResponseProtocol.report(r,"fresh")!!.contains("DOKUMENT: BRAK DOSTARCZONYCH BAJTÓW"))
+        c.put("responseBytes",1000).put("responseDocumentBytes",1000).put("responseFiltered",1).put("responseCompleted",1).put("responseDocumentCompleted",1).put("responseDocumentPermalinks",1)
+        assertTrue(ResponseProtocol.report(r,"fresh")!!.contains("brak potwierdzonych rekordów"))
+        for ((key,value) in listOf("responseDocumentCompleted" to 2,"responseDocumentJsonBlocks" to 65,"responseDocumentPermalinks" to 21,"responseDocumentBytes" to 1001)) {
+            val bad=JSONObject(r.toString());bad.getJSONObject("counts").put(key,value);assertNull(ResponseProtocol.report(bad,"fresh"))
+        }
     }
 }

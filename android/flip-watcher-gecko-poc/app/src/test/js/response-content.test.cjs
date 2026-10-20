@@ -68,3 +68,6 @@ test('fast load scroll keeps all five-step and stop protections',async()=>{
  const h=harness({active:true,nonce:'fast-load-consent',groupId:'group',remainingMs:25000,autoScrollConsent:true,fastScrollConsent:true});await flush();assert.equal(h.timers[0].ms,250);h.advance();await flush();assert.equal(h.scope.scrollY,540);assert.equal(h.timers[0].ms,500);h.disconnect();h.advance();await flush();assert.equal(h.scope.scrollY,540);assert.equal(h.runtime.filter(m=>m.type==='recordResponseLoadScroll').length,1);
 });
 test('fast flag alone never starts scrolling',async()=>{const h=harness();const p=h.send({...request,fastScrollConsent:true});await flush();h.advance();await p;assert.equal(h.scope.scrollY,0);assert.equal(h.messages.at(-1).counts.responseFastScroll,0);assert.equal(h.messages.at(-1).counts.responseScrollCadenceMs,0);});
+test('document permission is forwarded only as strict true and never starts a scan or scroll',async()=>{
+ for(const value of [undefined,false,'true',true]){const h=harness();await h.send({...request,type:'prepareResponseLoad',reloadConsent:true,documentConsent:value});const arm=h.runtime.find(m=>m.type==='armResponse');assert.equal(arm.documentConsent,value===true);assert.equal(h.scope.scrollY,0);assert(!h.runtime.some(m=>/scan|collect/i.test(m.type)));}
+});

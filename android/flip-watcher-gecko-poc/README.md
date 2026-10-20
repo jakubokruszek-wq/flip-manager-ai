@@ -1,3 +1,7 @@
+# Aktualizacja 0.3.7
+
+Osobna jednorazowa zgoda na lokalną analizę dokumentu grupy; bez skanu i uploadu. [Zakres, limity i test Samsung](docs/poc-037.md). Wyniki CI i APK w Draft PR #45.
+
 Aktualny interfejs: [0.3.6 — większy Facebook i opcjonalne przewijanie 4×](docs/poc-036.md).
 
 Wynik transportu: [0.3.5 — Beacon NO_GO, bez odczytu w zwykłej aplikacji](docs/poc-035.md).

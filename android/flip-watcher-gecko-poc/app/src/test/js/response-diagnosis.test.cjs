@@ -163,3 +163,41 @@ test('real Facebook context cannot activate lab-only Beacon reads even with ever
 test('fast load cadence requires strict scroll and speed consent in the same window',()=>{
  for(const [autoScrollConsent,fastScrollConsent] of [[false,true],[true,'true'],[true,true]]){const h=harness();h.arm({...loadMsg,autoScrollConsent,fastScrollConsent});navigate(h);const c=h.d.loadContext(sender);assert.equal(c.fastScrollConsent,autoScrollConsent===true && fastScrollConsent===true);verify(h);const r=h.d.readLoad(msg).counts;assert.equal(r.responseFastScroll,c.fastScrollConsent?1:0);assert.equal(r.responseScrollCadenceMs,autoScrollConsent?(c.fastScrollConsent?500:2000):0);}
 });
+
+const documentMsg={...loadMsg,documentConsent:true};
+const documentBody=(records=[story()])=>`<!doctype html><html><body><a href="/groups/${group}/posts/123456789/">post</a><script type="application/json">${JSON.stringify(records)}</script></body></html>`;
+const documentStream=(h,body)=>h.stream(body,{type:'main_frame',url:h.sender.url,documentUrl:undefined});
+test('document scope is default off and requires distinct strict load-only consent',()=>{
+ for(const documentConsent of [undefined,false,'true']){const h=harness();h.arm({...loadMsg,documentConsent});navigate(h);assert.equal(h.filters.length,0);}
+ for(const bad of [{reloadConsent:false},{autoScrollConsent:true},{beaconConsent:true}]){const h=harness();assert.equal(h.arm({...documentMsg,...bad}).status,'STOP');assert.equal(h.filters.length,0);}
+});
+test('one exact document is forwarded byte-for-byte, held until verification and yields only counts',()=>{
+ const h=harness();h.arm(documentMsg);const body=documentBody();const f=documentStream(h,body);assert.equal(Buffer.concat(f.writes).toString(),body);
+ assert.equal(h.d.confirmLoad({nonce:msg.nonce,safe:true},{...sender,tab:{id:8}}),false);
+ // Wrong-tab confirmation cannot abort the bound session.
+ assert.equal(verify(h),true);const r=h.d.readLoad(msg);
+ assert.equal(r.status,'OK');assert.equal(r.counts.responseDocumentRead,1);assert.equal(r.counts.responseDocumentCompleted,1);assert.equal(r.counts.responseDocumentBytes,Buffer.byteLength(body));assert.equal(r.counts.responseDocumentJsonBlocks,1);assert.equal(r.counts.responseDocumentPermalinks,1);assert.equal(r.counts.responseExactIds,1);
+ assert(!JSON.stringify(r).includes('PRIVATE'));assert(!JSON.stringify(r).includes('123456789'));assert(!JSON.stringify(r).includes('facebook.com'));assert.equal(h.d.readLoad(msg).status,'STOP');
+});
+test('document scope cannot filter subrequests, frames, foreign tabs or a second navigation',()=>{
+ const h=harness();h.arm(documentMsg);for(const bad of [{tabId:8,type:'main_frame',url},{frameId:1,type:'sub_frame',url}])h.request(bad);assert.equal(h.filters.length,0);
+ documentStream(h,documentBody());for(const type of ['xmlhttprequest','fetch','other','beacon','script','image'])h.request({type});assert.equal(h.filters.length,1);verify(h);navigate(h);assert.equal(h.d.readLoad(msg).status,'STOP');
+ for(const bad of [{url:url.replace(group,'foreign')},{url:url+'?x=1'},{frameId:1}]){const p=harness();p.arm(documentMsg);p.request({type:'main_frame',url,...bad});assert.equal(p.filters.length,0);assert.equal(p.d.readLoad(msg).status,'STOP');}
+});
+test('document parser ignores executable scripts, unbound IDs, foreign links and form text',()=>{
+ const h=harness();h.arm(documentMsg);documentStream(h,`<html><body><input value="PRIVATE"><script>${JSON.stringify(story())}</script><script type="application/json">${JSON.stringify([story('223456789','foreign'),{post_id:'333333333'},{message:{text:'450000 zł 50 m2'}}])}</script><a href="https://evil.test/groups/${group}/posts/123456789/">x</a><a href="/groups/foreign/posts/123456789/">x</a></body></html>`);verify(h);const c=h.d.readLoad(msg).counts;assert.equal(c.responseDocumentPermalinks,0);assert.equal(c.responseExactIds,0);assert.equal(c.responsePriceSignals,0);
+});
+test('document links are separate from offer records, deduplicate and cap at twenty',()=>{
+ const h=harness();h.arm(documentMsg);documentStream(h,'<html><body>'+Array.from({length:30},(_,i)=>`<a href="/groups/${group}/posts/${123456780+i}/">x</a>`).join('')+'</body></html>');verify(h);const c=h.d.readLoad(msg).counts;assert.equal(c.responseDocumentPermalinks,20);assert.equal(c.responseExactIds,0);
+});
+test('document cancellation, verification failure, challenge and late bytes clear all results',()=>{
+ for(const action of ['abort','unsafe','expire','challenge']){const h=harness();h.arm(documentMsg);documentStream(h,action==='challenge'?'<form id="login_form">':documentBody());if(action==='abort')h.d.abortLoad(msg);if(action==='unsafe')h.d.confirmLoad({nonce:msg.nonce,safe:false},sender);if(action==='expire')h.jump(25001);assert.equal(h.d.readLoad(msg).status,'STOP');assert.equal(h.d.readLoad(msg).counts.responseExactIds,0);}
+ const h=harness();h.arm(documentMsg);h.request({type:'main_frame',url});const f=h.filters[0];h.d.abort();f.ondata({data:Buffer.from(documentBody()).buffer});f.onstop();assert.equal(h.d.readLoad(msg).status,'STOP');assert.equal(h.filters.length,1);
+});
+test('document has a 2 MiB ceiling and next attempt is clean without reusing consent',()=>{
+ const h=harness();h.arm(documentMsg);h.request({type:'main_frame',url});const f=h.filters[0];f.ondata({data:new Uint8Array(2097153).buffer});assert.equal(f.disconnected,true);verify(h);const r=h.d.readLoad(msg);assert.equal(r.counts.responseOversize,1);assert.equal(r.counts.responseDocumentCompleted,0);
+ h.request({type:'main_frame',url});assert.equal(h.filters.length,1);assert.equal(h.arm({...loadMsg,nonce:'fresh-after-document'}).status,'ARMED');navigate(h);assert.equal(h.filters.length,1);h.d.abort();
+});
+test('only valid inert JSON blocks are parsed, with bounded block count and record deduplication',()=>{
+ const h=harness();h.arm(documentMsg);documentStream(h,'<html><body>'+`<script type="application/json" src="/x">${JSON.stringify(story())}</script><script type="application/json">invalid</script>`+Array.from({length:70},()=>`<script type="application/json">${JSON.stringify(story())}</script>`).join('')+'</body></html>');verify(h);const c=h.d.readLoad(msg).counts;assert.equal(c.responseDocumentJsonBlocks,62);assert.equal(c.responseExactIds,1);assert(c.responseDuplicateIds>0);
+});

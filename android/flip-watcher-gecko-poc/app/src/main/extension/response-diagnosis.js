@@ -1,7 +1,7 @@
 /* Opt-in response diagnostic. No body, record, URL or ID ever leaves this module. */
 (function(scope) {
   "use strict";
-  const keys = ["responseFastScroll","responseScrollCadenceMs","responseLoadMode","responseLoadNavigation","responseLoadVerified","responseQueuedBodies","responseTabFetch","responseTabOther","responseTabUnhandled","responseAutoScroll","responseScrollSteps","responseScrollMoves","responseObserved","responseBoundTab","responseOtherTab","responseNoTab","responseTabXhr","responseFrameRejected","responseHostRejected","responseEndpointRejected","responseMissingOrigin","responseApiAvailable","responseArmed","responseRequestsSeen","responseOriginRejected","responseFiltered","responseCompleted","responseBytes","responseOversize","responseDecodeErrors","responseStreamErrors","responseLimitSkipped","responseKeyPostId","responseKeyStoryId","responseExactIds","responseDuplicateIds","responseRecordsWithText","responseRecordsWithAuthor","responseRecordsWithImages","responsePriceSignals","responseAreaSignals","responseStopped","responseTypeDocument","responseTypeSubFrame","responseTypeScript","responseTypeImage","responseTypeImageSet","responseTypeStylesheet","responseTypeFont","responseTypeMedia","responseTypePing","responseTypeBeacon","responseTypeWebsocket","responseTypeObject","responseTypeObjectSubrequest","responseTypeCspReport","responseTypeSpeculative","responseTypeManifest","responseTypeXslt","responseTypeUnknown","responseDataEndpoints","responseDataXhr","responseDataFetch","responseDataOther","responseDataPing","responseDataBeacon","responseDataUnhandled","responseDataEligiblePing","responseDataEligibleBeacon","responseDataEligibleUnhandled","responseDataFrameRejected","responseDataOriginRejected","responseDataMissingOrigin","responseAjaxBz","responseAjaxOther","responseDataPath","responseBeaconRead","responseBeaconFiltered","responseBeaconCompleted","responseBeaconBytes","responseBeaconNoData"];
+  const keys = ["responseDocumentRead","responseDocumentCompleted","responseDocumentBytes","responseDocumentJsonBlocks","responseDocumentPermalinks","responseFastScroll","responseScrollCadenceMs","responseLoadMode","responseLoadNavigation","responseLoadVerified","responseQueuedBodies","responseTabFetch","responseTabOther","responseTabUnhandled","responseAutoScroll","responseScrollSteps","responseScrollMoves","responseObserved","responseBoundTab","responseOtherTab","responseNoTab","responseTabXhr","responseFrameRejected","responseHostRejected","responseEndpointRejected","responseMissingOrigin","responseApiAvailable","responseArmed","responseRequestsSeen","responseOriginRejected","responseFiltered","responseCompleted","responseBytes","responseOversize","responseDecodeErrors","responseStreamErrors","responseLimitSkipped","responseKeyPostId","responseKeyStoryId","responseExactIds","responseDuplicateIds","responseRecordsWithText","responseRecordsWithAuthor","responseRecordsWithImages","responsePriceSignals","responseAreaSignals","responseStopped","responseTypeDocument","responseTypeSubFrame","responseTypeScript","responseTypeImage","responseTypeImageSet","responseTypeStylesheet","responseTypeFont","responseTypeMedia","responseTypePing","responseTypeBeacon","responseTypeWebsocket","responseTypeObject","responseTypeObjectSubrequest","responseTypeCspReport","responseTypeSpeculative","responseTypeManifest","responseTypeXslt","responseTypeUnknown","responseDataEndpoints","responseDataXhr","responseDataFetch","responseDataOther","responseDataPing","responseDataBeacon","responseDataUnhandled","responseDataEligiblePing","responseDataEligibleBeacon","responseDataEligibleUnhandled","responseDataFrameRejected","responseDataOriginRejected","responseDataMissingOrigin","responseAjaxBz","responseAjaxOther","responseDataPath","responseBeaconRead","responseBeaconFiltered","responseBeaconCompleted","responseBeaconBytes","responseBeaconNoData"];
   const MAX_BODY=524288, MAX_TOTAL=2097152;
   function groupURL(raw, group, fixture) {
     try { const u=new URL(raw); return /^[A-Za-z0-9._-]{1,100}$/.test(group) && !u.username && !u.password && !u.hash &&
@@ -19,11 +19,12 @@
     function senderOK(sender,m) {return m?.consent===true && Number.isInteger(sender?.tab?.id) && sender.tab.id>=0 && sender.frameId===0 && groupURL(sender.url,m.groupId,m.fixture===true);}
     function arm(m,sender) {
       if(!senderOK(sender,m) || typeof m.nonce!=="string" || !/^[A-Za-z0-9-]{8,64}$/.test(m.nonce)) return {status:"STOP",counts:fresh(true)};
+      if(m.documentConsent===true && (m.reloadConsent!==true || m.autoScrollConsent===true || m.beaconConsent===true))return {status:"STOP",counts:fresh(true)};
       if(revoked.has(m.nonce))return {status:"STOP",counts:fresh(true)};
       if(!available()) return {status:"UNSUPPORTED",counts:fresh()};
       if(current) return {status:"BUSY",counts:fresh()};
-      const s={nonce:m.nonce,tab:sender.tab.id,group:m.groupId,fixture:m.fixture===true,counts:fresh(),streams:new Map(),ids:new Set(),pending:[],load:m.reloadConsent===true,beaconConsent:m.reloadConsent===true && m.beaconConsent===true && m.fixture===true && /^http:\/\/127\.0\.0\.1(?::\d+)?\//.test(sender.url),target:sender.url,navigated:false,verified:false,scrollConsent:m.reloadConsent===true && m.autoScrollConsent===true,fastScroll:m.reloadConsent===true && m.autoScrollConsent===true && m.fastScrollConsent===true,deadline:now()+Math.max(500,Math.min(m.reloadConsent===true?25000:15000,Number(m.windowMs)||15000)),closed:false,expired:false};
-      s.counts.responseFastScroll=s.fastScroll?1:0;s.counts.responseScrollCadenceMs=s.scrollConsent?(s.fastScroll?500:2000):0;s.counts.responseBeaconRead=s.beaconConsent?1:0;s.counts.responseArmed=1;s.counts.responseLoadMode=s.load?1:0;s.counts.responseAutoScroll=s.scrollConsent?1:0;current=s;
+      const s={nonce:m.nonce,tab:sender.tab.id,group:m.groupId,fixture:m.fixture===true,counts:fresh(),streams:new Map(),ids:new Set(),pending:[],load:m.reloadConsent===true,documentConsent:m.reloadConsent===true && m.documentConsent===true,beaconConsent:m.reloadConsent===true && m.beaconConsent===true && m.fixture===true && /^http:\/\/127\.0\.0\.1(?::\d+)?\//.test(sender.url),target:sender.url,navigated:false,verified:false,scrollConsent:m.reloadConsent===true && m.autoScrollConsent===true,fastScroll:m.reloadConsent===true && m.autoScrollConsent===true && m.fastScrollConsent===true,deadline:now()+Math.max(500,Math.min(m.reloadConsent===true?25000:15000,Number(m.windowMs)||15000)),closed:false,expired:false};
+      s.counts.responseDocumentRead=s.documentConsent?1:0;s.counts.responseFastScroll=s.fastScroll?1:0;s.counts.responseScrollCadenceMs=s.scrollConsent?(s.fastScroll?500:2000):0;s.counts.responseBeaconRead=s.beaconConsent?1:0;s.counts.responseArmed=1;s.counts.responseLoadMode=s.load?1:0;s.counts.responseAutoScroll=s.scrollConsent?1:0;current=s;
       s.timer=timers.setTimeout(()=>{if(current!==s)return;for(const stream of s.streams.values())discard(stream);s.streams.clear();s.ids.clear();s.pending.length=0;s.expired=true;},Math.max(500,Math.min(s.load?25000:15000,Number(m.windowMs)||15000)));
       return {status:"ARMED",counts:{...s.counts}};
     }
@@ -46,7 +47,7 @@
     function confirmLoad(m,sender) {
       const s=current;if(!loadContext(sender).active || m.nonce!==s.nonce || m.safe!==true){if(s && sender?.tab?.id===s.tab)abort();return false;}
       s.verified=true;s.counts.responseLoadVerified=1;
-      const pending=s.pending.splice(0);for(const body of pending){if(current!==s)break;parse(s,body);}return current===s;
+      const pending=s.pending.splice(0);for(const body of pending){if(current!==s)break;if(s.documentConsent)parseDocument(s,body);else parse(s,body);}return current===s;
     }
     function recordLoadScroll(m,sender) {
       const s=current;
@@ -63,7 +64,7 @@
     function receive(s,body) {
       if(/captcha_response|id=["']login_form|\/checkpoint\//i.test(body)){abort();return;}
       if(s.load && !s.verified){if(!s.expired && current===s){s.pending.push(body);inc(s,"responseQueuedBodies");}return;}
-      parse(s,body);
+      if(s.documentConsent)parseDocument(s,body);else parse(s,body);
     }
     // The desktop parser may supply a missing group from its source context.
     // Independently require an explicit group URL in a structured link field
@@ -102,6 +103,32 @@
         if(text)inc(s,"responseRecordsWithText");if(r.author)inc(s,"responseRecordsWithAuthor");if(r.media?.length)inc(s,"responseRecordsWithImages");
         if(/\d[\d .,]*\s*(?:zł|PLN)(?![a-zA-Ząćęłńóśźż])/i.test(text))inc(s,"responsePriceSignals");
         if(/\d+(?:[,.]\d+)?\s*m(?:²|2)(?!\w)/i.test(text))inc(s,"responseAreaSignals");
+      }
+    }
+    function parseDocument(s,body) {
+      if(current!==s || s.closed || s.expired || now()>=s.deadline)return;
+      if(/captcha_response|id=["']login_form|\/checkpoint\//i.test(body)){abort();return;}
+      const links=new Set();let visited=0;
+      const markup=body.replace(/<!--[\s\S]*?-->/g," ").replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi," ");
+      for(const m of markup.matchAll(/<a\b[^>]{0,4096}?\bhref\s*=\s*(["'])([^"']{1,4096})\1/gi)) {
+        if(++visited>400)break;
+        try {
+          const u=new URL(m[2].replaceAll("&amp;","&"),s.target);
+          if(u.protocol!=="https:" || u.port || u.username || u.password || !["facebook.com","www.facebook.com","m.facebook.com"].includes(u.hostname))continue;
+          const exact=u.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d{5,30})\/?$/);
+          if(exact?.[1]===s.group)links.add(exact[2]);
+          if(links.size>=20)break;
+        }catch{}
+      }
+      s.counts.responseDocumentPermalinks=links.size;
+      let blocks=0;
+      for(const m of body.matchAll(/<script\b([^>]{0,4096})>([\s\S]*?)<\/script\s*>/gi)) {
+        if(++blocks>64)break;
+        if(!/\btype\s*=\s*(["'])application\/json\1/i.test(m[1]) || /\bsrc\s*=/i.test(m[1]) || m[2].length>MAX_BODY)continue;
+        // Require complete JSON, not an executable snippet. Never evaluate it.
+        try{JSON.parse(m[2]);}catch{continue;}
+        inc(s,"responseDocumentJsonBlocks");parse(s,m[2]);
+        if(current!==s)return;
       }
     }
     function allowedHost(u,s) {
@@ -154,33 +181,34 @@
       const s=current;if(!s || s.closed || s.expired || now()>=s.deadline || d.tabId!==s.tab) return;
       if(d.type==="main_frame"){
         if(s.load && !s.navigated && d.frameId===0 && d.url===s.target && groupURL(d.url,s.group,s.fixture)){
-          s.navigated=true;s.counts.responseLoadNavigation=1;return;
+          s.navigated=true;s.counts.responseLoadNavigation=1;if(!s.documentConsent)return;
         }
-        abort();return;
+        else {abort();return;}
       }
       if(s.load && !s.navigated)return;
-      if(!(d.type==="xmlhttprequest" || (s.load && ["fetch","other"].includes(d.type)) || (s.beaconConsent && d.type==="beacon")) || d.frameId!==0)return;
+      if(s.documentConsent && d.type!=="main_frame")return;
+      if(!(s.documentConsent && d.type==="main_frame" || d.type==="xmlhttprequest" || (s.load && ["fetch","other"].includes(d.type)) || (s.beaconConsent && d.type==="beacon")) || d.frameId!==0)return;
       let u;try{u=new URL(d.url);}catch{return;}
-      if(!allowedHost(u,s) || !allowedPath(u.pathname))return;
+      if(!allowedHost(u,s) || (!s.documentConsent && !allowedPath(u.pathname)))return;
       inc(s,"responseRequestsSeen");
-      if(!groupURL(d.documentUrl || d.originUrl,s.group,s.fixture)){if(!d.documentUrl && !d.originUrl)inc(s,"responseMissingOrigin");inc(s,"responseOriginRejected");return;}
+      if(!s.documentConsent && !groupURL(d.documentUrl || d.originUrl,s.group,s.fixture)){if(!d.documentUrl && !d.originUrl)inc(s,"responseMissingOrigin");inc(s,"responseOriginRejected");return;}
       if(s.counts.responseFiltered>=8 || s.streams.size>=4 || s.counts.responseBytes>=MAX_TOTAL){inc(s,"responseLimitSkipped");return;}
       let filter;try{filter=api.webRequest.filterResponseData(d.requestId);}catch{inc(s,"responseStreamErrors");return;}
-      const stream={beacon:d.type==="beacon",filter,parts:[],decoder:new TextDecoder("utf-8",{fatal:true}),bytes:0};s.streams.set(d.requestId,stream);inc(s,"responseFiltered");if(stream.beacon)inc(s,"responseBeaconFiltered");
+      const stream={document:s.documentConsent && d.type==="main_frame",beacon:d.type==="beacon",filter,parts:[],decoder:new TextDecoder("utf-8",{fatal:true}),bytes:0};s.streams.set(d.requestId,stream);inc(s,"responseFiltered");if(stream.beacon)inc(s,"responseBeaconFiltered");
       const drop=()=>{discard(stream);s.streams.delete(d.requestId);};
       filter.ondata=e=>{
         // Forward the original bytes FIRST, without any rewrite or re-encoding.
         try{filter.write(e.data);}catch{if(current===s)inc(s,"responseStreamErrors");drop();return;}
         if(current!==s || s.closed || s.expired || now()>=s.deadline){drop();return;}
-        if(stream.bytes+e.data.byteLength>MAX_BODY || s.counts.responseBytes+e.data.byteLength>MAX_TOTAL){inc(s,"responseOversize");drop();return;}
-        stream.bytes+=e.data.byteLength;s.counts.responseBytes+=e.data.byteLength;if(stream.beacon)s.counts.responseBeaconBytes+=e.data.byteLength;
+        if(stream.bytes+e.data.byteLength>(stream.document?MAX_TOTAL:MAX_BODY) || s.counts.responseBytes+e.data.byteLength>MAX_TOTAL){inc(s,"responseOversize");drop();return;}
+        stream.bytes+=e.data.byteLength;s.counts.responseBytes+=e.data.byteLength;if(stream.document)s.counts.responseDocumentBytes+=e.data.byteLength;if(stream.beacon)s.counts.responseBeaconBytes+=e.data.byteLength;
         try{stream.parts.push(stream.decoder.decode(e.data,{stream:true}));}catch{inc(s,"responseDecodeErrors");drop();}
       };
       filter.onstop=()=>{
         try{filter.close();}catch{}s.streams.delete(d.requestId);
         if(current!==s || s.closed || s.expired || now()>=s.deadline || !stream.decoder){stream.parts.length=0;return;}
         let body="";try{body=stream.parts.join("")+stream.decoder.decode();}catch{inc(s,"responseDecodeErrors");}
-        stream.parts.length=0;stream.decoder=null;inc(s,"responseCompleted");if(stream.beacon){inc(s,"responseBeaconCompleted");if(stream.bytes===0)inc(s,"responseBeaconNoData");}if(body)receive(s,body);
+        stream.parts.length=0;stream.decoder=null;inc(s,"responseCompleted");if(stream.document)inc(s,"responseDocumentCompleted");if(stream.beacon){inc(s,"responseBeaconCompleted");if(stream.bytes===0)inc(s,"responseBeaconNoData");}if(body)receive(s,body);
       };
       filter.onerror=()=>{if(current===s&&!s.closed)inc(s,"responseStreamErrors");drop();};
     }

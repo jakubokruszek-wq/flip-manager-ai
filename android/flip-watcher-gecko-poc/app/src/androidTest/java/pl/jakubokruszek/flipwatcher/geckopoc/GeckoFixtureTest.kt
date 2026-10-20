@@ -537,6 +537,43 @@ class GeckoFixtureTest {
         }
     }
 
+    @Test fun documentReadRequiresFreshScopeAndRealGeckoDeliversOnlyApprovedInitialHtml() {
+        ActivityScenario.launch(GeckoTestHostActivity::class.java).use { scenario ->
+            var host: GeckoTestHostActivity? = null
+            scenario.onActivity { host = it }
+            runBlocking { withTimeout(120_000) { withContext(Dispatchers.Main) {
+                val server = LoopbackFixtureServer { name -> runCatching { context.assets.open(name).bufferedReader().use { it.readText() } }.getOrNull() }
+                val session = GeckoSession(GeckoSessionSettings.Builder().build())
+                val channel = CollectorChannel(session, fixtureMode = true)
+                val background = GeckoHost.background
+                try {
+                    channel.attach(GeckoHost.collectorExtension(context))
+                    session.open(GeckoHost.runtime(context)); host!!.geckoView.setSession(session); session.setActive(true)
+                    assertTrue(background.awaitPort(10_000))
+                    val target = server.url(groupPath, "response-document")
+                    session.loadUri(target); assertTrue(channel.awaitPort(30_000)); delay(1_000)
+                    assertNull(channel.prepareResponseLoad(false,FIXTURE_GROUP_ID,4_000,documentConsent=true))
+                    val passive=ResponseLoadRunner(background).run(session,channel,target,FIXTURE_GROUP_ID,4_000,alive={true},willLoad={})
+                    assertTrue("passive=$passive",passive?.contains("Dokument grupy: Read=0")==true)
+                    assertTrue(passive?.contains("responseBytes: 0")==true)
+                    val report=ResponseLoadRunner(background).run(session,channel,target,FIXTURE_GROUP_ID,5_000,documentConsent=true,alive={true},willLoad={})
+                    Log.i("GeckoPocTest","DOCUMENT_CAPTURE $report")
+                    for(field in listOf("Dokument grupy: Read=1, Completed=1", "JsonBlocks=2", "Permalinks=1", "responseLoadVerified: 1", "responseExactIds: 1", "responseRecordsWithText: 1", "responsePriceSignals: 1", "responseAreaSignals: 1", "responseAutoScroll: 0", "responseFiltered: 1"))
+                        assertTrue("missing $field: $report",report?.contains(field)==true)
+                    assertFalse(report.orEmpty().contains("PRIVATE")); assertFalse(report.orEmpty().contains("550000000000007"))
+                    launch { delay(800); session.loadUri(server.url("/login/","login")) }
+                    val stopped=ResponseLoadRunner(background).run(session,channel,target,FIXTURE_GROUP_ID,3_000,documentConsent=true,alive={true},willLoad={})
+                    assertTrue("stopped=$stopped",stopped==null || stopped.contains("• STOP"))
+                    assertFalse(stopped.orEmpty().contains("responseExactIds: 1"))
+                    session.loadUri(target);assertTrue(channel.awaitPort(30_000));delay(1_000)
+                    val clean=ResponseLoadRunner(background).run(session,channel,target,FIXTURE_GROUP_ID,4_000,alive={true},willLoad={})
+                    assertTrue("clean=$clean",clean?.contains("Dokument grupy: Read=0")==true)
+                    assertTrue(clean?.contains("responseBytes: 0")==true)
+                } finally { background.abortResponses();channel.close();host!!.geckoView.releaseSession();session.close();server.close() }
+            } } }
+        }
+    }
+
     @Test fun responseLoadCapturesOnlyFreshConsentedInitialRequest() {
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use { scenario ->
             var host: GeckoTestHostActivity? = null

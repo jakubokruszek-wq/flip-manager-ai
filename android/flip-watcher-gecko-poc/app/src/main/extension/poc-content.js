@@ -433,7 +433,7 @@
         port.postMessage({type:"responseLoadArmed",nonce:message.nonce,status:"STOP"});return;
       }
       if(stopVisibleWatch)stopVisibleWatch();stopVisibleWatch=null;clearLoadWatch();
-      const armed=await browser.runtime.sendMessage({type:"armResponse",nonce:message.nonce,consent:true,reloadConsent:true,beaconConsent:message.beaconConsent===true,fastScrollConsent:message.fastScrollConsent===true,autoScrollConsent:message.autoScrollConsent===true,groupId:message.groupId,fixture:message.allowLoopback===true,windowMs:message.windowMs});
+      const armed=await browser.runtime.sendMessage({type:"armResponse",nonce:message.nonce,consent:true,reloadConsent:true,documentConsent:message.documentConsent===true,beaconConsent:message.beaconConsent===true,fastScrollConsent:message.fastScrollConsent===true,autoScrollConsent:message.autoScrollConsent===true,groupId:message.groupId,fixture:message.allowLoopback===true,windowMs:message.windowMs});
       port.postMessage({type:"responseLoadArmed",nonce:message.nonce,status:armed?.status||"STOP"});return;
     }
     if (message.type === "responseDiagnosis") {

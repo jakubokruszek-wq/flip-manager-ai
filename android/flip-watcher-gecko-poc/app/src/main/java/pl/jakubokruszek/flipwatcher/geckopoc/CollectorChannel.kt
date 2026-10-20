@@ -130,10 +130,10 @@ class CollectorChannel(
         return VisiblePostsProtocol.report(reply, nonce)
     }
 
-    suspend fun prepareResponseLoad(consent: Boolean, groupId: String, windowMs: Int, nonce: String = UUID.randomUUID().toString(), autoScrollConsent: Boolean = false, beaconConsent: Boolean = false, fastScrollConsent: Boolean = false): String? {
+    suspend fun prepareResponseLoad(consent: Boolean, groupId: String, windowMs: Int, nonce: String = UUID.randomUUID().toString(), autoScrollConsent: Boolean = false, beaconConsent: Boolean = false, fastScrollConsent: Boolean = false, documentConsent: Boolean = false): String? {
         if (!consent || (beaconConsent && !fixtureMode)) return null
         val reply = request(nonce, JSONObject().put("type", "prepareResponseLoad").put("nonce", nonce)
-            .put("consent", true).put("reloadConsent", true).put("beaconConsent", beaconConsent).put("fastScrollConsent", fastScrollConsent).put("autoScrollConsent", autoScrollConsent).put("groupId", groupId).put("allowLoopback", fixtureMode)
+            .put("consent", true).put("reloadConsent", true).put("documentConsent", documentConsent).put("beaconConsent", beaconConsent).put("fastScrollConsent", fastScrollConsent).put("autoScrollConsent", autoScrollConsent).put("groupId", groupId).put("allowLoopback", fixtureMode)
             .put("windowMs", windowMs.coerceIn(1_000, 25_000)), 8_000) ?: return null
         return nonce.takeIf { reply.optString("type") == "responseLoadArmed" && reply.optString("nonce") == nonce &&
             reply.optString("status") == "ARMED" && reply.keys().asSequence().toSet() == setOf("type", "nonce", "status") }
