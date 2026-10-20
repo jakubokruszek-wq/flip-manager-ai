@@ -119,15 +119,25 @@ class GeckoFixtureTest {
                 val gate=ShareLinkResolver(now={0L})
                 assertTrue(gate.begin("https://www.facebook.com/share/p/syntheticToken01/",true));gate.stop("PAUSED")
                 val terminal=ShareLinkResult.snapshot(gate)!!
+                var expectedReport=""
                 scenario.onActivity { activity ->
                     activity.publishShareResult(terminal,true)
                     assertTrue(activity.lastShareResultDialog!!.isShowing)
                     val message=activity.lastShareResultDialog!!.findViewById<android.widget.TextView>(android.R.id.message).text.toString()
                     assertTrue(message.contains("LINK 0.4.1"));assertTrue(message.contains("PAUSED"));assertFalse(message.contains("synthetic"));assertFalse(message.contains("https:"))
+                    expectedReport=message
                     activity.lastShareResultDialog!!.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).performClick()
-                    val clipboard=activity.getSystemService(android.content.ClipboardManager::class.java)
-                    assertEquals(message,clipboard.primaryClip!!.getItemAt(0).text.toString())
                 }
+                // AlertDialog dispatches clicks via Handler; wait off the UI thread for the real clipboard write/focus.
+                runBlocking { withTimeout(5_000) { while(true) {
+                    var copied=false
+                    scenario.onActivity { activity ->
+                        val clipboard=activity.getSystemService(android.content.ClipboardManager::class.java)
+                        copied=clipboard.primaryClip?.getItemAt(0)?.text?.toString()==expectedReport
+                    }
+                    if(copied)break
+                    delay(100)
+                } } }
                 scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
                 assertEquals("PAUSED",ShareLinkResultStore(context).read()!!.reason)
                 scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
