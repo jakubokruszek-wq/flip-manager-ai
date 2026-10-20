@@ -1,0 +1,12 @@
+<!doctype html><meta charset="utf-8"><title>Local integrated MAIN fixture</title>
+<style>body{margin:0}#feed{height:400px;overflow:auto}#space{height:10000px}</style>
+<div id="feed" role="feed"><div id="space"><article><p>Local fixture, no Facebook account.</p></article></div></div>
+<script>
+let sent=false;
+document.getElementById('feed').addEventListener('scroll',()=>{
+  if(sent)return;sent=true;
+  const endpoint='/ajax/main-lab/?fixture=main-world-data';
+  fetch(endpoint).then(r=>r.text()).then(text=>{document.documentElement.dataset.fetchIntact=String(text.includes('LOCAL_MAIN_FIXTURE'));});
+  const x=new XMLHttpRequest();x.open('GET',endpoint);x.onload=()=>{document.documentElement.dataset.xhrIntact=String(x.responseText.includes('LOCAL_MAIN_FIXTURE'));};x.send();
+});
+</script>

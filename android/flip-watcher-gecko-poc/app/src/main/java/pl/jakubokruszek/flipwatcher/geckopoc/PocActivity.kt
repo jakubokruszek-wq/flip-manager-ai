@@ -142,6 +142,25 @@ class PocActivity : ComponentActivity() {
             }.show()
     }
 
+    private fun checkMainTransport() {
+        if (responseBusy || visibleBusy || scanning || inspectingDom || measuringLoad || kind != PageKind.APPROVED_GROUP || progress < 100 || haltMessage != null) return
+        val current=channel ?: return
+        val epoch=visibleEpoch
+        val approvedUrl=url
+        visibleDialog=AlertDialog.Builder(this).setTitle("Nowa zgoda: mechanizm rozszerzenia")
+            .setMessage("Jednorazowo uruchomić mechanizm fetch/XHR z rozszerzenia komputerowego na BIEŻĄCEJ zatwierdzonej grupie? Okno do 20 s, bez ponownego otwierania. Obejmuje nowe odpowiedzi powstałe po tej zgodzie i do 5 automatycznych przewinięć po 400–900 px (łącznie do 4500 px), z adaptacyjnym czekaniem na zmianę feedu. Do 8 odpowiedzi, 512 KiB/odpowiedź, 2 MiB łącznie i 20 dokładnych ID. Odpowiedzi dla strony pozostają niezmienione. Treści przejściowo tylko w RAM rozszerzenia; wynik to wyłącznie liczniki. Bez odczytu Beacon, nagłówków i wysyłanych payloadów; bez wyodrębniania cookies/tokenów; bez zapisu treści/ID, uploadu, skanu i kolektora. LOGIN/CAPTCHA/CHECKPOINT, zmiana strony, utrata portu lub wygaszenie: STOP i czyszczenie. Ta nowa zgoda nie wykorzystuje poprzednich zgód i wygasa po próbie.")
+            .setNegativeButton("Anuluj",null).setPositiveButton("Zgadzam się jednorazowo") { _, _ ->
+                if (epoch!=visibleEpoch || current!==channel || approvedUrl!=url || kind!=PageKind.APPROVED_GROUP) return@setPositiveButton
+                responseBusy=true;output.text="Mechanizm rozszerzenia: do 20 s i 5 przewinięć. Zmiana kontekstu lub wygaszenie: STOP.";render()
+                lifecycleScope.launch {
+                    val report=runCatching { current.mainTransport(consent=true,autoScrollConsent=true) }.getOrNull()
+                    if(epoch==visibleEpoch && current===channel && approvedUrl==url && kind==PageKind.APPROVED_GROUP) {
+                        responseBusy=false;output.text=report ?: "STOP: przerwana próba mechanizmu rozszerzenia.";render()
+                    }
+                }
+            }.show()
+    }
+
     private fun checkResponses(autoScroll: Boolean = false) {
         val fast = autoScroll && fastScrollOption.isChecked
         if (responseBusy || visibleBusy || scanning || inspectingDom || measuringLoad || kind != PageKind.APPROVED_GROUP || progress < 100 || haltMessage != null) return
@@ -689,6 +708,7 @@ class PocActivity : ComponentActivity() {
         listOf("group", "login", "back").forEach { buttons[it]?.isEnabled = open && !scanning }
         listOf("scan", "scan3").forEach { buttons[it]?.isEnabled = canScan }
         buttons["responses"]?.isEnabled = open && !responseBusy && !visibleBusy && !scanning && !inspectingDom && kind == PageKind.APPROVED_GROUP && progress == 100 && channel?.isConnected == true
+        buttons["mainTransport"]?.isEnabled = buttons["responses"]?.isEnabled == true
         buttons["document"]?.isEnabled = buttons["responses"]?.isEnabled == true
         buttons["responseLoad"]?.isEnabled = buttons["responses"]?.isEnabled == true
         buttons["responseLoadScroll"]?.isEnabled = buttons["responses"]?.isEnabled == true
@@ -772,6 +792,7 @@ class PocActivity : ComponentActivity() {
         }
         val toolPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            addView(row(button("mainTransport", "Mechanizm rozszerzenia • 20 s") { checkMainTransport() }))
             addView(fastScrollOption)
             addView(row(button("login", "Zaloguj się") { load(PocPolicy.LOGIN_URL, login = true) },
                 button("back", "Wróć do grupy") { load(PocPolicy.APPROVED_GROUP_URL, login = false) }))

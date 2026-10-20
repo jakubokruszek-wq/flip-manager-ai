@@ -537,6 +537,43 @@ class GeckoFixtureTest {
         }
     }
 
+    @Test fun integratedMainTransportUsesNativeConsentPrivateApiAndNestedFeedWithStopAndCleanRetry() {
+        ActivityScenario.launch(GeckoTestHostActivity::class.java).use { scenario ->
+            var host: GeckoTestHostActivity?=null
+            scenario.onActivity { host=it }
+            runBlocking { withTimeout(120_000) { withContext(Dispatchers.Main) {
+                val server=LoopbackFixtureServer { name -> runCatching { context.assets.open(name).bufferedReader().use { it.readText() } }.getOrNull() }
+                val session=GeckoSession(GeckoSessionSettings.Builder().build())
+                val channel=CollectorChannel(session,fixtureMode=true)
+                try {
+                    channel.attach(GeckoHost.collectorExtension(context))
+                    session.open(GeckoHost.runtime(context));host!!.geckoView.setSession(session);session.setActive(true)
+                    val target=server.url(groupPath,"main-native")
+                    session.loadUri(target);assertTrue(channel.awaitPort(30_000));delay(700)
+                    assertNull(channel.mainTransport(false,FIXTURE_GROUP_ID,8_000,autoScrollConsent=true))
+                    val report=channel.mainTransport(true,FIXTURE_GROUP_ID,8_000,autoScrollConsent=true)
+                    Log.i("GeckoPocTest","MAIN_INTEGRATED $report")
+                    for(field in listOf("installed: 1","fetchBodies: 1","xhrBodies: 1","completed: 2","exactIds: 1","duplicates: 1","textRecords: 1","priceSignals: 1","areaSignals: 1","scrollSteps: 5","scrollMoves: 5","errors: 0"))
+                        assertTrue("missing $field: $report",report?.contains(field)==true)
+                    assertFalse(report.orEmpty().contains("LOCAL_MAIN_FIXTURE"));assertFalse(report.orEmpty().contains("550000000000012"))
+                    // Actual visibility transition must stop a long attempt promptly, not wait 20 seconds.
+                    val started=android.os.SystemClock.elapsedRealtime()
+                    launch { delay(1_200);session.setActive(false) }
+                    val stopped=channel.mainTransport(true,FIXTURE_GROUP_ID,20_000)
+                    assertTrue("stopped=$stopped",stopped==null || stopped.contains("• STOP"))
+                    assertTrue("STOP was delayed",android.os.SystemClock.elapsedRealtime()-started<8_000)
+                    session.setActive(true);delay(700)
+                    val clean=channel.mainTransport(true,FIXTURE_GROUP_ID,2_000)
+                    assertTrue("clean=$clean",clean?.contains("installed: 1")==true)
+                    assertTrue(clean?.contains("exactIds: 0")==true);assertTrue(clean?.contains("bytes: 0")==true)
+                    launch { delay(900);session.loadUri(server.url("/login/","login")) }
+                    val navigation=channel.mainTransport(true,FIXTURE_GROUP_ID,10_000)
+                    assertTrue("navigation=$navigation",navigation==null || navigation.contains("• STOP"))
+                } finally { GeckoHost.background.abortResponses();channel.close();host!!.geckoView.releaseSession();session.close();server.close() }
+            } } }
+        }
+    }
+
     @Test fun mainWorldDesktopTransportRunsBeforePageScriptsAndReadsOnlyFreshConsentedLocalFixtures() {
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use { scenario ->
             var host: GeckoTestHostActivity? = null
@@ -791,6 +828,7 @@ class GeckoFixtureTest {
                 val panel=dialog.window!!.decorView
                 assertFalse(panel.findViewWithTag<android.widget.Button>("poc.tool.scan").isEnabled)
                 assertFalse(panel.findViewWithTag<android.widget.Button>("poc.tool.document").isEnabled)
+                assertFalse(panel.findViewWithTag<android.widget.Button>("poc.tool.mainTransport").isEnabled)
                 val fast=panel.findViewWithTag<android.widget.CheckBox>("poc.fastScroll")
                 assertFalse(fast.isChecked);fast.isChecked=true
                 val root=activity.findViewById<android.view.ViewGroup>(android.R.id.content)

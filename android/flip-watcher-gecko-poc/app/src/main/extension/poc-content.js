@@ -436,6 +436,16 @@
       const armed=await browser.runtime.sendMessage({type:"armResponse",nonce:message.nonce,consent:true,reloadConsent:true,documentConsent:message.documentConsent===true,beaconConsent:message.beaconConsent===true,fastScrollConsent:message.fastScrollConsent===true,autoScrollConsent:message.autoScrollConsent===true,groupId:message.groupId,fixture:message.allowLoopback===true,windowMs:message.windowMs});
       port.postMessage({type:"responseLoadArmed",nonce:message.nonce,status:armed?.status||"STOP"});return;
     }
+    if (message.type === "mainTransport") {
+      if(activeResponseNonce)return;
+      if(stopVisibleWatch)stopVisibleWatch();stopVisibleWatch=null;clearLoadWatch();
+      activeResponseNonce=message.nonce;
+      const result=await scope.FlipMainContent.run(scope,message,responsePageSafe,
+        m=>browser.runtime.sendMessage(m),a=>{activeResponseAbort=a;});
+      activeResponseNonce="";
+      try{port.postMessage({type:"mainTransportResult",nonce:message.nonce,...result});}catch{}
+      return;
+    }
     if (message.type === "responseDiagnosis") {
       if(activeResponseNonce)return;
       activeResponseNonce=message.nonce;

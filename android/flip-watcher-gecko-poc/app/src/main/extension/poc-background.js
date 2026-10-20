@@ -75,6 +75,7 @@
       const reply = value => { try { appPort.postMessage({ nonce: message.nonce, ...value }); } catch { /* app gone */ } };
       if (message.type === "abortResponse") {
         scope.FlipResponseDiagnosis?.abort();
+        scope.FlipMainTransport?.abort();
         reply({type:"abortResponseResult"});
       } else if (message.type === "abortResponseLoad") {
         scope.FlipResponseDiagnosis.abortLoad(message);
@@ -94,6 +95,7 @@
       // App or runtime went away: drop any pending measurement.
       loadCounter.abort();
       scope.FlipResponseDiagnosis?.abort();
+        scope.FlipMainTransport?.abort();
       appPort = null;
     });
   }

@@ -40,7 +40,7 @@ class CollectorChannel(
             when (json.optString("type")) {
                 "visiblePostsStop" -> onVisibleStop()
                 "ready" -> ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
-                "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
+                "mainTransportResult", "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                     pending.remove(json.optString("nonce"))?.complete(json)
                 }
@@ -128,6 +128,15 @@ class CollectorChannel(
             .put("consent", true).put("groupId", groupId)
             .put("allowLoopback", fixtureMode), 8_000) ?: return null
         return VisiblePostsProtocol.report(reply, nonce)
+    }
+
+    suspend fun mainTransport(consent: Boolean, groupId: String = PocPolicy.APPROVED_GROUP_ID, windowMs: Int = 20_000, autoScrollConsent: Boolean = false): String? {
+        if (!consent) return null
+        val wait=windowMs.coerceIn(1_000,20_000)
+        val nonce=UUID.randomUUID().toString()
+        val reply=request(nonce,JSONObject().put("type","mainTransport").put("nonce",nonce).put("consent",true)
+            .put("groupId",groupId).put("windowMs",wait).put("allowLoopback",fixtureMode).put("autoScrollConsent",autoScrollConsent),wait+10_000L) ?: return null
+        return MainTransportProtocol.report(reply,nonce)
     }
 
     suspend fun prepareResponseLoad(consent: Boolean, groupId: String, windowMs: Int, nonce: String = UUID.randomUUID().toString(), autoScrollConsent: Boolean = false, beaconConsent: Boolean = false, fastScrollConsent: Boolean = false, documentConsent: Boolean = false): String? {

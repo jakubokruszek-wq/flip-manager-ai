@@ -1,3 +1,7 @@
+# Aktualizacja 0.3.8
+
+Mechanizm desktopowego fetch/XHR zintegrowany z natywną zgodą i prywatnym API MAIN, do 5 adaptacyjnych przewinięć. [Zakres i jedna próba Samsung](docs/poc-038.md). Wyniki CI i APK w Draft PR #45; bez skanu i uploadu.
+
 # Aktualizacja 0.3.7
 
 Osobna jednorazowa zgoda na lokalną analizę dokumentu grupy; bez skanu i uploadu. [Zakres, limity i test Samsung](docs/poc-037.md). Wyniki CI i APK w Draft PR #45.
