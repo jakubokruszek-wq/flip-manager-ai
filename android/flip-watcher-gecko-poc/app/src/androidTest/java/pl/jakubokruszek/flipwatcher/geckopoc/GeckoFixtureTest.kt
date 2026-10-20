@@ -551,7 +551,7 @@ class GeckoFixtureTest {
                 val delegate=object:org.mozilla.geckoview.WebExtension.MessageDelegate {
                     override fun onConnect(port:org.mozilla.geckoview.WebExtension.Port) {
                         assertTrue(port.sender.isTopLevel)
-                        assertTrue(port.sender.url.startsWith("http://127.0.0.1:${server.port}/groups/$FIXTURE_GROUP_ID/"))
+                        assertTrue(port.sender.url?.startsWith("http://127.0.0.1:${server.port}/groups/$FIXTURE_GROUP_ID/") == true)
                         port.setDelegate(object:org.mozilla.geckoview.WebExtension.PortDelegate {
                             override fun onPortMessage(message:Any,port:org.mozilla.geckoview.WebExtension.Port) {
                                 val json=ScanProtocol.asJson(message) ?: return
