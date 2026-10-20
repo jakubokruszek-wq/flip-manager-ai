@@ -75,6 +75,17 @@ class GeckoFixtureTest {
                     assertFalse(gate.report().contains("550000000000099"));assertFalse(gate.report().contains(origin))
                     assertNull(channel.shareLinkContext(origin+postPath,false))
                     channel.stopShareLinkContext()
+                    // A fresh consent arms the live document guard; hiding the real Gecko session must revoke it.
+                    currentUrl=null;complete=false
+                    gate=ShareLinkResolver(FIXTURE_GROUP_ID,{android.os.SystemClock.elapsedRealtime()},origin)
+                    assertTrue(gate.begin(origin+sharePath,true));session.loadUri(origin+sharePath)
+                    withTimeout(15_000){while(currentUrl!=origin+postPath || !complete || channel.connectedUrl!=origin+postPath)delay(100)}
+                    val contextCheck=channel.shareLinkContext(origin+postPath,true)
+                    assertEquals(true to true,contextCheck)
+                    session.setActive(false)
+                    withTimeout(5_000){while(gate.active)delay(100)}
+                    assertEquals(ShareLinkResolver.Status.STOP,gate.status);assertEquals("UNSAFE_DOCUMENT",gate.reason)
+                    session.setActive(true);channel.stopShareLinkContext();delay(300)
                     gate=ShareLinkResolver(FIXTURE_GROUP_ID,{android.os.SystemClock.elapsedRealtime()},origin)
                     assertTrue(gate.begin(origin+"/share/p/fixture2/",true));session.loadUri(origin+"/share/p/fixture2/")
                     withTimeout(10_000){while(gate.active){gate.tick();delay(100)}}

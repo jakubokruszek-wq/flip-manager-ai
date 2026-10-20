@@ -208,7 +208,7 @@ class CollectorChannel(
             pending.remove(nonce)
             return null
         }
-        return withTimeoutOrNull(timeoutMs) { deferred.await() }.also { pending.remove(nonce) }
+        return try { withTimeoutOrNull(timeoutMs) { deferred.await() } } finally { pending.remove(nonce) }
     }
 
     fun close() {
