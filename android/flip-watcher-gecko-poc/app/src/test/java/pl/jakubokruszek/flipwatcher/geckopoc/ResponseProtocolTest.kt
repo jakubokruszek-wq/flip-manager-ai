@@ -6,7 +6,7 @@ import org.junit.Test
 
 class ResponseProtocolTest {
     private fun reply() = JSONObject().put("type", "responseDiagnosisResult").put("nonce", "fresh").put("status", "OK").put("counts", JSONObject().apply { ResponseProtocol.keys.forEach { put(it, 0) } })
-    @Test fun onlyCountsAreDisplayed() { assertTrue(ResponseProtocol.report(reply(), "fresh")!!.startsWith("ODPOWIEDZI 0.3.7")) }
+    @Test fun onlyCountsAreDisplayed() { assertTrue(ResponseProtocol.report(reply(), "fresh")!!.startsWith("ODPOWIEDZI 0.3.9")) }
     @Test fun wrongNonceTypeAndStatusAreRejected() {
         assertNull(ResponseProtocol.report(reply(), "old"))
         assertNull(ResponseProtocol.report(reply().put("type", "scanResult"), "fresh"))

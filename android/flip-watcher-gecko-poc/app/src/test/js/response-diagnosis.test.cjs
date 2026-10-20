@@ -207,3 +207,37 @@ test('document block byte budget applies to multibyte UTF8, not character count'
 test('comments, raw-text HTML and quoted fake type or href attributes cannot confirm records or links',()=>{
  const h=harness();h.arm(documentMsg);const json=JSON.stringify(story());documentStream(h,`<html><!-- ${documentBody()} --><textarea>${documentBody()}</textarea><style>${documentBody()}</style><script data-label="type='application/json'">${json}</script><a data-label="href='/groups/${group}/posts/123456789/'">x</a><script type="text/javascript" type="application/json">${json}</script></html>`);verify(h);const c=h.d.readLoad(msg).counts;assert.equal(c.responseDocumentJsonBlocks,0);assert.equal(c.responseDocumentPermalinks,0);assert.equal(c.responseExactIds,0);
 });
+
+// POC 0.3.9: known wrapper grammar only; not a generic JavaScript interpreter.
+test('document statically recognizes both exact ServerJS JSON wrappers without calling page code',()=>{
+ for(const wrap of [j=>`require("ServerJS").handle(${j});`,j=>`require('ServerJS') .handle( ${j} )`,j=>`new ServerJS().handle(${j});`]){
+  const h=harness();h.arm(documentMsg);documentStream(h,`<script>${wrap(JSON.stringify(story()))}</script>`);verify(h);
+  const r=h.d.readLoad(msg);assert.equal(r.counts.responseDocumentJsonBlocks,1);assert.equal(r.counts.responseExactIds,1);assert.equal(r.counts.responsePriceSignals,1);assert.equal(r.counts.responseAreaSignals,1);assert(!JSON.stringify(r).includes('PRIVATE'));
+ }
+});
+test('document wrapper rejects executable expressions and prefix or suffix statements',()=>{
+ for(const body of [
+  `require("ServerJS").handle(${JSON.stringify(story())});evil()`,
+  `evil();require("ServerJS").handle(${JSON.stringify(story())})`,
+  `require("ServerJS").handle((()=>${JSON.stringify(story())})())`,
+  `require("ServerJS").handle({node: ${JSON.stringify(story())}})`,
+  `require("ServerJS").handle(JSON.parse(${JSON.stringify(JSON.stringify(story()))}))`,
+  `require("Other").handle(${JSON.stringify(story())})`,
+  `window.require("ServerJS").handle(${JSON.stringify(story())})`,
+  `require("ServerJS").handle(${JSON.stringify(story())}, {})`,
+  `require("ServerJS").handle(${JSON.stringify(story())});/* comment */`,
+  `"require(\\"ServerJS\\").handle(${JSON.stringify(story())})"`
+ ]){const h=harness();h.arm(documentMsg);documentStream(h,`<script>${body}</script>`);verify(h);const c=h.d.readLoad(msg).counts;assert.equal(c.responseDocumentJsonBlocks,0);assert.equal(c.responseExactIds,0);}
+});
+test('wrapper type, external script and quoted attribute impersonation fail closed',()=>{
+ for(const attrs of ['src="/x"','type="module"','type="text/plain"','type="application/json"','data-label="type=\'text/javascript\'" type="text/plain"','type="text/javascript" type="application/javascript"']){
+  const h=harness();h.arm(documentMsg);documentStream(h,`<script ${attrs}>require("ServerJS").handle(${JSON.stringify(story())});</script>`);verify(h);assert.equal(h.d.readLoad(msg).counts.responseExactIds,0);
+ }
+});
+test('recognized wrapper still requires exact group link, deduplicates and caps at twenty',()=>{
+ const h=harness();h.arm(documentMsg);const records=[story(),story(),story('223456789','foreign'),{post_id:'333333333'},...Array.from({length:25},(_,i)=>story(String(423456780+i)))];documentStream(h,`<script type="text/javascript">new ServerJS().handle(${JSON.stringify(records)});</script><script>new ServerJS().handle(${JSON.stringify(story())});</script>`);verify(h);const c=h.d.readLoad(msg).counts;assert.equal(c.responseExactIds,20);assert.equal(c.responseDuplicateIds,1);
+});
+test('wrapper body byte ceiling and cancellation retain existing document protections',()=>{
+ const h=harness();h.arm(documentMsg);documentStream(h,`<script>new ServerJS().handle(${JSON.stringify({...story(),padding:'ż'.repeat(270000)})});</script>`);verify(h);assert.equal(h.d.readLoad(msg).counts.responseExactIds,0);
+ const p=harness();p.arm(documentMsg);documentStream(p,`<script>new ServerJS().handle(${JSON.stringify(story())});</script>`);p.d.abort();assert.equal(p.d.readLoad(msg).status,'STOP');assert.equal(p.d.readLoad(msg).counts.responseExactIds,0);
+});

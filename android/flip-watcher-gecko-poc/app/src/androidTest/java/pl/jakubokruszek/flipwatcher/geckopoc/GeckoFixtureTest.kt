@@ -650,7 +650,7 @@ class GeckoFixtureTest {
                     assertTrue(passive?.contains("responseBytes: 0")==true)
                     val report=ResponseLoadRunner(background).run(session,channel,target,FIXTURE_GROUP_ID,5_000,documentConsent=true,alive={true},willLoad={})
                     Log.i("GeckoPocTest","DOCUMENT_CAPTURE $report")
-                    for(field in listOf("Dokument grupy: Read=1, Completed=1", "JsonBlocks=2", "Permalinks=1", "responseLoadVerified: 1", "responseExactIds: 1", "responseRecordsWithText: 1", "responsePriceSignals: 1", "responseAreaSignals: 1", "responseAutoScroll: 0", "responseFiltered: 1"))
+                    for(field in listOf("Dokument grupy: Read=1, Completed=1", "JsonBlocks=3", "Permalinks=1", "responseLoadVerified: 1", "responseExactIds: 2", "responseRecordsWithText: 2", "responsePriceSignals: 2", "responseAreaSignals: 2", "responseAutoScroll: 0", "responseFiltered: 1"))
                         assertTrue("missing $field: $report",report?.contains(field)==true)
                     assertFalse(report.orEmpty().contains("PRIVATE")); assertFalse(report.orEmpty().contains("550000000000007"))
                     launch { delay(800); session.loadUri(server.url("/login/","login")) }

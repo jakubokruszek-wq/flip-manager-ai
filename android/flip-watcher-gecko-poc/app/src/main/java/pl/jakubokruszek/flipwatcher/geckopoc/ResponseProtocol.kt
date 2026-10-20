@@ -61,7 +61,7 @@ object ResponseProtocol {
             counts.getInt("responseExactIds") == 0 -> "DANE ODCZYTANE, BRAK POTWIERDZONYCH ID."
             else -> "POTWIERDZONE ID W ODCZYTANYCH DANYCH; kompletność ofert niepotwierdzona."
         }
-        return "ODPOWIEDZI 0.3.7 • tylko lokalnie • $status\n" + "Dokument grupy: $documentSummary\nOcena transportu: $transport\n" + "Pozostałe typy zasobów (karta): $typeSummary\nEndpointy danych (metadane): $dataSummary\nKlasy ścieżek: $routeSummary\nOdczyt Beacon (osobna zgoda): $beaconSummary\n" + keys.drop(5).take(42).joinToString("\n") { "$it: ${counts.getInt(it)}" } +
+        return "ODPOWIEDZI 0.3.9 • tylko lokalnie • $status\n" + "Dokument grupy: $documentSummary\nOcena transportu: $transport\n" + "Pozostałe typy zasobów (karta): $typeSummary\nEndpointy danych (metadane): $dataSummary\nKlasy ścieżek: $routeSummary\nOdczyt Beacon (osobna zgoda): $beaconSummary\n" + keys.drop(5).take(42).joinToString("\n") { "$it: ${counts.getInt(it)}" } +
             "\nID: dokładny identyfikator i permalink zatwierdzonej grupy z parsera rozszerzenia. Cena/metraż: sygnały heurystyczne. Beacon: odpowiedzi czytane tylko przy Read=1 i nowej zgodzie. Ping i pozostałe typy poza dotychczasową allowlistą: tylko metadane. Eligible oznacza zgodność karty/ramki/origin/ścieżki, nie zgodę na odczyt. Same liczniki nie potwierdzają kompletności ofert. UNSUPPORTED: API odpowiedzi niedostępne; STOP: przerwana próba. Brak skanu i zapisu treści."
     }
 }

@@ -118,6 +118,21 @@
       }
       return attrs;
     }
+    // Static literal extraction only: never eval, Function, invoke require or run page code.
+    // Accept the WHOLE known wrapper, not arbitrary balanced braces in executable text.
+    function documentJSON(attrs,text) {
+      if(!attrs || attrs.has("src") || new TextEncoder().encode(text).byteLength>MAX_BODY)return null;
+      const type=(attrs.get("type")||"").trim().toLowerCase();
+      let json=text.trim();
+      if(type!=="application/json") {
+        if(!["","text/javascript","application/javascript"].includes(type))return null;
+        const wrapper=json.match(/^(?:require\(\s*(["'])ServerJS\1\s*\)|new\s+ServerJS\(\s*\))\s*\.handle\(\s*([\s\S]*)\s*\)\s*;?$/);
+        if(!wrapper)return null;
+        json=wrapper[2].trim();
+      }
+      // JSON.parse rejects expressions, trailing calls, comments, functions and JS object syntax.
+      try {const value=JSON.parse(json);return value && typeof value==="object"?json:null;}catch{return null;}
+    }
     function parseDocument(s,body) {
       if(current!==s || s.closed || s.expired || now()>=s.deadline)return;
       if(/captcha_response|id=["']login_form|\/checkpoint\//i.test(body)){abort();return;}
@@ -139,11 +154,9 @@
       let blocks=0;
       for(const m of documentMarkup.matchAll(/<script\b([^>]{0,4096})>([\s\S]*?)<\/script\s*>/gi)) {
         if(++blocks>64)break;
-        const attrs=attributes(m[1]);
-        if(!attrs || attrs.get("type")?.toLowerCase()!=="application/json" || attrs.has("src") || new TextEncoder().encode(m[2]).byteLength>MAX_BODY)continue;
-        // Require complete JSON, not an executable snippet. Never evaluate it.
-        try{JSON.parse(m[2]);}catch{continue;}
-        inc(s,"responseDocumentJsonBlocks");parse(s,m[2]);
+        const json=documentJSON(attributes(m[1]),m[2]);
+        if(json===null)continue;
+        inc(s,"responseDocumentJsonBlocks");parse(s,json);
         if(current!==s)return;
       }
     }
