@@ -14,12 +14,12 @@ outside="$(echo "$changed" | grep -v -E "^($poc/|\.github/workflows/android-geck
 if [ -n "$outside" ]; then echo "FAIL: files outside the POC were changed:"; echo "$outside"; exit 1; fi
 
 src="$poc/app/src/main"
-if grep -R -n -i -E "okhttp|HttpURLConnection|URLConnection|retrofit|supabase|onrender\.com|vercel\.app|fetch\(" "$src" --include='*.kt' --include='*.js' --include='*.json' --exclude='main-transport.js'; then
+if grep -R -n -i -E "okhttp|HttpURLConnection|URLConnection|retrofit|supabase|onrender\.com|vercel\.app|fetch\(" "$src" --include='*.kt' --include='*.js' --include='*.json' --exclude='main-transport.js' --exclude='main-bootstrap.js'; then
   echo "FAIL: network client or backend reference in POC sources"; exit 1
 fi
 # The only client-shaped exception is the reviewed MAIN wrapper; it never originates requests.
 # Case-sensitive: the webRequest type name "xmlhttprequest" is a filter, not a client.
-if grep -R -n -E "XMLHttpRequest|sendBeacon|WebSocket" "$src" --include='*.kt' --include='*.js' --include='*.json' --exclude='main-transport.js'; then
+if grep -R -n -E "XMLHttpRequest|sendBeacon|WebSocket" "$src" --include='*.kt' --include='*.js' --include='*.json' --exclude='main-transport.js' --exclude='main-bootstrap.js'; then
   echo "FAIL: network client in POC sources"; exit 1
 fi
 # Legacy measurements remain count-only. Body access is confined to the separate opt-in module.
@@ -34,10 +34,12 @@ const expected=["nativeMessaging","nativeMessagingFromContent","geckoViewAddons"
 if (m.permissions.length!==expected.length || expected.some(p=>!m.permissions.includes(p)) || (!m.background.scripts.includes("response-diagnosis.js") || !m.background.scripts.includes("main-transport.js"))) process.exit(1);
 NODE
 # MAIN may wrap existing page APIs only; it must never originate/replay requests or expose a page bridge.
-node - "$src/extension/main-transport.js" <<'NODE'
+node - "$src/extension/main-transport.js" "$src/extension/main-bootstrap.js" <<'NODE'
 const fs=require('node:fs'),s=fs.readFileSync(process.argv[2],'utf8');
 if (/new\s+(?:XMLHttpRequest|WebSocket)|sendBeacon|fetch\s*\(|postMessage|requestHeaders|responseHeaders|browser\.cookies|browser\.storage|supabase|onrender\.com|vercel\.app/.test(s)) process.exit(1);
-if (!s.includes("world:'MAIN'") || !s.includes('originalFetch.apply') || !s.includes('originalSend.apply')) process.exit(1);
+const b=fs.readFileSync(process.argv[3],'utf8');
+if (!s.includes("world:'MAIN'") || !s.includes('relay.subscribe') || !b.includes('originalFetch.apply') || !b.includes('originalSend.apply')) process.exit(1);
+if (/\.clone\s*\(|\.responseText|postMessage|TextDecoder|requestHeaders|responseHeaders|browser\.|localStorage|extractStructuredRecords/.test(b)) process.exit(1);
 NODE
 if grep -R -n -E 'filterResponseData|responseHeaders|requestHeaders|browser\.cookies|browser\.storage' "$src/extension" --include='*.js' --exclude='response-diagnosis.js'; then
   echo "FAIL: response access outside the explicit opt-in module"; exit 1

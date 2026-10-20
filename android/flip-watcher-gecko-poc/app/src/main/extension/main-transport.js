@@ -5,66 +5,56 @@
   const zero=()=>Object.fromEntries(keys.map(k=>[k,0]));
   // Serialized by the official scripting API: MUST NOT close over extension variables.
   async function capture(o){
-    const g=globalThis, key='__flipMainStop_'+o.nonce;
+    const g=globalThis,key='__flipMainStop_'+o.nonce;
     const fresh=()=>({installed:0,fetchBodies:0,xhrBodies:0,bytes:0,completed:0,oversize:0,errors:0,limitSkipped:0});
-    const metrics=fresh(), bodies=[],readers=new Set();let closed=false,total=0,reserved=0,wake;
+    const metrics=fresh(),bodies=[],readers=new Set();let closed=false,total=0,reserved=0,wake,unsubscribe=null;
     const done=new Promise(r=>{wake=r;});
-    const same=()=>location.href===o.url && document.visibilityState==='visible' && !document.querySelector('input[type="password"],form[action*="login"],iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="checkpoint"]');
+    const same=()=>location.href===o.url&&document.visibilityState==='visible'&&!document.querySelector('input[type="password"],form[action*="login"],iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="checkpoint"]');
     const end=Date.now()+Math.max(0,Math.min(20000,o.expiresAt-Date.now()));
-    const alive=()=>!closed && Date.now()<end && same();
-    const stop=()=>{if(closed)return;closed=true;bodies.length=0;for(const r of readers)void r.cancel().catch(()=>{});readers.clear();wake('STOP');};
-    if(!same() || end<=Date.now())return {status:'STOP',bodies:[],metrics:fresh()};
-    // A page can only STOP this closure. There is no public arm/read method or body buffer.
+    const relay=g[Symbol.for('flip.main.transport.bootstrap')];
+    if(!same()||end<=Date.now())return {status:'STOP',bodies:[],metrics:fresh()};
+    if(relay?.version!==1||typeof relay.subscribe!=='function')return {status:'UNSUPPORTED',bodies:[],metrics:fresh()};
+    const alive=()=>!closed&&Date.now()<end&&same();
+    const stop=()=>{if(closed)return;closed=true;bodies.length=0;if(unsubscribe)unsubscribe();for(const r of readers)void r.cancel().catch(()=>{});readers.clear();wake('STOP');};
     Object.defineProperty(g,key,{value:{stop},configurable:true});
-    const allowed=raw=>{try{const u=new URL(raw,location.href);const base=new URL(o.url);return !u.username&&!u.password&&((u.protocol==='https:'&&!u.port&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))||(o.fixture===true&&u.origin===base.origin&&u.hostname==='127.0.0.1'))&&(/^\/ajax\//.test(u.pathname)||/^\/(?:api\/)?graphql\/?$/.test(u.pathname));}catch{return false;}};
+    const allowed=raw=>{try{const u=new URL(raw,location.href),base=new URL(o.url);return !u.username&&!u.password&&((u.protocol==='https:'&&!u.port&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))||(o.fixture===true&&u.origin===base.origin&&u.hostname==='127.0.0.1'))&&(/^\/ajax\//.test(u.pathname)||/^\/(?:api\/)?graphql\/?$/.test(u.pathname));}catch{return false;}};
+    const inc=k=>{metrics[k]=Math.min(2000,metrics[k]+1);};
     function accept(body,kind,bytes){
       if(!alive()){stop();return;}
       if(/captcha_response|id=["']login_form|\/checkpoint\//i.test(body)){stop();return;}
-      if(total+bytes>2097152){metrics.oversize=Math.min(2000,metrics.oversize+1);return;}
+      if(total+bytes>2097152){inc('oversize');return;}
       total+=bytes;metrics.bytes=total;metrics[kind]++;metrics.completed++;bodies.push(body);
     }
-    const originalFetch=g.fetch, X=g.XMLHttpRequest, originalOpen=X?.prototype.open,originalSend=X?.prototype.send,requests=new WeakMap();
-    const wrappedFetch=async function(...args){
-      const read=alive()&&allowed(typeof args[0]==='string'?args[0]:args[0]?.url);
-      const response=await originalFetch.apply(this,args);
-      if(!read||!alive()||!allowed(response.url))return response;
-      if(reserved>=8){metrics.limitSkipped=Math.min(2000,metrics.limitSkipped+1);return response;}reserved++;
-      try{const reader=response.clone().body?.getReader();if(!reader)return response;readers.add(reader);
+    const reserve=()=>{if(reserved>=8){inc('limitSkipped');return false;}reserved++;return true;};
+    function observeFetch(response){
+      if(!alive()||!allowed(response.url)||!reserve())return;
+      try{const reader=response.clone().body?.getReader();if(!reader)return;readers.add(reader);
         void(async()=>{let body='',bytes=0;const decoder=new TextDecoder('utf-8',{fatal:true});
-          try{for(;;){const part=await reader.read();if(part.done)break;if(!alive()){stop();return;}bytes+=part.value.byteLength;if(bytes>524288||total+bytes>2097152){metrics.oversize=Math.min(2000,metrics.oversize+1);await reader.cancel();return;}body+=decoder.decode(part.value,{stream:true});}body+=decoder.decode();accept(body,'fetchBodies',bytes);}catch{if(alive())metrics.errors=Math.min(2000,metrics.errors+1);}finally{readers.delete(reader);}
+          try{for(;;){const part=await reader.read();if(part.done)break;if(!alive()){stop();return;}bytes+=part.value.byteLength;if(bytes>524288||total+bytes>2097152){inc('oversize');await reader.cancel();return;}body+=decoder.decode(part.value,{stream:true});}body+=decoder.decode();accept(body,'fetchBodies',bytes);}catch{if(alive())inc('errors');}finally{readers.delete(reader);}
         })();
-      }catch{if(alive())metrics.errors=Math.min(2000,metrics.errors+1);}
-      return response;
-    };
-    const wrappedOpen=function(method,url,...args){requests.set(this,allowed(url));return originalOpen.call(this,method,url,...args);};
-    const wrappedSend=function(...args){
-      if(alive()&&requests.get(this)){
-        if(reserved>=8)metrics.limitSkipped=Math.min(2000,metrics.limitSkipped+1);
-        else {reserved++;this.addEventListener('load',()=>{if(!alive()||!allowed(this.responseURL))return;if(this.responseType&&this.responseType!=='text')return;try{const body=this.responseText;if(body.length>524288){metrics.oversize=Math.min(2000,metrics.oversize+1);return;}const bytes=new TextEncoder().encode(body).byteLength;if(bytes>524288){metrics.oversize=Math.min(2000,metrics.oversize+1);return;}accept(body,'xhrBodies',bytes);}catch{if(alive())metrics.errors=Math.min(2000,metrics.errors+1);}},{once:true});}
-      }
-      return originalSend.apply(this,args);
-    };
+      }catch{if(alive())inc('errors');}
+    }
+    function observeXHR(xhr){
+      if(!alive()||!allowed(xhr.responseURL)||(xhr.responseType&&xhr.responseType!=='text')||!reserve())return;
+      try{const body=xhr.responseText;if(body.length>524288){inc('oversize');return;}const bytes=new TextEncoder().encode(body).byteLength;if(bytes>524288){inc('oversize');return;}accept(body,'xhrBodies',bytes);}catch{if(alive())inc('errors');}
+    }
     let timer,check;
+    const stopIfUnsafe=()=>{if(document.visibilityState!=='visible')stop();};
     try{
-      g.fetch=wrappedFetch;if(X){X.prototype.open=wrappedOpen;X.prototype.send=wrappedSend;}
+      unsubscribe=relay.subscribe({acceptURL:raw=>alive()&&allowed(raw),fetch:observeFetch,xhr:observeXHR});
       metrics.installed=1;
       g.addEventListener('pagehide',stop);document.addEventListener('visibilitychange',stopIfUnsafe);
-      function tick(){if(!same())stop();}
-      check=setInterval(tick,100);
+      check=setInterval(()=>{if(!same())stop();},100);
       timer=setTimeout(()=>{if(!same()){stop();return;}wake('OK');},Math.max(0,end-Date.now()));
       const status=await done;
       if(status!=='OK'||closed)return {status:'STOP',bodies:[],metrics:fresh()};
       return {status:'OK',bodies:bodies.splice(0),metrics:{...metrics}};
     }finally{
-      closed=true;clearTimeout(timer);clearInterval(check);bodies.length=0;
+      closed=true;clearTimeout(timer);clearInterval(check);bodies.length=0;if(unsubscribe)unsubscribe();
       for(const r of readers)void r.cancel().catch(()=>{});readers.clear();
-      if(g.fetch===wrappedFetch)g.fetch=originalFetch;
-      if(X?.prototype.open===wrappedOpen)X.prototype.open=originalOpen;
-      if(X?.prototype.send===wrappedSend)X.prototype.send=originalSend;
       g.removeEventListener('pagehide',stop);document.removeEventListener('visibilitychange',stopIfUnsafe);
       try{delete g[key];}catch{}
     }
-    function stopIfUnsafe(){if(document.visibilityState!=='visible')stop();}
   }
   function cancel(nonce){globalThis['__flipMainStop_'+nonce]?.stop();}
   function exactURL(raw,group,fixture){try{const u=new URL(raw);return !u.username&&!u.password&&!u.hash&&(fixture||!u.search)&&/^[A-Za-z0-9._-]{1,100}$/.test(group)&&u.pathname.replace(/\/$/,'')==='/groups/'+group&&((u.protocol==='https:'&&!u.port&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))||(fixture===true&&u.protocol==='http:'&&u.hostname==='127.0.0.1'));}catch{return false;}}
@@ -110,6 +100,7 @@
           if(Array.isArray(r?.bodies))s.buffer=r.bodies;
           const page=await api.tabs.get(s.tab);
           if(s.closed||active!==s)return;
+          if(r?.status==='UNSUPPORTED'&&page.url===s.url){s.reply=result('UNSUPPORTED');timers.clearTimeout(s.timer);return;}
           if(page.url!==s.url||!exactURL(page.url,s.group,s.fixture)||!r||r.status!=='OK'||!Array.isArray(r.bodies)||r.bodies.length>8||r.bodies.some(b=>typeof b!=='string'||new TextEncoder().encode(b).byteLength>524288)||r.bodies.reduce((n,b)=>n+new TextEncoder().encode(b).byteLength,0)>2097152){abort();return;}
           const metricKeys=['installed','fetchBodies','xhrBodies','bytes','completed','oversize','errors','limitSkipped'];
           if(!r.metrics||Object.keys(r.metrics).length!==metricKeys.length||metricKeys.some(k=>!Number.isInteger(r.metrics[k])||r.metrics[k]<0||r.metrics[k]>(k==='bytes'?2097152:2000))||r.metrics.installed!==1||r.metrics.fetchBodies+r.metrics.xhrBodies!==r.metrics.completed||r.metrics.completed>8||r.metrics.completed!==r.bodies.length||r.metrics.bytes!==r.bodies.reduce((n,b)=>n+new TextEncoder().encode(b).byteLength,0)){abort();return;}

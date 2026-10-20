@@ -11,6 +11,20 @@
   "content_scripts": [
     {
       "matches": [
+        "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/*",
+        "https://m.facebook.com/groups/lodzsprzedazzakupwynajem/*",
+        "https://facebook.com/groups/lodzsprzedazzakupwynajem/*",
+        "http://127.0.0.1/groups/*"
+      ],
+      "js": [
+        "main-bootstrap.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": [
         "https://www.facebook.com/*",
         "https://m.facebook.com/*",
         "https://facebook.com/*",
