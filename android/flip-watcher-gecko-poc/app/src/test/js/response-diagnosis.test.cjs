@@ -134,7 +134,7 @@ test('Beacon body read is default OFF and needs strict new consent plus reload c
 });
 test('consented Beacon preserves bytes and parses only after safe new document confirmation',()=>{
  const h=harness();h.arm(beaconMsg);navigate(h);const body=JSON.stringify(story());const f=h.stream(body,{type:'beacon'});assert.equal(Buffer.concat(f.writes).toString(),body);assert.equal(h.d.loadContext(sender).active,true);verify(h);
- const c=h.d.readLoad(msg).counts;assert.equal(c.responseBeaconRead,1);assert.equal(c.responseBeaconFiltered,1);assert.equal(c.responseBeaconCompleted,1);assert.equal(c.responseBeaconBytes,Buffer.byteLength(body));assert.equal(c.responseBeaconEmpty,0);assert.equal(c.responseExactIds,1);assert.equal(c.responseTabUnhandled,1);assert(!JSON.stringify(c).includes('PRIVATE'));
+ const c=h.d.readLoad(msg).counts;assert.equal(c.responseBeaconRead,1);assert.equal(c.responseBeaconFiltered,1);assert.equal(c.responseBeaconCompleted,1);assert.equal(c.responseBeaconBytes,Buffer.byteLength(body));assert.equal(c.responseBeaconNoData,0);assert.equal(c.responseExactIds,1);assert.equal(c.responseTabUnhandled,1);assert(!JSON.stringify(c).includes('PRIVATE'));
 });
 test('Beacon consent never allows ping, document, script, data, foreign tab/frame/host/origin',()=>{
  const h=harness();h.arm(beaconMsg);navigate(h);verify(h);
@@ -142,7 +142,7 @@ test('Beacon consent never allows ping, document, script, data, foreign tab/fram
  assert.equal(h.filters.length,0);h.request({type:'beacon'});assert.equal(h.filters.length,1);
 });
 test('Beacon reports empty completion separately from non-empty unrecognized content',()=>{
- for(const body of ['', '{}']){const h=harness();h.arm(beaconMsg);navigate(h);verify(h);h.stream(body,{type:'beacon'});const c=h.d.readLoad(msg).counts;assert.equal(c.responseBeaconCompleted,1);assert.equal(c.responseBeaconEmpty,body===''?1:0);assert.equal(c.responseBeaconBytes,Buffer.byteLength(body));assert.equal(c.responseExactIds,0);}
+ for(const body of ['', '{}']){const h=harness();h.arm(beaconMsg);navigate(h);verify(h);h.stream(body,{type:'beacon'});const c=h.d.readLoad(msg).counts;assert.equal(c.responseBeaconCompleted,1);assert.equal(c.responseBeaconNoData,body===''?1:0);assert.equal(c.responseBeaconBytes,Buffer.byteLength(body));assert.equal(c.responseExactIds,0);}
 });
 test('Beacon shares existing body, total, stream and response budgets',()=>{
  const h=harness();h.arm(beaconMsg);navigate(h);verify(h);for(let i=0;i<5;i++)h.request({type:'beacon'});assert.equal(h.filters.length,4);h.filters.forEach(f=>f.onstop());for(let i=0;i<6;i++){const n=h.filters.length;h.request({type:'beacon'});if(h.filters.length>n)h.filters.at(-1).onstop();}assert.equal(h.filters.length,8);assert.equal(h.d.readLoad(msg).counts.responseBeaconFiltered,8);
