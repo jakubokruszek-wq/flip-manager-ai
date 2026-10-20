@@ -241,3 +241,7 @@ test('wrapper body byte ceiling and cancellation retain existing document protec
  const h=harness();h.arm(documentMsg);documentStream(h,`<script>new ServerJS().handle(${JSON.stringify({...story(),padding:'ż'.repeat(270000)})});</script>`);verify(h);assert.equal(h.d.readLoad(msg).counts.responseExactIds,0);
  const p=harness();p.arm(documentMsg);documentStream(p,`<script>new ServerJS().handle(${JSON.stringify(story())});</script>`);p.d.abort();assert.equal(p.d.readLoad(msg).status,'STOP');assert.equal(p.d.readLoad(msg).counts.responseExactIds,0);
 });
+
+test('malformed whitespace-heavy wrapper is bounded and never becomes a record',()=>{
+ const h=harness();h.arm(documentMsg);documentStream(h,'<script>new ServerJS().handle('+ ' '.repeat(100000) +'x</script>');verify(h);assert.equal(h.d.readLoad(msg).counts.responseDocumentJsonBlocks,0);
+});

@@ -126,9 +126,12 @@
       let json=text.trim();
       if(type!=="application/json") {
         if(!["","text/javascript","application/javascript"].includes(type))return null;
-        const wrapper=json.match(/^(?:require\(\s*(["'])ServerJS\1\s*\)|new\s+ServerJS\(\s*\))\s*\.handle\(\s*([\s\S]*)\s*\)\s*;?$/);
+        const wrapper=json.match(/^(?:require\(\s*(["'])ServerJS\1\s*\)|new\s+ServerJS\(\s*\))\s*\.handle\(/);
         if(!wrapper)return null;
-        json=wrapper[2].trim();
+        let argument=json.slice(wrapper[0].length).trim();
+        if(argument.endsWith(";"))argument=argument.slice(0,-1).trimEnd();
+        if(!argument.endsWith(")"))return null;
+        json=argument.slice(0,-1).trim();
       }
       // JSON.parse rejects expressions, trailing calls, comments, functions and JS object syntax.
       try {const value=JSON.parse(json);return value && typeof value==="object"?json:null;}catch{return null;}
