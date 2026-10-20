@@ -18,6 +18,7 @@ abstract class BundleCollectorExtension : DefaultTask() {
     @get:InputDirectory abstract val extensionSources: DirectoryProperty
     @get:InputFile abstract val collectorCore: RegularFileProperty
     @get:Input abstract val expectedCoreSha256: Property<String>
+    @get:Input abstract val extensionPath: Property<String>
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
 
     @TaskAction
@@ -27,7 +28,7 @@ abstract class BundleCollectorExtension : DefaultTask() {
         check(actual == expectedCoreSha256.get()) {
             "collector-core.js changed (sha256 $actual); review it and update COLLECTOR_CORE_SHA256"
         }
-        val target = outputDir.get().asFile.resolve("ext/flip_poc")
+        val target = outputDir.get().asFile.resolve(extensionPath.get())
         target.deleteRecursively()
         target.mkdirs()
         extensionSources.get().asFile.listFiles()!!.filter { it.isFile }.forEach { it.copyTo(target.resolve(it.name)) }
@@ -94,12 +95,23 @@ android {
 androidComponents {
     onVariants { variant ->
         val bundle = tasks.register<BundleCollectorExtension>("bundle${variant.name.replaceFirstChar { it.uppercase() }}CollectorExtension") {
+            extensionPath.set("ext/flip_poc")
             extensionSources.set(layout.projectDirectory.dir("src/main/extension"))
             collectorCore.set(rootProject.layout.projectDirectory.file("../../extensions/facebook-collector/collector-core.js"))
             expectedCoreSha256.set(collectorCoreSha256)
             outputDir.set(layout.buildDirectory.dir("generated/collectorExtension/${variant.name}"))
         }
         variant.sources.assets?.addGeneratedSourceDirectory(bundle, BundleCollectorExtension::outputDir)
+        if (variant.name == "debug") {
+            val lab = tasks.register<BundleCollectorExtension>("bundleMainLabExtension") {
+                extensionPath.set("ext/main_lab")
+                extensionSources.set(layout.projectDirectory.dir("src/debug/main-lab"))
+                collectorCore.set(rootProject.layout.projectDirectory.file("../../extensions/facebook-collector/collector-core.js"))
+                expectedCoreSha256.set(collectorCoreSha256)
+                outputDir.set(layout.buildDirectory.dir("generated/mainLabExtension"))
+            }
+            variant.sources.assets?.addGeneratedSourceDirectory(lab, BundleCollectorExtension::outputDir)
+        }
     }
 }
 

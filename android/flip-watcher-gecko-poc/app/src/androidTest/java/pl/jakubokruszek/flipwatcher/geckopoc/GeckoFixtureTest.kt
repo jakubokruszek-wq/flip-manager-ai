@@ -537,6 +537,61 @@ class GeckoFixtureTest {
         }
     }
 
+    @Test fun mainWorldDesktopTransportRunsBeforePageScriptsAndReadsOnlyFreshConsentedLocalFixtures() {
+        ActivityScenario.launch(GeckoTestHostActivity::class.java).use { scenario ->
+            var host: GeckoTestHostActivity? = null
+            scenario.onActivity { host = it }
+            runBlocking { withTimeout(120_000) { withContext(Dispatchers.Main) {
+                val server=LoopbackFixtureServer { name -> runCatching { context.assets.open(name).bufferedReader().use { it.readText() } }.getOrNull() }
+                val session=GeckoSession(GeckoSessionSettings.Builder().build())
+                val runtime=GeckoHost.runtime(context)
+                val extension=runtime.webExtensionController.ensureBuiltIn("resource://android/assets/ext/main_lab/","main-lab@flip-manager.local").await()!!
+                var ready=kotlinx.coroutines.CompletableDeferred<org.mozilla.geckoview.WebExtension.Port>()
+                val pending=HashMap<String,kotlinx.coroutines.CompletableDeferred<org.json.JSONObject>>()
+                val delegate=object:org.mozilla.geckoview.WebExtension.MessageDelegate {
+                    override fun onConnect(port:org.mozilla.geckoview.WebExtension.Port) {
+                        assertTrue(port.sender.isTopLevel)
+                        assertTrue(port.sender.url.startsWith("http://127.0.0.1:${server.port}/groups/$FIXTURE_GROUP_ID/"))
+                        port.setDelegate(object:org.mozilla.geckoview.WebExtension.PortDelegate {
+                            override fun onPortMessage(message:Any,port:org.mozilla.geckoview.WebExtension.Port) {
+                                val json=ScanProtocol.asJson(message) ?: return
+                                if(json.optString("type")=="mainLabResult")pending.remove(json.optString("nonce"))?.complete(json.getJSONObject("counts"))
+                            }
+                        })
+                        ready.complete(port)
+                    }
+                }
+                session.webExtensionController.setMessageDelegate(extension,delegate,"mainLab")
+                suspend fun load(consent:Boolean):org.mozilla.geckoview.WebExtension.Port {
+                    ready=kotlinx.coroutines.CompletableDeferred()
+                    val target=server.url(groupPath,"main-world")+"&labNonce="+UUID.randomUUID()+(if(consent) "&labConsent=once" else "")
+                    session.loadUri(target)
+                    val port=ready.await();delay(2_000);return port
+                }
+                suspend fun command(port:org.mozilla.geckoview.WebExtension.Port,op:String):org.json.JSONObject {
+                    val nonce=UUID.randomUUID().toString();val result=kotlinx.coroutines.CompletableDeferred<org.json.JSONObject>();pending[nonce]=result
+                    port.postMessage(org.json.JSONObject().put("op",op).put("nonce",nonce))
+                    return result.await()
+                }
+                try {
+                    session.open(runtime);host!!.geckoView.setSession(session);session.setActive(true)
+                    val passive=command(load(false),"read")
+                    for(field in listOf("installed","beforePage","fetchIntact","xhrIntact"))assertEquals("passive $field: $passive",1,passive.getInt(field))
+                    for(field in listOf("armed","bytes","exactIds","fetchBodies","xhrBodies"))assertEquals("passive $field: $passive",0,passive.getInt(field))
+                    val port=load(true);val captured=command(port,"read")
+                    Log.i("GeckoPocTest","MAIN_WORLD_FIXTURE $captured")
+                    for(field in listOf("installed","beforePage","armed","fetchBodies","xhrBodies","exactIds","duplicates","textRecords","priceSignals","areaSignals","fetchIntact","xhrIntact"))assertEquals("capture $field: $captured",1,captured.getInt(field))
+                    assertTrue(captured.getInt("bytes")>300);assertEquals(0,captured.getInt("rejected"))
+                    assertFalse(captured.toString().contains("LOCAL_MAIN_FIXTURE"));assertFalse(captured.toString().contains("550000000000012"))
+                    val stopped=command(port,"stop")
+                    assertEquals(1,stopped.getInt("stopped"));assertEquals(0,stopped.getInt("bytes"));assertEquals(0,stopped.getInt("exactIds"));assertEquals(0,stopped.getInt("armed"))
+                    val clean=command(load(false),"read")
+                    assertEquals(0,clean.getInt("armed"));assertEquals(0,clean.getInt("bytes"));assertEquals(0,clean.getInt("exactIds"))
+                } finally { host!!.geckoView.releaseSession();session.close();server.close();runtime.webExtensionController.uninstall(extension).await() }
+            } } }
+        }
+    }
+
     @Test fun documentReadRequiresFreshScopeAndRealGeckoDeliversOnlyApprovedInitialHtml() {
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use { scenario ->
             var host: GeckoTestHostActivity? = null
