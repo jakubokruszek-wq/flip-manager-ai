@@ -1,7 +1,7 @@
 /* Opt-in response diagnostic. No body, record, URL or ID ever leaves this module. */
 (function(scope) {
   "use strict";
-  const keys = ["responseLoadMode","responseLoadNavigation","responseLoadVerified","responseQueuedBodies","responseTabFetch","responseTabOther","responseTabUnhandled","responseAutoScroll","responseScrollSteps","responseScrollMoves","responseObserved","responseBoundTab","responseOtherTab","responseNoTab","responseTabXhr","responseFrameRejected","responseHostRejected","responseEndpointRejected","responseMissingOrigin","responseApiAvailable","responseArmed","responseRequestsSeen","responseOriginRejected","responseFiltered","responseCompleted","responseBytes","responseOversize","responseDecodeErrors","responseStreamErrors","responseLimitSkipped","responseKeyPostId","responseKeyStoryId","responseExactIds","responseDuplicateIds","responseRecordsWithText","responseRecordsWithAuthor","responseRecordsWithImages","responsePriceSignals","responseAreaSignals","responseStopped"];
+  const keys = ["responseLoadMode","responseLoadNavigation","responseLoadVerified","responseQueuedBodies","responseTabFetch","responseTabOther","responseTabUnhandled","responseAutoScroll","responseScrollSteps","responseScrollMoves","responseObserved","responseBoundTab","responseOtherTab","responseNoTab","responseTabXhr","responseFrameRejected","responseHostRejected","responseEndpointRejected","responseMissingOrigin","responseApiAvailable","responseArmed","responseRequestsSeen","responseOriginRejected","responseFiltered","responseCompleted","responseBytes","responseOversize","responseDecodeErrors","responseStreamErrors","responseLimitSkipped","responseKeyPostId","responseKeyStoryId","responseExactIds","responseDuplicateIds","responseRecordsWithText","responseRecordsWithAuthor","responseRecordsWithImages","responsePriceSignals","responseAreaSignals","responseStopped","responseTypeDocument","responseTypeSubFrame","responseTypeScript","responseTypeImage","responseTypeImageSet","responseTypeStylesheet","responseTypeFont","responseTypeMedia","responseTypePing","responseTypeBeacon","responseTypeWebsocket","responseTypeObject","responseTypeObjectSubrequest","responseTypeCspReport","responseTypeSpeculative","responseTypeManifest","responseTypeXslt","responseTypeUnknown","responseDataEndpoints","responseDataXhr","responseDataFetch","responseDataOther","responseDataPing","responseDataBeacon","responseDataUnhandled","responseDataEligiblePing","responseDataEligibleBeacon","responseDataEligibleUnhandled","responseDataFrameRejected","responseDataOriginRejected","responseDataMissingOrigin","responseAjaxBz","responseAjaxOther","responseDataPath"];
   const MAX_BODY=524288, MAX_TOTAL=2097152;
   function groupURL(raw, group, fixture) {
     try { const u=new URL(raw); return /^[A-Za-z0-9._-]{1,100}$/.test(group) && !u.username && !u.password && !u.hash &&
@@ -108,6 +108,29 @@
       return (u.protocol==="https:" && !u.port && ["facebook.com","www.facebook.com","m.facebook.com"].includes(u.hostname)) || (s.fixture && u.protocol==="http:" && u.hostname==="127.0.0.1");
     }
     const allowedPath=p=>/^\/ajax\//.test(p) || /^\/api\/graphql\/?$/.test(p) || /^\/graphql\/?$/.test(p);
+    const typeKeys=Object.freeze({"main_frame":"responseTypeDocument","sub_frame":"responseTypeSubFrame","script":"responseTypeScript","image":"responseTypeImage","imageset":"responseTypeImageSet","stylesheet":"responseTypeStylesheet","font":"responseTypeFont","media":"responseTypeMedia","ping":"responseTypePing","beacon":"responseTypeBeacon","websocket":"responseTypeWebsocket","object":"responseTypeObject","object_subrequest":"responseTypeObjectSubrequest","csp_report":"responseTypeCspReport","speculative":"responseTypeSpeculative","web_manifest":"responseTypeManifest","xslt":"responseTypeXslt"});
+    // Passive classification only. It NEVER instantiates a body filter or stores URLs/types.
+    function classifyTransport(s,d) {
+      if(!["xmlhttprequest","fetch","other"].includes(d.type))inc(s,Object.prototype.hasOwnProperty.call(typeKeys,d.type)?typeKeys[d.type]:"responseTypeUnknown");
+      let u;try{u=new URL(d.url);}catch{return;}
+      if(!allowedHost(u,s))return;
+      const bz=/^\/ajax\/bz(?:\/|$)/.test(u.pathname);
+      const ajax=/^\/ajax(?:\/|$)/.test(u.pathname);
+      const data=/^\/data(?:\/|$)/.test(u.pathname);
+      if(!ajax && !data && !allowedPath(u.pathname))return;
+      inc(s,"responseDataEndpoints");
+      if(bz)inc(s,"responseAjaxBz");else if(ajax)inc(s,"responseAjaxOther");
+      if(data)inc(s,"responseDataPath");
+      const kind={xmlhttprequest:"Xhr",fetch:"Fetch",other:"Other",ping:"Ping",beacon:"Beacon"};
+      const suffix=Object.prototype.hasOwnProperty.call(kind,d.type)?kind[d.type]:"Unhandled";
+      inc(s,"responseData"+suffix);
+      if(d.frameId!==0){inc(s,"responseDataFrameRejected");return;}
+      if(!groupURL(d.documentUrl || d.originUrl,s.group,s.fixture)){
+        if(!d.documentUrl && !d.originUrl)inc(s,"responseDataMissingOrigin");inc(s,"responseDataOriginRejected");return;
+      }
+      // Coarse /data is diagnostic-only; eligibility still uses the UNCHANGED body path gate.
+      if(allowedPath(u.pathname) && ["Ping","Beacon","Unhandled"].includes(suffix))inc(s,"responseDataEligible"+suffix);
+    }
     // Separate PASSIVE listener: see events before the body listener's gates.
     // Only bounded counts; no addresses, IDs, headers or content retained.
     function observe(d) {
@@ -116,6 +139,7 @@
       if(!Number.isInteger(d.tabId) || d.tabId<0){inc(s,"responseNoTab");return;}
       if(d.tabId!==s.tab){inc(s,"responseOtherTab");return;}
       inc(s,"responseBoundTab");
+      classifyTransport(s,d);
       if(d.type==="xmlhttprequest")inc(s,"responseTabXhr");
       else if(d.type==="fetch")inc(s,"responseTabFetch");
       else if(d.type==="other")inc(s,"responseTabOther");

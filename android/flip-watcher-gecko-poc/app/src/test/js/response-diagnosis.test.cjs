@@ -101,3 +101,29 @@ test('monotonic expiry rejects delayed callbacks and scrolling even before timeo
  f.ondata({data:Uint8Array.from(Buffer.from(JSON.stringify(story()))).buffer});f.onstop();h.request();const c=h.d.readLoad(msg).counts;
  assert.equal(h.filters.length,1);assert.equal(c.responseBytes,0);assert.equal(c.responseExactIds,0);assert.equal(c.responseScrollSteps,0);
 });
+
+test('unhandled resource types are partitioned exactly without reading any of their bodies',()=>{
+ const types={main_frame:'Document',sub_frame:'SubFrame',script:'Script',image:'Image',imageset:'ImageSet',stylesheet:'Stylesheet',font:'Font',media:'Media',ping:'Ping',beacon:'Beacon',websocket:'Websocket',object:'Object',object_subrequest:'ObjectSubrequest',csp_report:'CspReport',speculative:'Speculative',web_manifest:'Manifest',xslt:'Xslt','not-a-browser-type':'Unknown'};
+ const h=harness();h.arm();for(const [type,key] of Object.entries(types))h.d.observe({tabId:7,frameId:0,type,url:'https://www.facebook.com/ajax/bz/',documentUrl:url});
+ const c=h.read().counts;for(const key of Object.values(types))assert.equal(c['responseType'+key],1);assert.equal(c.responseTabUnhandled,18);assert.equal(c.responseDataEndpoints,18);assert.equal(h.filters.length,0);
+});
+test('same-tab AJAX ping and beacon have eligible metadata but NEVER instantiate filters',()=>{
+ const h=harness();h.arm(loadMsg);navigate(h);verify(h);
+ for(const type of ['ping','beacon'])h.request({type,url:'https://www.facebook.com/ajax/bz/'});
+ const c=h.d.readLoad(msg).counts;assert.equal(c.responseDataPing,1);assert.equal(c.responseDataBeacon,1);assert.equal(c.responseDataEligiblePing,1);assert.equal(c.responseDataEligibleBeacon,1);assert.equal(c.responseAjaxBz,2);assert.equal(c.responseFiltered,0);assert.equal(c.responseBytes,0);assert.equal(h.filters.length,0);
+});
+test('data endpoint classification excludes CDN, other tabs and no-tab events',()=>{
+ const h=harness();h.arm();for(const x of [{tabId:8},{tabId:-1},{url:'https://fbcdn.net/ajax/bz/'}])h.request({type:'ping',...x});const c=h.read().counts;assert.equal(c.responseDataEndpoints,0);assert.equal(c.responseTypePing,1);assert.equal(h.filters.length,0);
+});
+test('metadata eligibility preserves frame and exact document origin checks',()=>{
+ const h=harness();h.arm();for(const x of [{frameId:1},{documentUrl:undefined},{documentUrl:url.replace(group,'foreign')},{documentUrl:undefined,originUrl:url}])h.request({type:'ping',url:'https://www.facebook.com/ajax/bz/',...x});
+ const c=h.read().counts;assert.equal(c.responseDataEndpoints,4);assert.equal(c.responseDataFrameRejected,1);assert.equal(c.responseDataOriginRejected,2);assert.equal(c.responseDataMissingOrigin,1);assert.equal(c.responseDataEligiblePing,1);assert.equal(h.filters.length,0);
+});
+test('coarse path buckets never retain queries or expand body endpoint scope',()=>{
+ const h=harness();h.arm();for(const pathname of ['/ajax/bz/','/ajax/anything/','/data','/data/more/','/api/graphql','/graphql','/ajax/bzish/'])h.request({type:'ping',url:'https://www.facebook.com'+pathname+'?private=PRIVATE'});
+ const c=h.read().counts;assert.equal(c.responseDataEndpoints,7);assert.equal(c.responseAjaxBz,1);assert.equal(c.responseAjaxOther,2);assert.equal(c.responseDataPath,2);assert.equal(c.responseDataEligiblePing,5);assert.equal(h.filters.length,0);assert(!JSON.stringify(c).includes('PRIVATE'));
+ const d=harness();d.arm();d.request({url:'https://www.facebook.com/data/'});assert.equal(d.filters.length,0);assert.equal(d.read().counts.responseDataXhr,1);
+});
+test('passive type classification stops without consent, after deadline and after release',()=>{
+ const h=harness();const d={tabId:7,frameId:0,type:'ping',url:'https://www.facebook.com/ajax/bz/',documentUrl:url};h.d.observe(d);h.arm();h.d.observe(d);h.jump(15001);h.d.observe(d);assert.equal(h.read().counts.responseTypePing,1);h.d.observe(d);assert.equal(h.read().counts.responseTypePing,0);
+});

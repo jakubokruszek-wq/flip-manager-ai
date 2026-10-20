@@ -6,7 +6,7 @@ import org.junit.Test
 
 class ResponseProtocolTest {
     private fun reply() = JSONObject().put("type", "responseDiagnosisResult").put("nonce", "fresh").put("status", "OK").put("counts", JSONObject().apply { ResponseProtocol.keys.forEach { put(it, 0) } })
-    @Test fun onlyCountsAreDisplayed() { assertTrue(ResponseProtocol.report(reply(), "fresh")!!.startsWith("ODPOWIEDZI 0.3.3")) }
+    @Test fun onlyCountsAreDisplayed() { assertTrue(ResponseProtocol.report(reply(), "fresh")!!.startsWith("ODPOWIEDZI 0.3.4")) }
     @Test fun wrongNonceTypeAndStatusAreRejected() {
         assertNull(ResponseProtocol.report(reply(), "old"))
         assertNull(ResponseProtocol.report(reply().put("type", "scanResult"), "fresh"))
@@ -69,5 +69,18 @@ class ResponseProtocolTest {
         }
         val r=reply().put("status","STOP");r.getJSONObject("counts").put("responseLoadMode",1).put("responseQueuedBodies",9)
         assertNull(ResponseProtocol.report(r,"fresh"))
+    }
+    @Test fun passiveTypesAndEndpointMetadataAreNumericAndDoNotImplyBodyRead() {
+        val r=reply();val c=r.getJSONObject("counts")
+        c.put("responseTypePing",1).put("responseDataEndpoints",1).put("responseDataPing",1).put("responseDataEligiblePing",1).put("responseAjaxBz",1)
+        val report=ResponseProtocol.report(r,"fresh")!!
+        assertTrue(report.contains("Ping=1"));assertTrue(report.contains("EligiblePing=1"));assertTrue(report.contains("AjaxBz=1"));assertTrue(report.contains("responseBytes: 0"))
+        assertFalse(report.contains("facebook.com"));assertFalse(report.contains("/ajax/bz/"))
+    }
+    @Test fun passiveMetadataRejectsRawKeysAndImpossibleEligibility() {
+        for (key in listOf("responseDataPing","responseDataEligiblePing","responseAjaxBz","responseDataMissingOrigin")) {
+            val r=reply();r.getJSONObject("counts").put(key,1);assertNull(ResponseProtocol.report(r,"fresh"))
+        }
+        val r=reply();r.getJSONObject("counts").put("resourceType","private");assertNull(ResponseProtocol.report(r,"fresh"))
     }
 }
