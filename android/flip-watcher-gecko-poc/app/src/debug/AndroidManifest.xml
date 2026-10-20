@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application>
+    <application android:networkSecurityConfig="@xml/local_fixture_network_security">
         <!-- Debug-build only, for the instrumented tests: shows a fixture session in a real,
              visible GeckoView. Not exported; it never opens Facebook. -->
         <activity
