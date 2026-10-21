@@ -26,14 +26,15 @@ class DesktopPreviewInstrumentedTest {
             var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it}
             runBlocking{withTimeout(90_000){withContext(Dispatchers.Main){
                 val groupPath="/groups/$FIXTURE_GROUP_ID/"
-                val desktop=AtomicBoolean(false);val challenge=AtomicBoolean(false)
+                val desktop=AtomicBoolean(false);val challenge=AtomicBoolean(false);val rootScroll=AtomicBoolean(false)
                 val agents=CopyOnWriteArrayList<String>()
                 val server=LoopbackFixtureServer(pages=mapOf("/api/graphql/" to "desktop-network"),onRequest={path,ua->
                     if(path==groupPath){agents.add(ua.orEmpty());desktop.set(ua!=null&&!ua.contains("Mobile",true)&&!ua.contains("Android",true))}
                 }){name->
                     val selected=if(name=="fixtures/desktop-start.html"&&!desktop.get())"fixtures/other.html" else name
                     runCatching{context.assets.open(selected).bufferedReader().use{it.readText()}}.getOrNull()?.let{body->
-                        if(selected=="fixtures/desktop-start.html"&&challenge.get())body+"<script>setTimeout(function(){document.title='Checkpoint';document.body.insertAdjacentHTML('beforeend','<input type=password>');},1500);</script>" else body
+                        val page=if(selected=="fixtures/desktop-start.html"&&rootScroll.get())body.replace("<html>","<html style=\"overflow-y:auto\">").replace("margin:0;height:100vh;overflow:hidden","margin:0;min-height:9000px;overflow:hidden").replace("height:100vh;overflow-y:auto","height:auto;overflow:visible") else body
+                        if(selected=="fixtures/desktop-start.html"&&challenge.get())page+"<script>setTimeout(function(){document.title='Checkpoint';document.body.insertAdjacentHTML('beforeend','<input type=password>');},1500);</script>" else page
                     }
                 }
                 val target=server.url(groupPath,"desktop-start")
@@ -73,6 +74,10 @@ class DesktopPreviewInstrumentedTest {
                     val summary=DesktopSummary.create("DONE",trial.requests,reply);assertEquals("CONDITIONAL_GO",summary.verdict);assertEquals(2,summary.offers)
                     assertFalse(summary.encode().contains("550000000000091"));assertFalse(summary.encode().contains("PRIVATE"))
                     android.util.Log.i("GeckoPocTest","DESKTOP_ACCEPTANCE ${summary.report()}")
+                    // HTML owns viewport overflow: hidden BODY must not suppress root scrolling.
+                    rootScroll.set(true);val rootTrial=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=rootTrial;assertTrue(rootTrial.begin(true))
+                    val rootResult=DesktopSessionPreview.run(session,channel,rootTrial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=15_000)
+                    assertEquals("DONE",rootResult.reason);assertEquals(5,rootResult.reply!!.stats.getValue("scrollMoves"));assertEquals(2,DesktopSummary.create("DONE",rootTrial.requests,rootResult.reply).offers)
                     // Same runner and real page: a verification mutation must discard partial results.
                     challenge.set(true);val unsafe=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=unsafe;assertTrue(unsafe.begin(true))
                     val nonce=UUID.randomUUID().toString()
@@ -107,7 +112,7 @@ class DesktopPreviewInstrumentedTest {
                 scenario.onActivity{a->
                     a.publishDesktop(summary,listOf(row));assertTrue(a.desktopResultDialog!!.isShowing)
                     oldView=a.desktopResultDialog!!.window!!.decorView
-                    assertTrue(texts(oldView!!).contains(id));assertTrue(texts(oldView!!).contains("319000"))
+                    assertTrue(texts(oldView!!).contains(id));assertTrue(texts(oldView!!).contains("42,42 m²"));assertTrue(texts(oldView!!).indexOf("KANDYDAT 1")<texts(oldView!!).indexOf("RAPORT TECHNICZNY"))
                     assertFalse(prefs.getString("last","")!!.contains(id));assertFalse(prefs.getString("last","")!!.contains("Retkinia"))
                     a.desktopResultDialog!!.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).performClick()
                 }
@@ -119,7 +124,7 @@ class DesktopPreviewInstrumentedTest {
                 scenario.recreate()
                 scenario.onActivity{a->a.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.widget.Button>("poc.tool.tools").performClick()}
                 scenario.onActivity{a->a.diagnosticsDialog!!.window!!.decorView.findViewWithTag<android.widget.Button>("poc.tool.desktopResult").performClick()}
-                scenario.onActivity{a->assertTrue(a.desktopResultDialog!!.isShowing);assertFalse(texts(a.desktopResultDialog!!.window!!.decorView).contains(id));assertTrue(texts(a.desktopResultDialog!!.window!!.decorView).contains("CONDITIONAL_GO"))}
+                scenario.onActivity{a->assertTrue(a.desktopResultDialog!!.isShowing);assertFalse(texts(a.desktopResultDialog!!.window!!.decorView).contains(id));assertTrue(texts(a.desktopResultDialog!!.window!!.decorView).contains("CONDITIONAL_GO"));assertTrue(texts(a.desktopResultDialog!!.window!!.decorView).contains("BRAK SZCZEGÓŁÓW OFERT W PAMIĘCI"))}
                 assertTrue(history.getBoolean(key,false));assertEquals(link,context.getSharedPreferences("share_link_terminal_result_v1",Context.MODE_PRIVATE).getString("last",null))
             }
         }finally{

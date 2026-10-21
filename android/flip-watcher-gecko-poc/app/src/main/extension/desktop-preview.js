@@ -66,7 +66,7 @@ function scrollContainer(w){
   if(!node||node.isConnected===false||node.scrollHeight-node.clientHeight<32||node.clientHeight<100)continue;
   const style=w.getComputedStyle?.(node);if(style&&/hidden|clip/.test(style.overflowY))continue;
   // With HTML overflow=visible, BODY overflow propagates to the viewport.
-  if(node===root&&doc.body&&root!==doc.body&&/hidden|clip/.test(w.getComputedStyle?.(doc.body)?.overflowY||''))continue;
+  if(node===root&&(!style||style.overflowY==='visible')&&doc.body&&root!==doc.body&&/hidden|clip/.test(w.getComputedStyle?.(doc.body)?.overflowY||''))continue;
   if(node!==root){
    if(!style||!['auto','scroll','overlay'].includes(style.overflowY)||node.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]'))continue;
    const rect=node.getBoundingClientRect();

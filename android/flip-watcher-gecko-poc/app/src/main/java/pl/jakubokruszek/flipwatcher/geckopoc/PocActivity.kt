@@ -220,18 +220,7 @@ class PocActivity : ComponentActivity() {
     private fun showDesktopResult(value:DesktopSummary?=DesktopSummary.decode(desktopPrefs.getString("last",null))){
         desktopResultDialog?.dismiss();desktopResultText?.text="";desktopResultText=null
         val report=value?.report()?:"Brak zakończonej próby komputerowej. Dotychczasowe raporty linków pozostają w archiwum."
-        val preview=buildString{
-            append(report)
-            if(desktopRows.isNotEmpty()){
-                append("\n\nPODGLĄD TYLKO W RAM — pola są heurystyczne:\n")
-                for((i,row) in desktopRows.withIndex()){
-                    append("\n${i+1}. ID: ${row.postId} • ${row.layer}\n${row.permalink}\n")
-                    append("Cena: ${row.price?:"—"} zł (${row.priceSource}) • ${row.area?:"—"} m² • pokoje: ${row.rooms?:"—"}\n")
-                    append("${row.district?:"—"} / ${row.neighborhood?:"—"} / ${row.street?:"—"} • zdjęcia: ${row.photos}\n")
-                    append("Intencja: ${row.intent} • kandydat po filtrach: ${DesktopSummary.eligible(row)}\n")
-                }
-            }else if(value!=null)append("\n\nPodgląd danych jest dostępny tylko na pierwszym planie po próbie; nie jest odtwarzany z historii.")
-        }
+        val preview=DesktopPresentation.preview(report,desktopRows,value!=null)
         val text=TextView(this).apply{text=preview;textSize=14f;setPadding(20,12,20,12)}
         desktopResultText=text
         desktopResultDialog=AlertDialog.Builder(this).setTitle("Wynik próby komputerowej").setView(ScrollView(this).apply{addView(text)})
@@ -1065,7 +1054,7 @@ class PocActivity : ComponentActivity() {
         val mainTools=LinearLayout(this).apply{
             orientation=LinearLayout.VERTICAL
             addView(row(button("desktopPreview","Próba komputerowa • podgląd"){startDesktopPreview()}))
-            addView(row(button("desktopResult","Wynik próby komputerowej"){showDesktopResult()}))
+            addView(row(button("desktopResult","Oferty / wynik próby"){showDesktopResult()}))
             addView(row(Button(this@PocActivity).apply{text="Archiwum narzędzi";setOnClickListener{toolPanel.visibility=if(toolPanel.visibility==View.VISIBLE)View.GONE else View.VISIBLE}}))
             addView(toolPanel)
         }
