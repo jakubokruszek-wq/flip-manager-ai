@@ -35,6 +35,8 @@ class CollectorChannel(
 
     var connectedUrl: String? = null; private set
     val isConnected: Boolean get() = port != null
+    /** Monotonic within this channel: rejects a port from before a native reload. RAM only. */
+    var connectionGeneration = 0L; private set
 
     private val portDelegate = object : WebExtension.PortDelegate {
         override fun onPortMessage(message: Any, port: WebExtension.Port) {
@@ -74,6 +76,7 @@ class CollectorChannel(
             this@CollectorChannel.port?.let { old -> runCatching { old.disconnect() } }
             this@CollectorChannel.port = port
             connectedUrl = sender.url
+            connectionGeneration++
             port.setDelegate(portDelegate)
             portReady.complete(Unit)
             onPageConnected()
@@ -88,13 +91,14 @@ class CollectorChannel(
 
     suspend fun awaitPort(timeoutMs: Long): Boolean = withTimeoutOrNull(timeoutMs) { portReady.await(); true } ?: false
 
-    suspend fun shareLinkContext(expectedUrl: String, consent: Boolean): Pair<Boolean, Boolean>? {
+    suspend fun shareLinkContext(expectedUrl: String, consent: Boolean, newDocumentAfter: Long? = null): Pair<Boolean, Boolean>? {
         if (!consent) return null
         val nonce = UUID.randomUUID().toString(); shareNonce = nonce
         val reply = request(nonce, JSONObject().put("type", "shareLinkContext").put("nonce", nonce).put("consent", true)
-            .put("expectedUrl", expectedUrl).put("groupId", if (fixtureMode) FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID).put("fixture", fixtureMode), 1_500) ?: return null
+            .apply { if (newDocumentAfter != null) put("newDocumentAfter", newDocumentAfter) }.put("expectedUrl", expectedUrl).put("groupId", if (fixtureMode) FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID).put("fixture", fixtureMode), 1_500) ?: return null
         if (reply.optString("type") != "shareLinkContextResult" || reply.optString("nonce") != nonce ||
-            reply.keys().asSequence().toSet() != setOf("type", "nonce", "safe", "complete") || reply.opt("safe") !is Boolean || reply.opt("complete") !is Boolean) return null
+            reply.keys().asSequence().toSet() != setOf("type", "nonce", "safe", "complete", "fresh") || reply.opt("safe") !is Boolean || reply.opt("complete") !is Boolean || reply.opt("fresh") !is Boolean) return null
+        if (reply.getBoolean("safe") && !reply.getBoolean("fresh")) return null
         return reply.getBoolean("safe") to reply.getBoolean("complete")
     }
     fun stopShareLinkContext() {

@@ -7,6 +7,7 @@ class ShareLinkResolver(
     private val group: String = PocPolicy.APPROVED_GROUP_ID,
     private val now: () -> Long,
     private val fixtureOrigin: String? = null,
+    private val allowAddressReload: Boolean = false,
 ) {
     enum class Status { IDLE, ACTIVE, CONFIRMED, STOP, TIMEOUT }
     var status = Status.IDLE; private set
@@ -18,6 +19,16 @@ class ShareLinkResolver(
     private var location: String? = null
     private var previousDocument: String? = null
     private var deadline = 0L
+    private var reloadTarget: String? = null
+    private var reloadClaimed = false
+    private var reloadUsed = false
+    val pendingAddressReload: String? get() = if (active && !reloadClaimed) reloadTarget else null
+    /** Only native UI orchestration can consume this once; never a persisted permission. */
+    fun claimAddressReload(raw: String): Boolean {
+        if (!tick() || reloadTarget != raw || reloadClaimed) return false
+        reloadClaimed = true
+        return true
+    }
     val active: Boolean get() = status == Status.ACTIVE
 
     private fun uri(raw: String): URI? = runCatching { URI(raw) }.getOrNull()?.takeIf { u ->
@@ -49,19 +60,37 @@ class ShareLinkResolver(
     fun request(raw: String, redirect: Boolean, newWindow: Boolean = false, gesture: Boolean = false): Boolean {
         if (!tick()) return false
         val first = requests == 0 && raw == target
-        if (newWindow || (!first && (!redirect || gesture))) { stop("UNEXPECTED_NAVIGATION"); return false }
+        val recheck = reloadClaimed && raw == reloadTarget && !redirect && !gesture
+        if (reloadTarget != null && !recheck) { stop("RELOAD_INTERRUPTED"); return false }
+        if (newWindow || (!first && !recheck && (!redirect || gesture))) { stop("UNEXPECTED_NAVIGATION"); return false }
         val path = uri(raw)?.rawPath.orEmpty()
         if (Regex("login|recover|checkpoint|captcha|two_step_verification", RegexOption.IGNORE_CASE).containsMatchIn(path)) { stop("VERIFICATION_OR_LOGIN"); return false }
         if (!destination(raw)) { stop("UNVERIFIED_DESTINATION"); return false }
         if (requests >= 8) { stop("REDIRECT_LIMIT"); return false }
-        requests++; requested = raw; awaitingDocument = true; location = null; return true
+        requests++; requested = raw; awaitingDocument = true; location = null
+        if (recheck) { reloadTarget = null; reloadClaimed = false }
+        return true
     }
-    fun location(raw: String?): Boolean {
+    fun location(raw: String?, gesture: Boolean = false): Boolean {
         if (!tick()) return false
         // Gecko can deliver an already queued location notification for the starting
         // document after loadUri/onLoadRequest. Ignore only that exact document until
         // the first target location; do not extend the deadline or arm its content port.
         if (previousDocument != null && raw == previousDocument && requests <= 1 && location == null) return true
+        if (reloadTarget != null) {
+            if (raw == reloadTarget && !gesture) return true // queued duplicate; still no inspection
+            stop("RELOAD_INTERRUPTED"); return false
+        }
+        if (raw != null && raw != requested && requests > 0 && destination(raw) && allowAddressReload) {
+            if (gesture) { stop("UNEXPECTED_NAVIGATION"); return false }
+            if (reloadUsed) { stop("RELOAD_LIMIT"); return false }
+            if (requests >= 8) { stop("REDIRECT_LIMIT"); return false }
+            // History/canonicalization is a candidate address, never redirect proof.
+            // Require one fresh native load and a new private content port before confirmation.
+            reloadUsed = true; reloadTarget = raw; previousDocument = null
+            location = null; awaitingDocument = true
+            return true
+        }
         val failure = when {
             raw == null -> "LOCATION_MISSING"
             requests == 0 -> "LOCATION_BEFORE_REQUEST"
@@ -79,14 +108,14 @@ class ShareLinkResolver(
         if (!safe) { stop("UNSAFE_DOCUMENT"); return false }
         awaitingDocument = false
         if (complete && uri(raw)?.let(::exact) == true) {
-            status = Status.CONFIRMED; reason = "EXACT_APPROVED_GROUP_LINK"; clear(); return true
+            status = Status.CONFIRMED; reason = if (reloadUsed) "EXACT_APPROVED_ADDRESS_RELOADED" else "EXACT_APPROVED_GROUP_LINK"; clear(); return true
         }
         return false
     }
     fun disconnected() { if (active && !awaitingDocument) stop("PORT_LOST") }
     fun stop(why: String = "CANCELLED") { if (status == Status.CONFIRMED) return; status = Status.STOP; reason = why; clear() }
-    private fun clear() { target = null; requested = null; location = null; previousDocument = null; awaitingDocument = false }
-    fun report() = "LINK 0.4.2 • tylko lokalnie • ${status.name}\n" +
+    private fun clear() { target = null; requested = null; location = null; previousDocument = null; reloadTarget = null; reloadClaimed = false; awaitingDocument = false }
+    fun report() = "LINK 0.4.3 • tylko lokalnie • ${status.name}\n" +
         "Wynik: $reason\nŻądania nawigacji: $requests/8\nPotwierdzone ID z adresu zatwierdzonej grupy: ${if (status == Status.CONFIRMED) 1 else 0}\n" +
         "Potwierdzenie dotyczy adresu, nie treści ani kompletności oferty. Bez skanu, zapisu linku/ID i uploadu. Inna lub niezweryfikowana numeryczna grupa: STOP."
 }

@@ -5,13 +5,16 @@ import org.json.JSONObject
 /** Fixed terminal-result schema. No link, post ID, page text, nonce or consent can be encoded. */
 class ShareLinkResult private constructor(val status: String, val reason: String, val requests: Int, val confirmedIds: Int) {
     fun encode(): String = JSONObject().put("status", status).put("reason", reason).put("requests", requests).put("confirmedIds", confirmedIds).toString()
-    fun report(): String = "LINK 0.4.2 • tylko lokalnie • $status\n" +
+    fun report(): String = "LINK 0.4.3 • tylko lokalnie • $status\n" +
         "Wynik: $reason\n${descriptions.getValue(reason)}\nŻądania nawigacji: $requests/8\n" +
         "Potwierdzone ID z adresu zatwierdzonej grupy: $confirmedIds\n" +
         "Ostatnia zakończona próba. Raport zawiera wyłącznie status, powód i liczniki — bez linku, ID i treści posta. Potwierdzenie adresu nie potwierdza treści oferty. Bez skanu i uploadu."
     companion object {
         private val descriptions = mapOf(
             "EXACT_APPROVED_GROUP_LINK" to "Potwierdzono dokładny adres posta zatwierdzonej grupy.",
+            "EXACT_APPROVED_ADDRESS_RELOADED" to "Sprawdzono dokładny adres zatwierdzonej grupy przez ponowne otwarcie i nowy dokument. Nie potwierdzono powiązania z linkiem udostępnienia ani treści lub istnienia oferty.",
+            "RELOAD_INTERRUPTED" to "Przerwano jednorazowe sprawdzenie adresu: pojawiła się inna lub niezatwierdzona nawigacja.",
+            "RELOAD_LIMIT" to "Adres zmienił się ponownie bez zatwierdzonego żądania. Druga próba otwarcia nie jest dozwolona.",
             "INVALID_INPUT_OR_NO_CONSENT" to "Nie rozpoczęto nawigacji: brak poprawnego wejścia lub nowej zgody.",
             "UNEXPECTED_NAVIGATION" to "Przerwano z powodu nieoczekiwanej nawigacji.",
             "VERIFICATION_OR_LOGIN" to "Przerwano przy logowaniu lub weryfikacji Facebooka.",
@@ -33,8 +36,10 @@ class ShareLinkResult private constructor(val status: String, val reason: String
         )
         private fun validated(status: String, reason: String, requests: Int, ids: Int): ShareLinkResult? {
             if (status !in setOf("CONFIRMED", "STOP", "TIMEOUT") || reason !in descriptions || requests !in 0..8 || ids !in 0..1) return null
-            if (status == "CONFIRMED" && (reason != "EXACT_APPROVED_GROUP_LINK" || ids != 1 || requests < 1)) return null
-            if (status != "CONFIRMED" && (ids != 0 || reason == "EXACT_APPROVED_GROUP_LINK")) return null
+            val confirmedReason = reason in setOf("EXACT_APPROVED_GROUP_LINK", "EXACT_APPROVED_ADDRESS_RELOADED")
+            if (status == "CONFIRMED" && (!confirmedReason || ids != 1 || requests < 1)) return null
+            if (status != "CONFIRMED" && (ids != 0 || confirmedReason)) return null
+            if (reason == "EXACT_APPROVED_ADDRESS_RELOADED" && requests < 2) return null
             if ((status == "TIMEOUT") != (reason == "DEADLINE")) return null
             return ShareLinkResult(status, reason, requests, ids)
         }

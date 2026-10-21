@@ -77,6 +77,9 @@ class PocActivity : ComponentActivity() {
     internal var lastShareResultDialog: AlertDialog? = null; private set
     private val shareResults by lazy { ShareLinkResultStore(this) }
     private var shareBusy = false
+    private var sharePortAfterGeneration = 0L
+    private var shareDocumentAfter = 0L
+    private var sharePageLoading = false
     private var shareJob: Job? = null
     private var shareDialog: AlertDialog? = null
     private var responseBusy = false
@@ -179,21 +182,24 @@ class PocActivity : ComponentActivity() {
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         }
         shareDialog = AlertDialog.Builder(this).setTitle("Sprawdź jeden udostępniony link")
-            .setMessage("NOWA JEDNORAZOWA ZGODA: otworzyć w tej sesji jeden wklejony link /share/p/ i sprawdzić jego przekierowanie? Do 20 s i 8 żądań nawigacji. Obejmuje adres poza stroną główną grupy, wyłącznie w celu rozpoznania dokładnego permalinku zatwierdzonej grupy. Bez odczytu treści postów, skryptów, odpowiedzi sieciowych, nagłówków i danych logowania. Kontrola bezpieczeństwa strony: tylko tytuł i obecność formularzy weryfikacji. Aplikacja zapisze lokalnie wyłącznie status, powód i liczniki ostatniej zakończonej próby, aby wynik nie zniknął po powrocie do grupy lub zamknięciu aplikacji. Nie zapisuje linku, ID ani treści posta i niczego nie wysyła. Przeglądarka korzysta z istniejącego profilu jak przy ręcznym otwarciu. Bez kolektora. Raport zawiera status i liczby, nie adres ani ID. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu lub wygaszenie: STOP. Zgoda nie uruchamia skanu.")
+            .setMessage("NOWA JEDNORAZOWA ZGODA: otworzyć w tej sesji jeden wklejony link /share/p/ i sprawdzić jego przekierowanie? Do 20 s i 8 żądań nawigacji. Obejmuje adres poza stroną główną grupy, wyłącznie w celu rozpoznania dokładnego permalinku zatwierdzonej grupy. Bez odczytu treści postów, skryptów, odpowiedzi sieciowych, nagłówków i danych logowania. Kontrola bezpieczeństwa strony: tylko tytuł i obecność formularzy weryfikacji. Aplikacja zapisze lokalnie wyłącznie status, powód i liczniki ostatniej zakończonej próby, aby wynik nie zniknął po powrocie do grupy lub zamknięciu aplikacji. Nie zapisuje linku, ID ani treści posta i niczego nie wysyła. Przeglądarka korzysta z istniejącego profilu jak przy ręcznym otwarciu. Bez kolektora. Raport zawiera status i liczby, nie adres ani ID. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu lub wygaszenie: STOP. Jeśli Facebook zmieni dozwolony adres bez żądania nawigacji, aplikacja może raz otworzyć ten adres ponownie w tym samym limicie 20 s i 8 żądań. Taki wynik sprawdza adres, ale nie dowodzi powiązania z linkiem udostępnienia ani istnienia oferty. Zgoda nie uruchamia skanu.")
             .setView(input).setNegativeButton("Anuluj", null)
             .setPositiveButton("Zgadzam się — sprawdź") { _, _ ->
                 val raw = input.text.toString().trim(); input.text.clear()
                 if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) || session !== currentSession || channel !== currentChannel || kind != PageKind.APPROVED_GROUP || shareBusy || responseBusy || scanning) return@setPositiveButton
-                val resolver = ShareLinkResolver(now = { android.os.SystemClock.elapsedRealtime() })
+                val resolver = ShareLinkResolver(now = { android.os.SystemClock.elapsedRealtime() }, allowAddressReload = true)
                 if (!resolver.begin(raw, true, url)) { ShareLinkResult.snapshot(resolver)?.let { publishShareResult(it, true) }; return@setPositiveButton }
                 stopVisiblePosts(); shareResolver = resolver; shareBusy = true
-                output.text = "LINK 0.4.2: sprawdzanie przekierowania, maksymalnie 20 s."; render()
+                sharePageLoading = false
+                sharePortAfterGeneration = currentChannel.connectionGeneration
+                shareDocumentAfter = System.currentTimeMillis()
+                output.text = "LINK 0.4.3: sprawdzanie przekierowania, maksymalnie 20 s."; render()
                 currentSession.loadUri(raw)
                 shareJob = lifecycleScope.launch {
                     while (shareBusy && shareResolver === resolver && resolver.tick()) {
                         val expected = url
-                        if (expected != null && resolver.canInspect(expected) && currentChannel.isConnected && currentChannel.connectedUrl == expected) {
-                            val context = currentChannel.shareLinkContext(expected, true)
+                        if (expected != null && resolver.canInspect(expected) && currentChannel.connectionGeneration > sharePortAfterGeneration && currentChannel.isConnected && currentChannel.connectedUrl == expected) {
+                            val context = currentChannel.shareLinkContext(expected, true, shareDocumentAfter)
                             if (shareResolver !== resolver || !shareBusy) return@launch
                             if (url == expected && context != null) resolver.confirm(expected, context.first, context.second && progress == 100)
                             if (!resolver.active) break
@@ -704,11 +710,13 @@ class PocActivity : ComponentActivity() {
 
     private val progressDelegate = object : GeckoSession.ProgressDelegate {
         override fun onPageStart(session: GeckoSession, url: String) {
+            if (shareBusy) { sharePageLoading = true; progress = 0 }
             onUrl(url)
             lastLoadError = null
         }
 
         override fun onPageStop(session: GeckoSession, success: Boolean) {
+            if (shareBusy) sharePageLoading = false
             if (!success && shareBusy) finishShare("LOAD_ERROR")
             if (!success && responseBusy) stopVisiblePosts()
             render()
@@ -736,7 +744,7 @@ class PocActivity : ComponentActivity() {
     private val navigationDelegate = object : GeckoSession.NavigationDelegate {
         override fun onLocationChange(session: GeckoSession, url: String?, perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean) {
             if (shareResolver == null) recordStep(NavStep(PocPolicy.sanitize(url), isRedirect = false, hasUserGesture = hasUserGesture, viaHistory = true))
-            onUrl(url)
+            onUrl(url, hasUserGesture)
         }
 
         override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny> {
@@ -771,13 +779,34 @@ class PocActivity : ComponentActivity() {
         }
     }
 
-    private fun onUrl(value: String?) {
+    private fun onUrl(value: String?, hasUserGesture: Boolean = false) {
         if (!shareBusy && shareResolver != null && value != url) shareResolver = null
-        val shareFailed = shareBusy && shareResolver?.location(value) != true
+        val shareFailed = shareBusy && shareResolver?.location(value, hasUserGesture) != true
         if (!responseReloadGate.allowLocation(value)) stopVisiblePosts()
         url = value
         kind = PocPolicy.classify(value)
         if (shareFailed) finishShare()
+        val resolver = shareResolver
+        val reload = if (shareBusy) resolver?.pendingAddressReload else null
+        if (reload != null) {
+            val expectedSession = session
+            val expectedChannel = channel
+            // Run after the delegate returns. Recheck every identity and lifecycle guard.
+            lifecycleScope.launch {
+                kotlinx.coroutines.yield()
+                // Do not cancel the first page mid-load: its onPageStop(false) is a real STOP.
+                while (shareBusy && shareResolver === resolver && resolver != null && resolver.active && sharePageLoading) delay(50)
+                if (shareBusy && shareResolver === resolver && session === expectedSession &&
+                    channel === expectedChannel && url == reload && expectedSession != null && expectedChannel != null &&
+                    lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) && resolver != null && resolver.claimAddressReload(reload)) {
+                    expectedChannel.stopShareLinkContext()
+                    sharePortAfterGeneration = expectedChannel.connectionGeneration
+                    shareDocumentAfter = System.currentTimeMillis()
+                    progress = 0
+                    expectedSession.loadUri(reload)
+                }
+            }
+        }
         if (kind == PageKind.APPROVED_GROUP) loginRequested = false
         render()
     }

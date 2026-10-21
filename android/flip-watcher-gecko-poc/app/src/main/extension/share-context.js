@@ -5,8 +5,10 @@
  function create(){let cleanup=null;return {stop(){if(cleanup)cleanup();cleanup=null;},check(w,m,send){
   this.stop();
   const safe=()=>m.consent===true&&typeof m.nonce==='string'&&/^[a-f0-9-]{36}$/.test(m.nonce)&&w.location.href===m.expectedUrl&&allowed(m.expectedUrl,m.groupId,m.fixture===true)&&w.document.visibilityState==='visible'&&!/log in|logowanie|captcha|checkpoint|security check|potwierdź.*tożsamość/i.test(w.document.title||'')&&!w.document.querySelector('input[type="password"],form[action*="login"],iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="captcha"],form[action*="checkpoint"]');
-  const result={type:'shareLinkContextResult',nonce:m.nonce,safe:!!safe(),complete:w.document.readyState==='complete'};
-  if(!result.safe)return result;
+  // Navigation metadata only. An old port delivered late cannot prove a reload.
+  const fresh=m.newDocumentAfter===undefined||(Number.isSafeInteger(m.newDocumentAfter)&&m.newDocumentAfter>=0&&typeof w.performance?.timeOrigin==='number'&&Number.isFinite(w.performance.timeOrigin)&&w.performance.timeOrigin>m.newDocumentAfter);
+  const result={type:'shareLinkContextResult',nonce:m.nonce,safe:!!safe(),complete:w.document.readyState==='complete',fresh:!!fresh};
+  if(!result.safe||!result.fresh)return result;
   let closed=false;const stop=()=>{if(closed)return;closed=true;observer.disconnect();w.clearInterval(timer);w.removeEventListener('pagehide',stop);w.document.removeEventListener('visibilitychange',check);};
   const check=()=>{if(closed)return;if(!safe()){stop();send({type:'shareLinkStop',nonce:m.nonce});}};
   const observer=new w.MutationObserver(check);observer.observe(w.document.documentElement,{subtree:true,childList:true,attributes:true});
