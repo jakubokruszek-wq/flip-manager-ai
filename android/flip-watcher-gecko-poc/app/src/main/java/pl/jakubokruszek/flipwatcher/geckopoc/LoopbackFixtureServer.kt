@@ -16,7 +16,7 @@ import kotlin.concurrent.thread
  * restricted to [a-z0-9-]. Used by the instrumented tests and the screen-off
  * test — never by the Facebook session.
  */
-class LoopbackFixtureServer(private val redirects: Map<String, String> = emptyMap(), private val pages: Map<String, String> = emptyMap(), private val readAsset: (String) -> String?) : AutoCloseable {
+class LoopbackFixtureServer(private val redirects: Map<String, String> = emptyMap(), private val pages: Map<String, String> = emptyMap(), private val onRequest: ((String, String?) -> Unit)? = null, private val readAsset: (String) -> String?) : AutoCloseable {
     private val socket = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
     val port: Int get() = socket.localPort
 
@@ -34,9 +34,13 @@ class LoopbackFixtureServer(private val redirects: Map<String, String> = emptyMa
     private fun serve(client: Socket) {
         val reader = BufferedReader(InputStreamReader(client.getInputStream(), Charsets.UTF_8))
         val requestLine = reader.readLine() ?: return
-        while (true) { val line = reader.readLine() ?: break; if (line.isEmpty()) break }
+        var fixtureUserAgent:String?=null
+        while (true) { val line = reader.readLine() ?: break; if (line.isEmpty()) break
+            if(onRequest!=null&&line.startsWith("User-Agent:",true))fixtureUserAgent=line.substringAfter(':').trim()
+        }
         val target = requestLine.split(" ").getOrNull(1) ?: "/"
         val path = runCatching { URI(target).rawPath }.getOrNull()
+        onRequest?.invoke(path.orEmpty(),fixtureUserAgent)
         val redirect = redirects[path]
         if (redirect != null && redirect.startsWith("/") && !redirect.startsWith("//") && !redirect.contains('\r') && !redirect.contains('\n')) {
             client.getOutputStream().apply { write("HTTP/1.1 302 Found\r\nLocation: $redirect\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n".toByteArray()); flush() }

@@ -52,6 +52,8 @@ class BackgroundChannel {
         runCatching { port?.postMessage(JSONObject().put("type", "abortResponseLoad").put("nonce", nonce)) }
     }
 
+    fun abortDesktop(nonce:String){runCatching{port?.postMessage(JSONObject().put("type","abortDesktop").put("nonce",nonce))}}
+
     fun abortResponses() {
         runCatching { port?.postMessage(JSONObject().put("type", "abortResponse").put("nonce", UUID.randomUUID().toString())) }
     }

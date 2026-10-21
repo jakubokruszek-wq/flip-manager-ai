@@ -1,0 +1,22 @@
+const test=require('node:test'),assert=require('node:assert/strict');
+require('../../../../../../extensions/facebook-collector/collector-core.js');
+const core=globalThis.FlipFacebookCollectorCore,fields=require('../../main/extension/desktop-fields.js'),preview=require('../../main/extension/desktop-preview.js');
+const group='lodzsprzedazzakupwynajem';
+const record=(id='550000000000001',text='Sprzedam mieszkanie na Retkini. 42,42 m2. 2 pokoje. Czynsz 560 zł. Cena 319 000 zł.')=>({postId:id,permalink:`https://www.facebook.com/groups/${group}/posts/${id}/`,text,media:[{}]});
+const model=()=>preview.createModel(core,fields,group);
+test('existing deterministic fields keep rent apart from sale price and potential rooms apart from actual',()=>{
+ const a=fields.previewFields({postText:record().text});assert.equal(a.price,319000);assert.equal(a.area,42.42);assert.equal(a.rooms,2);assert.equal(a.district,'Polesie');assert.equal(a.neighborhood,'Retkinia');
+ const b=fields.previewFields({postText:'Sprzedam 2 pokoje z możliwością przerobienia na 3 pokoje. Cena 399k. Metraż 53m.'});assert.equal(b.rooms,2);assert.equal(b.price,399000);assert.equal(b.area,53);
+ assert.equal(fields.previewFields({postText:'Kupię mieszkanie 50m2 za 350000 zł.'}).price,null);
+ assert.equal(fields.previewFields({postText:'Wynajmę mieszkanie 42m2 cena 2000 zł miesięcznie.'}).price,null);
+ assert.equal(fields.previewFields({postText:'Sprzedam mieszkanie. Górna granica ceny 400000 zł.'}).district,null);
+});
+test('only selected bounded fields leave projection; no text author media URL or token',()=>{const m=model();m.add({...record(),author:'PRIVATE',cookie:'SECRET',token:'PRIVATE'},'NETWORK');const r=m.rows()[0];assert.equal(r.price,319000);assert(!JSON.stringify(r).includes('PRIVATE'));assert(!('text'in r));assert.equal(r.photos,1);});
+test('ids are exact, foreign groups and media and share tokens never become posts',()=>{const m=model();for(const r of [{...record(),postId:'TOKEN'},{...record(),permalink:'https://www.facebook.com/photo/?fbid=550000000000001'},{...record(),permalink:record().permalink.replace(group,'other')},{...record(),permalink:'https://evil.test/groups/'+group+'/posts/550000000000001/'}])m.add(r,'DOM');assert.equal(m.rows().length,0);});
+test('same id merges across layers and conflicting price is cleared instead of guessed',()=>{const m=model();m.add(record(),'DOM');m.add(record(),'HYDRATION');assert.equal(m.rows().length,1);assert.equal(m.rows()[0].layer,'MIXED');m.add(record(undefined,record().text.replace('319 000','329 000')),'NETWORK');assert.equal(m.rows()[0].price,null);assert.equal(m.rows()[0].priceSource,'NONE');assert.equal(m.rows()[0].area,42.42);assert(m.stats.ambiguous>0);});
+test('twenty unique records is a hard cap while duplicate enrichment still works',()=>{const m=model();for(let i=0;i<35;i++)m.add(record(String(550000000000000+i)),'DOM');assert.equal(m.rows().length,20);m.add(record('550000000000001'),'NETWORK');assert.equal(m.rows().length,20);assert(m.stats.duplicates>0);});
+test('hydration reuses exact core bindings and ignores bare ids and foreign posts',()=>{const m=model();m.hydration([JSON.stringify({post_id:'550000000000001',url:record().permalink,message:{text:record().text}}),JSON.stringify({post_id:'550000000000002',message:{text:'PRIVATE'}}),JSON.stringify({post_id:'550000000000003',url:record('550000000000003').permalink.replace(group,'other'),message:{text:'PRIVATE'}})]);assert.equal(m.rows().length,1);assert.equal(m.rows()[0].price,319000);});
+test('projected rows cannot smuggle extra properties and clearing drops all data',()=>{const m=model();m.add(record(),'DOM');const r=m.rows()[0];m.merge({...r,text:'SECRET'});assert.equal(m.stats.rejected,1);m.clear();assert.deepEqual(m.rows(),[]);assert.equal(m.stats.candidates,0);});
+test('approved source URL grammar refuses other group, credentials and external origin',()=>{assert(preview.groupURL('https://www.facebook.com/groups/'+group+'/',group,false));for(const u of ['https://www.facebook.com/groups/other/','https://evil.test/groups/'+group+'/','https://www.facebook.com/groups/'+group+'/?private=1','https://user@www.facebook.com/groups/'+group+'/'])assert.equal(preview.groupURL(u,group,false),false);});
+
+test('existing explicit city guard prevents attributing another city to Łódź districts',()=>{const f=fields.previewFields({postText:'Sprzedam mieszkanie w Warszawie. Polesie. 42m2 cena 319000 zł.'});assert.equal(f.usable,false);assert.equal(f.district,null);assert.equal(f.neighborhood,null)});

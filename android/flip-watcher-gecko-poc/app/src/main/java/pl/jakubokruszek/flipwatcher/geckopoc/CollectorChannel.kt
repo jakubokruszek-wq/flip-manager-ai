@@ -22,9 +22,11 @@ class CollectorChannel(
     private val onPageDisconnect: () -> Unit = onVisibleStop,
     private val onPageConnected: () -> Unit = {},
     private val onShareStop: () -> Unit = {},
+    private val onDesktopStop: () -> Unit = {},
     private val onProbe: (PageProbe) -> Unit = {},
 ) {
     private var shareNonce: String? = null
+    private var desktopNonce: String? = null
     private var port: WebExtension.Port? = null
     private var portReady: CompletableDeferred<Unit> = CompletableDeferred()
     private val pending = HashMap<String, CompletableDeferred<JSONObject?>>()
@@ -43,10 +45,11 @@ class CollectorChannel(
             if (port !== this@CollectorChannel.port) return
             val json = ScanProtocol.asJson(message) ?: return
             when (json.optString("type")) {
+                "desktopPreviewStop" -> if(json.optString("nonce")==desktopNonce)onDesktopStop()
                 "shareLinkStop" -> if (json.optString("nonce") == shareNonce) onShareStop()
                 "visiblePostsStop" -> onVisibleStop()
                 "ready" -> ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
-                "shareLinkContextResult", "mainTransportResult", "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
+                "desktopArmed", "desktopPreviewResult", "shareLinkContextResult", "mainTransportResult", "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                     pending.remove(json.optString("nonce"))?.complete(json)
                 }
@@ -90,6 +93,19 @@ class CollectorChannel(
     }
 
     suspend fun awaitPort(timeoutMs: Long): Boolean = withTimeoutOrNull(timeoutMs) { portReady.await(); true } ?: false
+
+    suspend fun armDesktop(nonce:String,consent:Boolean,group:String=PocPolicy.APPROVED_GROUP_ID,windowMs:Int=60_000):String {
+        if(!consent)return "STOP"
+        desktopNonce=nonce
+        val result=request(nonce,JSONObject().put("type","armDesktopPreview").put("nonce",nonce).put("consent",true).put("desktopConsent",true).put("groupId",group).put("allowLoopback",fixtureMode).put("windowMs",windowMs),5_000)
+        return if(result?.optString("type")=="desktopArmed"&&result.optString("nonce")==nonce)result.optString("status").takeIf{it in setOf("ARMED","STOP","BUSY","UNSUPPORTED")}?:"STOP" else "STOP"
+    }
+    suspend fun desktopPreview(nonce:String,documentAfter:Long,remainingMs:Int,group:String=PocPolicy.APPROVED_GROUP_ID):DesktopReply? {
+        if(desktopNonce!=nonce)return null
+        val result=request(nonce,JSONObject().put("type","desktopPreview").put("nonce",nonce).put("consent",true).put("groupId",group).put("allowLoopback",fixtureMode).put("documentAfter",documentAfter).put("remainingMs",remainingMs),remainingMs.toLong().coerceIn(500,60_000))
+        return DesktopProtocol.parse(result,nonce,group)
+    }
+    fun abortDesktop(){desktopNonce=null;runCatching{port?.postMessage(JSONObject().put("type","abortDesktopPreview").put("nonce",UUID.randomUUID().toString()))}}
 
     suspend fun shareLinkProof(expectedUrl: String, consent: Boolean, newDocumentAfter: Long? = null): ShareContextReply {
         if (!consent) return ShareContextReply.ABSENT
@@ -220,6 +236,7 @@ class CollectorChannel(
     }
 
     fun close() {
+        abortDesktop()
         stopShareLinkContext()
         connectedUrl = null
         port?.let { runCatching { it.disconnect() } }

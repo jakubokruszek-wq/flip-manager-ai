@@ -1,0 +1,45 @@
+package pl.jakubokruszek.flipwatcher.geckopoc
+
+import org.json.JSONObject
+
+/** Transient selected fields only. Never persisted, logged or copied with the count-only report. */
+data class DesktopRow(val postId:String,val permalink:String,val layer:String,val price:Double?,val priceSource:String,val area:Double?,val rooms:Int?,val district:String?,val neighborhood:String?,val street:String?,val intent:String,val usable:Boolean,val photos:Int)
+data class DesktopReply(val status:String,val reason:String,val rows:List<DesktopRow>,val stats:Map<String,Int>)
+object DesktopProtocol {
+    val statKeys=listOf("candidates","dom","hydration","network","duplicates","rejected","ambiguous","scripts","scrollSteps","scrollMoves","requests","bytes","verified","desktop","filtered","completed","streamErrors","decodeErrors","oversize","limitSkipped","articles","mobile")
+    private val rowKeys=setOf("postId","permalink","layer","price","priceSource","area","rooms","district","neighborhood","street","intent","usable","photos")
+    val intents=setOf("SELL_PROPERTY","BUY_PROPERTY","RENT_OFFER","RENT_WANTED","SERVICE","OTHER","UNKNOWN")
+    fun parse(message:Any?,nonce:String,group:String=PocPolicy.APPROVED_GROUP_ID):DesktopReply? = runCatching {
+        val j=ScanProtocol.asJson(message)?:return null
+        if(j.keys().asSequence().toSet()!=setOf("type","nonce","status","reason","rows","stats")||j.opt("type")!="desktopPreviewResult"||j.opt("nonce")!=nonce)return null
+        val status=j.optString("status");val reason=j.optString("reason")
+        if(status !in setOf("OK","STOP","WAIT_FRESH")||reason !in setOf("DONE","CONTEXT","ERROR","BUSY","FRESHNESS"))return null
+        if((status=="OK")!=(reason=="DONE")||(status=="WAIT_FRESH")!=(reason=="FRESHNESS"))return null
+        val stats=parseStats(j.getJSONObject("stats"))?:return null
+        val a=j.getJSONArray("rows");if(a.length()>20||(status!="OK"&&a.length()!=0))return null
+        if(status=="OK"&&stats.getValue("verified")!=1)return null
+        val seen=HashSet<String>();val rows=(0 until a.length()).map {i->
+            val r=a.getJSONObject(i);if(r.keys().asSequence().toSet()!=rowKeys)return null
+            val id=r.getString("postId");val link=r.getString("permalink")
+            if(!Regex("^[0-9]{5,30}$").matches(id)||link!="https://www.facebook.com/groups/$group/posts/$id/"||!seen.add(id))return null
+            fun num(key:String,min:Double,max:Double):Double? {if(r.isNull(key))return null;val v=r.get(key);require(v is Number);val n=v.toDouble();require(n.isFinite()&&n in min..max);return n}
+            fun text(key:String,max:Int):String? {if(r.isNull(key))return null;val v=r.get(key);require(v is String&&v.length in 1..max&&!Regex("https?://|[\\p{Cc}]").containsMatchIn(v));return v}
+            val price=num("price",1.0,20_000_000.0);val area=num("area",1.0,9999.0);val rooms=num("rooms",1.0,20.0)
+            if(rooms!=null&&rooms%1.0!=0.0)return null
+            val source=r.getString("priceSource");if(source !in setOf("NONE","EXPLICIT_TOTAL","THOUSANDS_TOTAL","DERIVED_FROM_PRICE_PER_M2")||(price==null)!=(source=="NONE"))return null
+            val layer=r.getString("layer");if(layer !in setOf("DOM","HYDRATION","NETWORK","MIXED"))return null
+            val intent=r.getString("intent");if(intent !in intents||r.opt("usable") !is Boolean||r.opt("photos") !is Int||r.getInt("photos") !in 0..20)return null
+            val district=text("district",30);if(district!=null&&district !in setOf("Bałuty","Widzew","Polesie","Śródmieście","Górna"))return null
+            DesktopRow(id,link,layer,price,source,area,rooms?.toInt(),district,text("neighborhood",40),text("street",80),intent,r.getBoolean("usable"),r.getInt("photos"))
+        }
+        if(stats.getValue("candidates")!=rows.size)return null
+        DesktopReply(status,reason,rows,stats)
+    }.getOrNull()
+    fun parseStats(j:JSONObject):Map<String,Int>? {
+        if(j.keys().asSequence().toSet()!=statKeys.toSet())return null
+        val result=statKeys.associateWith{key->val v=j.opt(key);if(v !is Int||v<0||v>(if(key=="bytes")4194304 else 10000))return null;v}
+        if(result.getValue("candidates")>20||result.getValue("verified")>1||result.getValue("desktop")>1||result.getValue("scrollSteps")>5||result.getValue("scrollMoves")>result.getValue("scrollSteps"))return null
+        return result
+    }
+    fun emptyStats()=statKeys.associateWith{0}
+}

@@ -424,10 +424,24 @@
   }
   const shareContext=scope.FlipShareContext.create();
   let activeResponseAbort=null;
-  port.onDisconnect.addListener(()=>{shareContext.stop();if(activeLoadAbort)activeLoadAbort();clearLoadWatch();if(activeResponseAbort)activeResponseAbort();void browser.runtime.sendMessage({type:"stopResponse",nonce:activeResponseNonce}).catch(()=>{});});
+  port.onDisconnect.addListener(()=>{if(activeDesktopAbort)activeDesktopAbort();shareContext.stop();if(activeLoadAbort)activeLoadAbort();clearLoadWatch();if(activeResponseAbort)activeResponseAbort();void browser.runtime.sendMessage({type:"stopResponse",nonce:activeResponseNonce}).catch(()=>{});});
+  let activeDesktopAbort=null;
+  let desktopRunning=false;
   let activeResponseNonce="";
   port.onMessage.addListener(async message => {
     if (!message || typeof message !== "object" || typeof message.nonce !== "string") return;
+    if(message.type==='abortDesktopPreview'){if(activeDesktopAbort)activeDesktopAbort();return;}
+    if(message.type==='armDesktopPreview'){
+      const ack=message.consent===true&&message.desktopConsent===true&&responsePageSafe(message)?await browser.runtime.sendMessage({type:'armDesktop',nonce:message.nonce,consent:true,desktopConsent:true,groupId:message.groupId,fixture:message.allowLoopback===true,windowMs:message.windowMs}):{status:'STOP'};
+      port.postMessage({type:'desktopArmed',nonce:message.nonce,status:ack?.status||'STOP'});return;
+    }
+    if(message.type==='desktopPreview'){
+      if(desktopRunning){port.postMessage({type:'desktopPreviewResult',nonce:message.nonce,status:'STOP',reason:'BUSY',rows:[],stats:scope.FlipDesktopPreview.zero()});return;}
+      desktopRunning=true;
+      try{const result=await scope.FlipDesktopPreview.run(scope,message,core,scope.FlipDesktopFields,responsePageSafe,m=>browser.runtime.sendMessage(m),f=>{activeDesktopAbort=f;},m=>{try{port.postMessage(m);}catch{}});
+        port.postMessage({type:'desktopPreviewResult',nonce:message.nonce,...result});
+      }finally{desktopRunning=false;activeDesktopAbort=null;}return;
+    }
     if(message.type==="stopShareLinkContext"){shareContext.stop();return;}
     if(message.type==="shareLinkContext"){port.postMessage(shareContext.check(scope,message,m=>{try{port.postMessage(m);}catch{}}));return;}
     if(message.type==="abortResponseDiagnosis"){if(activeLoadAbort)activeLoadAbort();clearLoadWatch();if(activeResponseAbort)activeResponseAbort();return;}

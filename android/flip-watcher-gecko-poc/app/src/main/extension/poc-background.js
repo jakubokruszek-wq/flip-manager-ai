@@ -73,7 +73,10 @@
     appPort.onMessage.addListener(message => {
       if (!message || typeof message !== "object" || typeof message.nonce !== "string") return;
       const reply = value => { try { appPort.postMessage({ nonce: message.nonce, ...value }); } catch { /* app gone */ } };
-      if (message.type === "abortResponse") {
+      if (message.type === "abortDesktop") {
+        scope.FlipDesktopBackground?.abort(message);
+        reply({type:"abortDesktopResult"});
+      } else if (message.type === "abortResponse") {
         scope.FlipResponseDiagnosis?.abort();
         scope.FlipMainTransport?.abort();
         reply({type:"abortResponseResult"});
@@ -93,6 +96,7 @@
     });
     appPort.onDisconnect.addListener(() => {
       // App or runtime went away: drop any pending measurement.
+      scope.FlipDesktopBackground?.abortAll();
       loadCounter.abort();
       scope.FlipResponseDiagnosis?.abort();
         scope.FlipMainTransport?.abort();

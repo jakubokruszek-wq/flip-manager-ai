@@ -73,6 +73,15 @@ class PocActivity : ComponentActivity() {
     private var scanning = false
     private var visibleEpoch = 0L
     private var visibleBusy = false
+    private var desktopBusy=false
+    private var desktopGate:DesktopTrial?=null
+    private var desktopNonce:String?=null
+    private var desktopJob:Job?=null
+    private var desktopConsentDialog:AlertDialog?=null
+    internal var desktopResultDialog:AlertDialog?=null; private set
+    private var desktopRows:List<DesktopRow> = emptyList()
+    private var desktopResultText:TextView?=null
+    private val desktopPrefs by lazy { getSharedPreferences("desktop_trial_summary_v1",MODE_PRIVATE) }
     private var shareResolver: ShareLinkResolver? = null
     internal var lastShareResultDialog: AlertDialog? = null; private set
     private val shareResults by lazy { ShareLinkResultStore(this) }
@@ -119,6 +128,8 @@ class PocActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        desktopConsentDialog?.dismiss();desktopConsentDialog=null
+        finishDesktop("PAUSED",show=false);clearDesktopDetails()
         shareDialog?.dismiss(); shareDialog = null
         lastShareResultDialog?.dismiss(); lastShareResultDialog = null
         finishShare("PAUSED", clear = true)
@@ -168,6 +179,65 @@ class PocActivity : ComponentActivity() {
                 getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("Raport linku", text))
             }.create()
         lastShareResultDialog?.show()
+    }
+
+    private fun startDesktopPreview(){
+        if(desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||kind!=PageKind.APPROVED_GROUP||progress!=100||channel?.isConnected!=true)return
+        val currentSession=session?:return;val currentChannel=channel?:return;val target=url?:return
+        desktopConsentDialog=AlertDialog.Builder(this).setTitle("Jedna próba komputerowa — lokalnie")
+            .setMessage("NOWA JEDNORAZOWA ZGODA: przełączyć tę sesję na standardowy tryb komputerowy GeckoView i raz otworzyć zatwierdzoną grupę? Do 60 s łącznie, 20 unikalnych postów i 5 przewinięć. Odczyt widocznego DOM, danych strony i odpowiedzi fetch/XHR/other tej grupy: do 16 odpowiedzi, 2 MiB każda, 4 MiB łącznie. Nasłuch zostanie uzbrojony PRZED otwarciem. Bez odczytu Beacon, nagłówków, wysyłanych formularzy, cookies lub tokenów. Pełne treści tylko przejściowo w ograniczonym RAM rozszerzenia. Podgląd pokazuje dokładne ID/permalinki oraz heurystyczne pola i liczbę zdjęć. Dane podglądu nie są zapisywane i znikają po pauzie. Lokalnie zostaje wyłącznie raport status/liczniki, bez ID i treści. Bez uploadu, backendu i produkcyjnego kolektora; nie resetuje starego limitu skanu. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu lub wygaszenie: STOP. Tryb komputerowy pozostaje w tej sesji do jej zamknięcia. Zgoda nie jest zapamiętywana.")
+            .setNegativeButton("Anuluj",null).setPositiveButton("Zgadzam się — uruchom próbę"){_,_->
+                if(!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)||session!==currentSession||channel!==currentChannel||url!=target||kind!=PageKind.APPROVED_GROUP||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||progress!=100||!currentChannel.isConnected)return@setPositiveButton
+                stopVisiblePosts();finishShare("CANCELLED",clear=true);clearDesktopDetails()
+                val gate=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()})
+                if(!gate.begin(true)){publishDesktop(DesktopSummary.create("NO_CONSENT_OR_CONTEXT",0),emptyList());return@setPositiveButton}
+                desktopGate=gate;desktopBusy=true;desktopRows=emptyList();desktopNonce=UUID.randomUUID().toString();render()
+                desktopJob=lifecycleScope.launch{
+                    val result=DesktopSessionPreview.run(currentSession,currentChannel,gate,desktopNonce!!,target,{url})
+                    if(desktopGate===gate&&desktopBusy){userAgent=result.userAgent;finishDesktop(result.reason,result.reply)}
+                }
+            }.create()
+        desktopConsentDialog?.setOnDismissListener{desktopConsentDialog=null}
+        desktopConsentDialog?.show()
+    }
+    private fun finishDesktop(reason:String,reply:DesktopReply?=null,show:Boolean=true){
+        if(!desktopBusy)return
+        val gate=desktopGate;gate?.stop(reason)
+        desktopBusy=false;desktopJob?.cancel();desktopJob=null
+        desktopNonce?.let{GeckoHost.background.abortDesktop(it)};desktopNonce=null;channel?.abortDesktop()
+        if(reason!="DONE")session?.stop()
+        val summary=DesktopSummary.create(reason,gate?.requests?:0,reply)
+        publishDesktop(summary,if(reason=="DONE")reply?.rows?:emptyList() else emptyList(),show)
+        render()
+    }
+    internal fun publishDesktop(summary:DesktopSummary,rows:List<DesktopRow>,show:Boolean=true){
+        desktopRows=rows.take(20)
+        val saved=runCatching{desktopPrefs.edit().putString("last",summary.encode()).commit()}.getOrDefault(false)
+        output.text=summary.report()+if(saved)"" else "\nUWAGA: nie zapisano raportu; skopiuj teraz."
+        if(show&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))showDesktopResult(summary)
+    }
+    private fun clearDesktopDetails(){desktopRows=emptyList();desktopResultText?.text="";desktopResultText=null;desktopResultDialog?.dismiss();desktopResultDialog=null}
+    private fun showDesktopResult(value:DesktopSummary?=DesktopSummary.decode(desktopPrefs.getString("last",null))){
+        desktopResultDialog?.dismiss();desktopResultText?.text="";desktopResultText=null
+        val report=value?.report()?:"Brak zakończonej próby komputerowej. Dotychczasowe raporty linków pozostają w archiwum."
+        val preview=buildString{
+            append(report)
+            if(desktopRows.isNotEmpty()){
+                append("\n\nPODGLĄD TYLKO W RAM — pola są heurystyczne:\n")
+                for((i,row) in desktopRows.withIndex()){
+                    append("\n${i+1}. ID: ${row.postId} • ${row.layer}\n${row.permalink}\n")
+                    append("Cena: ${row.price?:"—"} zł (${row.priceSource}) • ${row.area?:"—"} m² • pokoje: ${row.rooms?:"—"}\n")
+                    append("${row.district?:"—"} / ${row.neighborhood?:"—"} / ${row.street?:"—"} • zdjęcia: ${row.photos}\n")
+                    append("Intencja: ${row.intent} • kandydat po filtrach: ${DesktopSummary.eligible(row)}\n")
+                }
+            }else if(value!=null)append("\n\nPodgląd danych jest dostępny tylko na pierwszym planie po próbie; nie jest odtwarzany z historii.")
+        }
+        val text=TextView(this).apply{text=preview;textSize=14f;setPadding(20,12,20,12)}
+        desktopResultText=text
+        desktopResultDialog=AlertDialog.Builder(this).setTitle("Wynik próby komputerowej").setView(ScrollView(this).apply{addView(text)})
+            .setPositiveButton("Wróć do Facebooka",null)
+            .setNeutralButton("Kopiuj raport (bez ID)"){_,_->getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("Raport próby komputerowej",report))}.create()
+        desktopResultDialog?.show()
     }
 
     private fun checkSharedLink() {
@@ -353,7 +423,7 @@ class PocActivity : ComponentActivity() {
         val ext = extension ?: run { output.text = "Rozszerzenie kolektora nie jest gotowe: ${extensionError ?: "instalacja w toku"}"; return }
         // Default settings: normal mobile Firefox user agent, JavaScript and cookies as in the browser. No override, no spoofing.
         val newSession = GeckoSession(GeckoSessionSettings.Builder().build())
-        val newChannel = CollectorChannel(newSession, fixtureMode = false, onVisibleStop = { stopVisiblePosts() }, onPageDisconnect = { shareResolver?.disconnected(); if (!responseReloadGate.allowOldDisconnect()) stopVisiblePosts(); if (shareBusy && shareResolver?.active != true) finishShare() }, onPageConnected = { responseReloadGate.connected() }, onShareStop = { if (shareBusy) finishShare("UNSAFE_DOCUMENT") }) { value -> probe = value; render() }
+        val newChannel = CollectorChannel(newSession, fixtureMode = false, onVisibleStop = { stopVisiblePosts() }, onPageDisconnect = { if(desktopBusy&&desktopGate?.phase==DesktopTrial.Phase.READING)finishDesktop("PORT_LOST"); shareResolver?.disconnected(); if (!responseReloadGate.allowOldDisconnect()) stopVisiblePosts(); if (shareBusy && shareResolver?.active != true) finishShare() }, onPageConnected = { responseReloadGate.connected() }, onShareStop = { if (shareBusy) finishShare("UNSAFE_DOCUMENT") }, onDesktopStop={if(desktopBusy)finishDesktop("CONTEXT")}) { value -> probe = value; render() }
         newChannel.attach(ext)
         newSession.progressDelegate = progressDelegate
         newSession.contentDelegate = contentDelegate
@@ -369,6 +439,7 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun closeSession() {
+        finishDesktop("CANCELLED",show=false);clearDesktopDetails()
         finishShare("SESSION_CLOSED", clear = true)
         stopVisiblePosts()
         channel?.close()
@@ -739,6 +810,7 @@ class PocActivity : ComponentActivity() {
         }
 
         override fun onPageStop(session: GeckoSession, success: Boolean) {
+            if(!success&&desktopBusy)finishDesktop("LOAD_ERROR")
             if (shareBusy) sharePageLoading = false
             if (!success && shareBusy) finishShare("LOAD_ERROR")
             if (!success && responseBusy) stopVisiblePosts()
@@ -756,6 +828,7 @@ class PocActivity : ComponentActivity() {
     private val contentDelegate = object : GeckoSession.ContentDelegate {
         override fun onTitleChange(session: GeckoSession, title: String?) {
             if (shareBusy && Regex("log in|logowanie|captcha|checkpoint|security check|potwierdź.*tożsamość", RegexOption.IGNORE_CASE).containsMatchIn(title.orEmpty())) finishShare("VERIFICATION_OR_LOGIN")
+            if(Regex("log in|logowanie|captcha|checkpoint|security check|potwierdź.*tożsamość",RegexOption.IGNORE_CASE).containsMatchIn(title.orEmpty())){if(desktopBusy)finishDesktop("CONTEXT") else if(desktopRows.isNotEmpty())clearDesktopDetails()}
             this@PocActivity.title = title?.take(120)
             render()
         }
@@ -771,6 +844,7 @@ class PocActivity : ComponentActivity() {
         }
 
         override fun onLoadRequest(session: GeckoSession, request: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny> {
+            if(desktopBusy&&desktopGate?.request(request.uri,request.isRedirect,request.target==GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW,request.hasUserGesture)!=true){finishDesktop("NAVIGATION");return GeckoResult.fromValue(AllowOrDeny.DENY)}
             val resolver = shareResolver
             if (shareBusy && resolver != null && !resolver.request(request.uri, request.isRedirect, request.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW, request.hasUserGesture)) {
                 finishShare(); return GeckoResult.fromValue(AllowOrDeny.DENY)
@@ -794,6 +868,7 @@ class PocActivity : ComponentActivity() {
         }
 
         override fun onLoadError(session: GeckoSession, uri: String?, error: WebRequestError): GeckoResult<String>? {
+            if(desktopBusy)finishDesktop("LOAD_ERROR")
             if (shareBusy) finishShare("LOAD_ERROR")
             if (responseBusy) stopVisiblePosts()
             lastLoadError = "kategoria ${error.category}, kod ${error.code} (${PocPolicy.sanitize(uri)})"
@@ -803,6 +878,8 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun onUrl(value: String?, hasUserGesture: Boolean = false) {
+        if(desktopBusy&&(hasUserGesture||desktopGate?.location(value)!=true))finishDesktop("NAVIGATION")
+        if(!desktopBusy&&value!=url)clearDesktopDetails()
         if (!shareBusy && shareResolver != null && value != url) shareResolver = null
         val shareFailed = shareBusy && shareResolver?.location(value, hasUserGesture) != true
         if (!responseReloadGate.allowLocation(value)) stopVisiblePosts()
@@ -844,11 +921,12 @@ class PocActivity : ComponentActivity() {
     private fun render() {
         if (!::banner.isInitialized) return
         val open = session != null
-        val stop = haltMessage ?: if (open && !shareBusy && shareResolver?.status != ShareLinkResolver.Status.CONFIRMED) PocPolicy.stopMessage(kind, loginRequested) else null
+        val stop = haltMessage ?: if (open && !desktopBusy && !shareBusy && shareResolver?.status != ShareLinkResolver.Status.CONFIRMED) PocPolicy.stopMessage(kind, loginRequested) else null
         banner.text = when {
             stop != null -> stop
             !open -> "Sesja zamknięta. „Otwórz sesję” uruchamia przeglądarkę tylko dla grupy ${PocPolicy.APPROVED_GROUP_ID}."
             loginRequested && kind == PageKind.LOGIN -> "Logowanie ręczne na stronie Facebooka. Po zalogowaniu użyj „Wróć do grupy”."
+            desktopBusy -> "Jedna próba komputerowa • ${desktopGate?.phase} • tylko lokalnie"
             shareBusy -> "Sprawdzanie jednego linku: do 20 s. Bez skanu."
             responseBusy -> if (responseReloadGate.active) "Trwa diagnostyka od otwarcia (25 s)." else "Trwa lokalna diagnostyka odpowiedzi (15 s)."
             shareResolver?.status == ShareLinkResolver.Status.CONFIRMED -> "Link zatwierdzonej grupy potwierdzony. Bez skanu."
@@ -860,11 +938,11 @@ class PocActivity : ComponentActivity() {
         }
         banner.setBackgroundColor(if (stop != null) Color.parseColor("#B3261E") else Color.parseColor("#1E5AA8"))
 
-        val canScan = open && !shareBusy && !responseBusy && !scanning && stop == null && !preferences.getBoolean(KEY_ONE_SCAN_USED, false) && PocPolicy.canScan(kind) && channel?.isConnected == true
+        val canScan = open && !desktopBusy && !shareBusy && !responseBusy && !scanning && stop == null && !preferences.getBoolean(KEY_ONE_SCAN_USED, false) && PocPolicy.canScan(kind) && channel?.isConnected == true
         buttons["open"]?.text = if (open) "Zamknij sesję" else "Otwórz sesję"
-        listOf("group", "login", "back").forEach { buttons[it]?.isEnabled = open && !scanning }
+        listOf("group", "login", "back").forEach { buttons[it]?.isEnabled = open && !desktopBusy && !scanning }
         listOf("scan", "scan3").forEach { buttons[it]?.isEnabled = canScan }
-        buttons["responses"]?.isEnabled = open && !responseBusy && !visibleBusy && !scanning && !inspectingDom && kind == PageKind.APPROVED_GROUP && progress == 100 && channel?.isConnected == true
+        buttons["responses"]?.isEnabled = open && !desktopBusy && !responseBusy && !visibleBusy && !scanning && !inspectingDom && kind == PageKind.APPROVED_GROUP && progress == 100 && channel?.isConnected == true
         buttons["mainTransport"]?.isEnabled = buttons["responses"]?.isEnabled == true
         buttons["document"]?.isEnabled = buttons["responses"]?.isEnabled == true
         buttons["responseLoad"]?.isEnabled = buttons["responses"]?.isEnabled == true
@@ -874,7 +952,8 @@ class PocActivity : ComponentActivity() {
             kind == PageKind.APPROVED_GROUP && channel?.isConnected == true
 
         buttons["sharedLink"]?.isEnabled = buttons["responses"]?.isEnabled == true
-        buttons["tools"]?.isEnabled = !shareBusy && !responseBusy && !visibleBusy && !scanning && !inspectingDom && !measuringLoad
+        buttons["desktopPreview"]?.isEnabled = buttons["responses"]?.isEnabled == true
+        buttons["tools"]?.isEnabled = !desktopBusy && !shareBusy && !responseBusy && !visibleBusy && !scanning && !inspectingDom && !measuringLoad
         val p = probe
         diagnostics.text = buildString {
             appendLine("STAN: ${banner.text}")
@@ -982,7 +1061,15 @@ class PocActivity : ComponentActivity() {
             addView(TextView(this@PocActivity).apply { text = "Raport i stan sesji"; textSize = 16f })
             addView(info)
         }
-        val menuScroll = ScrollView(this).apply { addView(toolPanel) }
+        toolPanel.visibility=View.GONE
+        val mainTools=LinearLayout(this).apply{
+            orientation=LinearLayout.VERTICAL
+            addView(row(button("desktopPreview","Próba komputerowa • podgląd"){startDesktopPreview()}))
+            addView(row(button("desktopResult","Wynik próby komputerowej"){showDesktopResult()}))
+            addView(row(Button(this@PocActivity).apply{text="Archiwum narzędzi";setOnClickListener{toolPanel.visibility=if(toolPanel.visibility==View.VISIBLE)View.GONE else View.VISIBLE}}))
+            addView(toolPanel)
+        }
+        val menuScroll = ScrollView(this).apply { addView(mainTools) }
         diagnosticsDialog = AlertDialog.Builder(this).setTitle("Narzędzia i raport")
             .setView(menuScroll).setNegativeButton("Wróć do Facebooka", null).create()
         val root = LinearLayout(this).apply {
