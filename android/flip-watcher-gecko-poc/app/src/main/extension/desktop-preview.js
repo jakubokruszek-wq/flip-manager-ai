@@ -38,7 +38,8 @@ function createModel(core,fields,group){
     old[k]=bad.has(k)?null:old[k]??row[k];
    }
    if(bad.has('price'))old.priceSource='NONE';else if(old.priceSource==='NONE')old.priceSource=row.priceSource;
-   if(old.intent!==row.intent){old.intent='UNKNOWN';old.usable=false;bad.add('intent');}
+   if(old.intent!==row.intent&&old.intent!=='UNKNOWN'&&row.intent!=='UNKNOWN'){old.intent='UNKNOWN';old.usable=false;bad.add('intent');}
+   else if(old.intent==='UNKNOWN'&&!bad.has('intent'))old.intent=row.intent;
    if(!bad.has('intent'))old.usable=old.usable||row.usable;
    old.photos=Math.max(old.photos,row.photos);if(old.layer!==row.layer)old.layer='MIXED';blocked.set(row.postId,bad);
   }else rows.set(row.postId,{...row});
@@ -53,6 +54,34 @@ function createModel(core,fields,group){
  }
  return {add,merge,hydration,stats,rows:()=>[...rows.values()].map(r=>({...r})),clear(){rows.clear();blocked.clear();Object.assign(stats,zero());}};
 }
+// Same semantic feed candidates as the desktop extension, plus their bounded ancestors.
+// Never scroll dialogs, comments or an arbitrary overflow widget.
+function scrollContainer(w){
+ const doc=w.document,root=doc.scrollingElement;
+ const cards=Array.from(doc.querySelectorAll('[role="article"],article')).filter(c=>!c.parentElement?.closest('[role="article"],article')).slice(0,100);
+ const candidates=new Set([root,...Array.from(doc.querySelectorAll('[role="feed"],[data-pagelet*="Feed"]')).slice(0,20)]);
+ for(const card of cards)for(let p=card.parentElement,depth=0;p&&depth<8;depth++,p=p.parentElement)candidates.add(p);
+ const usable=[];
+ for(const node of candidates){
+  if(!node||node.isConnected===false||node.scrollHeight-node.clientHeight<32||node.clientHeight<100)continue;
+  const style=w.getComputedStyle?.(node);if(style&&/hidden|clip/.test(style.overflowY))continue;
+  if(node!==root){
+   if(!style||!['auto','scroll','overlay'].includes(style.overflowY)||node.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]'))continue;
+   const rect=node.getBoundingClientRect();
+   if(rect.width<250||rect.bottom<=0||rect.top>=w.innerHeight||rect.right<=0||rect.left>=w.innerWidth||!cards.some(c=>node.contains(c)))continue;
+  }
+  usable.push({node,count:cards.filter(c=>node===root||node.contains(c)).length});
+ }
+ usable.sort((a,b)=>b.count-a.count||(a.node===root?-1:b.node===root?1:0)||b.node.clientHeight-a.node.clientHeight);
+ return usable[0]?.node||null;
+}
+function ownMessageText(card){
+ const selector='[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="message"]';
+ const texts=new Set(Array.from(card.querySelectorAll(selector)).filter(n=>n.closest('[role="article"],article')===card&&!n.closest('[role="comment"],[data-testid*="comment"],[data-ad-rendering-role*="comment"]'))
+  .map(n=>String(n.innerText||n.textContent||'').trim()).filter(Boolean));
+ // Identical nested markers are one message. Distinct messages stay ambiguous.
+ return texts.size===1?[...texts][0].slice(0,12000):'';
+}
 function readDOM(w,model,core,group){
  let bytes=0;const texts=[];for(const s of Array.from(w.document.querySelectorAll('script:not([src])')).slice(0,120)){
   const t=s.textContent||'';if(!t||t.length>524288||bytes+t.length>2097152)continue;bytes+=t.length;texts.push(t);
@@ -63,8 +92,7 @@ function readDOM(w,model,core,group){
  for(const card of cards){const links=Array.from(card.querySelectorAll('a[href]')).filter(a=>a.closest('[role="article"],article')===card).slice(0,100).map(a=>core.parsePostLink(a.href)).filter(Boolean);
   const own=links.filter(l=>l.sourceType==='GROUP'&&l.sourceId===group),ids=[...new Set(own.map(l=>l.postId))];
   if(ids.length!==1||links.some(l=>l.sourceType!=='GROUP'||l.sourceId!==group)){if(ids.length)model.stats.ambiguous++;continue;}
-  const messages=Array.from(card.querySelectorAll('[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"]')).filter(n=>n.closest('[role="article"],article')===card);
-  const text=messages.length===1?String(messages[0].innerText||messages[0].textContent||'').slice(0,12000):'';
+  const text=ownMessageText(card);
   const photos=Array.from(card.querySelectorAll('img')).filter(n=>n.closest('[role="article"],article')===card&&n.getBoundingClientRect().width>=200&&n.getBoundingClientRect().height>=100).slice(0,20).map(()=>({}));
   model.add({postId:ids[0],permalink:own[0].permalink,text,media:photos},'DOM');
  }
@@ -84,10 +112,17 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{}){
   const active=async()=>{if(invalid||!safe(m)||w.performance.now()>=end)return false;const c=await send({type:'desktopContext',nonce:m.nonce});return !invalid&&safe(m)&&c?.active===true&&c.nonce===m.nonce;};
   for(let step=0;step<=5;step++){
    if(!await active())return empty('CONTEXT');readDOM(w,model,core,m.groupId);if(model.stats.candidates>=20||step===5)break;
-   const doc=w.document,container=doc.scrollingElement;if(!container)break;
-   const before=w.scrollY;w.scrollBy({left:0,top:Math.max(400,Math.min(900,Math.round(w.innerHeight*.85))),behavior:'instant'});
-   model.stats.scrollSteps++;if(w.scrollY!==before)model.stats.scrollMoves++;
-   await pause(500); // bounded desktop cadence, then allow late hydration/network to settle
+   let container=scrollContainer(w);
+   // A freshly loaded feed can acquire its scroll extent after content_idle.
+   for(let wait=0;!container&&wait<5;wait++){await pause(500);if(!await active())return empty('CONTEXT');container=scrollContainer(w);}
+   if(!container)break;
+   const root=container===w.document.scrollingElement;
+   const before=root?w.scrollY:container.scrollTop;
+   const top=Math.max(400,Math.min(900,Math.round((root?w.innerHeight:container.clientHeight)*.85)));
+   if(root)w.scrollBy({left:0,top,behavior:'instant'});else container.scrollBy({left:0,top,behavior:'instant'});
+   model.stats.scrollSteps++;
+   await pause(500); // measure after rendering, not immediately after scrollBy
+   if((root?w.scrollY:container.scrollTop)>before)model.stats.scrollMoves++;
   }
   await pause(700);if(!await active())return empty('CONTEXT');readDOM(w,model,core,m.groupId);
   const result=await send({type:'readDesktop',nonce:m.nonce});if(invalid||!safe(m)||result?.status!=='OK')return empty('CONTEXT');
@@ -99,5 +134,5 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{}){
  }catch{return empty('ERROR');}
  finally{setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
-const api={groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
+const api={scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);
