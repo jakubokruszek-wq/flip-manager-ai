@@ -58,9 +58,20 @@ fi
 if grep -R -n -E "Log\.[dviwe]\(" "$src" --include='*.kt'; then
   echo "FAIL: logging in app sources (URLs or page data could leak to logcat)"; exit 1
 fi
-if grep -R -n -E "userAgentOverride|USER_AGENT_MODE_DESKTOP" "$src" --include='*.kt'; then
-  echo "FAIL: the browser identity must not be overridden"; exit 1
+if grep -R -n -E "userAgentOverride" "$src" --include='*.kt'; then
+  echo "FAIL: a fabricated browser identity must not be supplied"; exit 1
 fi
+
+# Only the freshly consented desktop runner may select Gecko's official desktop mode.
+if grep -R -n -E "USER_AGENT_MODE_DESKTOP|userAgentMode[[:space:]]*=" "$src" --include='*.kt' --exclude='DesktopSessionPreview.kt'; then
+  echo "FAIL: desktop mode outside the explicit local trial"; exit 1
+fi
+node - "$src/java/pl/jakubokruszek/flipwatcher/geckopoc/DesktopSessionPreview.kt" <<'NODE'
+const s=require('node:fs').readFileSync(process.argv[2],'utf8');
+const assignments=s.match(/session\.settings\.userAgentMode\s*=(?!=)[^\n]+/g)||[];
+if(assignments.length!==1 || assignments[0]!=="session.settings.userAgentMode=GeckoSessionSettings.USER_AGENT_MODE_DESKTOP")process.exit(1);
+if(!s.includes('channel.armDesktop(nonce,true,group,windowMs)') || !s.includes('VIEWPORT_MODE_DESKTOP'))process.exit(1);
+NODE
 
 git diff --quiet "$base"...HEAD -- extensions/facebook-collector/collector-core.js || { echo "FAIL: collector-core.js changed"; exit 1; }
 echo "OK: POC isolated, no backend, collector-core.js unchanged"

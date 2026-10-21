@@ -92,7 +92,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{}){
   await pause(700);if(!await active())return empty('CONTEXT');readDOM(w,model,core,m.groupId);
   const result=await send({type:'readDesktop',nonce:m.nonce});if(invalid||!safe(m)||result?.status!=='OK')return empty('CONTEXT');
   for(const row of result.rows||[])model.merge(row);
-  for(const k of ['network','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile'])model.stats[k]=result.stats?.[k]||0;
+  for(const k of ['network','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped'])model.stats[k]=result.stats?.[k]||0;
   model.stats.desktop=w.innerWidth>=900?1:0;
   for(const k of statKeys)model.stats[k]=Math.max(0,Math.min(k==='bytes'?4194304:10000,Math.floor(model.stats[k])));
   return {status:'OK',reason:'DONE',rows:model.rows(),stats:{...model.stats}};
