@@ -65,6 +65,8 @@ function scrollContainer(w){
  for(const node of candidates){
   if(!node||node.isConnected===false||node.scrollHeight-node.clientHeight<32||node.clientHeight<100)continue;
   const style=w.getComputedStyle?.(node);if(style&&/hidden|clip/.test(style.overflowY))continue;
+  // With HTML overflow=visible, BODY overflow propagates to the viewport.
+  if(node===root&&doc.body&&root!==doc.body&&/hidden|clip/.test(w.getComputedStyle?.(doc.body)?.overflowY||''))continue;
   if(node!==root){
    if(!style||!['auto','scroll','overlay'].includes(style.overflowY)||node.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]'))continue;
    const rect=node.getBoundingClientRect();
@@ -78,7 +80,7 @@ function scrollContainer(w){
 function ownMessageText(card){
  const selector='[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="message"]';
  const texts=new Set(Array.from(card.querySelectorAll(selector)).filter(n=>n.closest('[role="article"],article')===card&&!n.closest('[role="comment"],[data-testid*="comment"],[data-ad-rendering-role*="comment"]'))
-  .map(n=>String(n.innerText||n.textContent||'').trim()).filter(Boolean));
+  .map(n=>String(n.innerText||n.textContent||'').replace(/\s+/g,' ').trim()).filter(Boolean));
  // Identical nested markers are one message. Distinct messages stay ambiguous.
  return texts.size===1?[...texts][0].slice(0,12000):'';
 }
