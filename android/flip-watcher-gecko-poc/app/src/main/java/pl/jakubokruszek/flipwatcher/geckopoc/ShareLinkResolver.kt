@@ -16,6 +16,7 @@ class ShareLinkResolver(
     private var target: String? = null
     private var requested: String? = null
     private var location: String? = null
+    private var previousDocument: String? = null
     private var deadline = 0L
     val active: Boolean get() = status == Status.ACTIVE
 
@@ -30,10 +31,15 @@ class ShareLinkResolver(
         val u = uri(raw) ?: return false
         return exact(u) || (share(u) && u.rawPath?.trimEnd('/') == target?.let(::uri)?.rawPath?.trimEnd('/'))
     }
-    fun begin(raw: String, consent: Boolean): Boolean {
+    fun begin(raw: String, consent: Boolean, sourceUrl: String? = null): Boolean {
         if (status != Status.IDLE) return false
         val u = uri(raw)
         if (!consent || u == null || !share(u)) { stop("INVALID_INPUT_OR_NO_CONSENT"); return false }
+        // Only the exact approved group document present before navigation can be stale.
+        // It is never a destination, never inspected, and cannot confirm a result.
+        previousDocument = sourceUrl?.takeIf { value ->
+            uri(value)?.rawPath?.trimEnd('/') == "/groups/$group"
+        }
         target = raw; awaitingDocument = true; deadline = now() + 20_000; status = Status.ACTIVE; reason = "WAITING"; return true
     }
     fun tick(): Boolean {
@@ -52,9 +58,22 @@ class ShareLinkResolver(
     }
     fun location(raw: String?): Boolean {
         if (!tick()) return false
-        if (raw == null || raw != requested || requests == 0 || !destination(raw)) { stop("CONTEXT_CHANGED"); return false }
+        // Gecko can deliver an already queued location notification for the starting
+        // document after loadUri/onLoadRequest. Ignore only that exact document until
+        // the first target location; do not extend the deadline or arm its content port.
+        if (previousDocument != null && raw == previousDocument && requests <= 1 && location == null) return true
+        val failure = when {
+            raw == null -> "LOCATION_MISSING"
+            requests == 0 -> "LOCATION_BEFORE_REQUEST"
+            !destination(raw) -> "LOCATION_UNVERIFIED"
+            raw != requested -> "LOCATION_WITHOUT_REQUEST"
+            else -> null
+        }
+        if (failure != null) { stop(failure); return false }
+        previousDocument = null
         location = raw; return true
     }
+    fun canInspect(raw: String): Boolean = active && location == raw && requested == raw
     fun confirm(raw: String, safe: Boolean, complete: Boolean): Boolean {
         if (!tick() || location != raw) return false
         if (!safe) { stop("UNSAFE_DOCUMENT"); return false }
@@ -66,8 +85,8 @@ class ShareLinkResolver(
     }
     fun disconnected() { if (active && !awaitingDocument) stop("PORT_LOST") }
     fun stop(why: String = "CANCELLED") { if (status == Status.CONFIRMED) return; status = Status.STOP; reason = why; clear() }
-    private fun clear() { target = null; requested = null; location = null; awaitingDocument = false }
-    fun report() = "LINK 0.4.1 • tylko lokalnie • ${status.name}\n" +
+    private fun clear() { target = null; requested = null; location = null; previousDocument = null; awaitingDocument = false }
+    fun report() = "LINK 0.4.2 • tylko lokalnie • ${status.name}\n" +
         "Wynik: $reason\nŻądania nawigacji: $requests/8\nPotwierdzone ID z adresu zatwierdzonej grupy: ${if (status == Status.CONFIRMED) 1 else 0}\n" +
         "Potwierdzenie dotyczy adresu, nie treści ani kompletności oferty. Bez skanu, zapisu linku/ID i uploadu. Inna lub niezweryfikowana numeryczna grupa: STOP."
 }

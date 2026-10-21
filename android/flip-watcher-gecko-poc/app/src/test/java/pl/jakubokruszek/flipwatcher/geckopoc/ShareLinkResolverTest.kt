@@ -24,6 +24,49 @@ class ShareLinkResolverTest {
     @Test fun cancellationRejectsAllLateCallbacks() {val g=armed();g.stop("PAUSED");assertFalse(g.location(post));assertFalse(g.confirm(post,true,true));assertFalse(g.request(post,true));assertEquals(ShareLinkResolver.Status.STOP,g.status)}
     @Test fun everyAttemptNeedsNewObjectAndConsent() {val old=armed();old.stop();assertFalse(old.begin(share,true));val fresh=gate();assertFalse(fresh.begin(share,false));assertEquals(0,fresh.requests)}
     @Test fun portLossOnlyAllowedDuringExpectedDocumentTransition() {val g=armed();g.disconnected();assertTrue(g.active);g.confirm(share,true,false);g.disconnected();assertEquals("PORT_LOST",g.reason)}
-    @Test fun changedLocationAndNonDigitIdStop() {for(u in listOf(post+"?comment_id=123",post.replace("123456789","FAKE"),share.replace("syntheticToken01","otherShare"))){val g=armed();assertFalse(g.location(u));assertEquals("CONTEXT_CHANGED",g.reason)}}
+    @Test fun changedLocationAndNonDigitIdStop() {for(u in listOf(post+"?comment_id=123",post.replace("123456789","FAKE"),share.replace("syntheticToken01","otherShare"))){val g=armed();assertFalse(g.location(u));assertEquals("LOCATION_UNVERIFIED",g.reason)}}
+    @Test fun queuedStartingDocumentIsIgnoredButNeverInspected() {
+        val source="https://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/"
+        val g=gate();assertTrue(g.begin(share,true,source))
+        assertTrue(g.location(source));assertFalse(g.canInspect(source))
+        assertTrue(g.request(share,false));assertTrue(g.location(source))
+        assertFalse(g.canInspect(source));assertFalse(g.confirm(source,true,true));assertTrue(g.active)
+        assertTrue(g.location(share));assertTrue(g.canInspect(share))
+        assertTrue(g.request(post,true));assertTrue(g.location(post));assertTrue(g.confirm(post,true,true))
+    }
+    @Test fun startingDocumentCannotBeReplayedAfterTargetLocation() {
+        val source="https://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/"
+        val g=gate();g.begin(share,true,source);g.request(share,false);g.location(share)
+        assertFalse(g.location(source));assertEquals("LOCATION_UNVERIFIED",g.reason)
+    }
+    @Test fun arbitraryStartingDocumentIsNeverWhitelisted() {
+        for(source in listOf("https://evil.test/groups/${PocPolicy.APPROVED_GROUP_ID}/",post,share)) {
+            val g=gate();g.begin(share,true,source);g.request(share,false)
+            if(source==share) {assertTrue(g.location(source));assertTrue(g.canInspect(source))}
+            else {assertFalse(g.location(source));assertEquals(if(source==post) "LOCATION_WITHOUT_REQUEST" else "LOCATION_UNVERIFIED",g.reason)}
+        }
+    }
+    @Test fun staleStartingDocumentCannotExtendDeadline() {
+        val source="https://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/"
+        val g=gate();g.begin(share,true,source);g.request(share,false)
+        clock=19_999;assertTrue(g.location(source));clock=20_000;assertFalse(g.location(source))
+        assertEquals(ShareLinkResolver.Status.TIMEOUT,g.status)
+    }
+    @Test fun allowedButUnrequestedLocationStillStops() {
+        val g=armed();assertFalse(g.location(post));assertEquals("LOCATION_WITHOUT_REQUEST",g.reason)
+        assertFalse(g.canInspect(post));assertFalse(g.confirm(post,true,true))
+    }
+    @Test fun missingAndPrematureLocationsAreDistinctAndPrivate() {
+        val missing=armed();assertFalse(missing.location(null));assertEquals("LOCATION_MISSING",missing.reason)
+        val early=gate();early.begin(share,true);assertFalse(early.location(share));assertEquals("LOCATION_BEFORE_REQUEST",early.reason)
+        for(g in listOf(missing,early)) {val result=ShareLinkResult.snapshot(g)!!;assertNotNull(ShareLinkResult.decode(result.encode()));assertFalse(result.report().contains("https:"))}
+    }
+    @Test fun oldDocumentExceptionEndsAtRedirectAndCancellation() {
+        val source="https://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/"
+        val g=gate();g.begin(share,true,source);g.request(share,false);g.request(post,true)
+        assertFalse(g.location(source));assertEquals("LOCATION_UNVERIFIED",g.reason)
+        val cancelled=gate();cancelled.begin(share,true,source);cancelled.stop("PAUSED")
+        assertFalse(cancelled.location(source));assertFalse(cancelled.canInspect(source));assertEquals("PAUSED",cancelled.reason)
+    }
     @Test fun loopbackOnlyWithExplicitFixtureOriginAndPort() {val g=ShareLinkResolver("1234567890123", {clock},"http://127.0.0.1:9876");assertTrue(g.begin("http://127.0.0.1:9876/share/p/fixture1/",true));assertFalse(g.request("http://127.0.0.1:9877/share/p/fixture1/",false))}
 }

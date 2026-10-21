@@ -5,7 +5,7 @@ import org.json.JSONObject
 /** Fixed terminal-result schema. No link, post ID, page text, nonce or consent can be encoded. */
 class ShareLinkResult private constructor(val status: String, val reason: String, val requests: Int, val confirmedIds: Int) {
     fun encode(): String = JSONObject().put("status", status).put("reason", reason).put("requests", requests).put("confirmedIds", confirmedIds).toString()
-    fun report(): String = "LINK 0.4.1 • tylko lokalnie • $status\n" +
+    fun report(): String = "LINK 0.4.2 • tylko lokalnie • $status\n" +
         "Wynik: $reason\n${descriptions.getValue(reason)}\nŻądania nawigacji: $requests/8\n" +
         "Potwierdzone ID z adresu zatwierdzonej grupy: $confirmedIds\n" +
         "Ostatnia zakończona próba. Raport zawiera wyłącznie status, powód i liczniki — bez linku, ID i treści posta. Potwierdzenie adresu nie potwierdza treści oferty. Bez skanu i uploadu."
@@ -17,7 +17,11 @@ class ShareLinkResult private constructor(val status: String, val reason: String
             "VERIFICATION_OR_LOGIN" to "Przerwano przy logowaniu lub weryfikacji Facebooka.",
             "UNVERIFIED_DESTINATION" to "Adres docelowy nie przeszedł weryfikacji grupy lub obsługiwanego formatu.",
             "REDIRECT_LIMIT" to "Przekroczono limit przekierowań.",
-            "CONTEXT_CHANGED" to "Zmienił się oczekiwany kontekst strony.",
+            "CONTEXT_CHANGED" to "Zmienił się oczekiwany kontekst strony (raport starszej wersji).",
+            "LOCATION_MISSING" to "Silnik zgłosił brak adresu dokumentu.",
+            "LOCATION_BEFORE_REQUEST" to "Zmiana adresu nastąpiła przed zatwierdzonym żądaniem nawigacji.",
+            "LOCATION_UNVERIFIED" to "Adres dokumentu nie jest tym samym linkiem udostępnienia ani dokładnym adresem posta zatwierdzonej grupy. Format lub grupa pozostają niezweryfikowane.",
+            "LOCATION_WITHOUT_REQUEST" to "Adres ma dozwolony format, ale nie odpowiada ostatniemu zatwierdzonemu żądaniu. Brak potwierdzonego powiązania nawigacji.",
             "UNSAFE_DOCUMENT" to "Kontrola bezpieczeństwa strony przerwała próbę.",
             "PORT_LOST" to "Utracono połączenie z rozszerzeniem.",
             "DEADLINE" to "Upłynął limit czasu.",

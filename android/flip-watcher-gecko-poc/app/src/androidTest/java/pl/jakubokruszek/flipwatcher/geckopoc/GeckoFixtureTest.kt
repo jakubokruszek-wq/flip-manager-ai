@@ -52,12 +52,20 @@ class GeckoFixtureTest {
                 val channel = CollectorChannel(session, fixtureMode = true, onShareStop = { gate.stop("UNSAFE_DOCUMENT") })
                 var currentUrl: String? = null
                 var complete = false
+                var queuedSource: String? = null
                 session.navigationDelegate = object : GeckoSession.NavigationDelegate {
                     override fun onLoadRequest(s: GeckoSession, r: GeckoSession.NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny> {
                         // Fixture-only trace. Production code never logs navigation URLs.
                         Log.i("GeckoPocTest", "SHARE_REQUEST uri=${r.uri} redirect=${r.isRedirect} gesture=${r.hasUserGesture}")
                         val warmup=gate.status==ShareLinkResolver.Status.IDLE && r.uri==server.url(groupPath,"other")
-                        return GeckoResult.fromValue(if(warmup || gate.request(r.uri,r.isRedirect,r.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW,r.hasUserGesture)) AllowOrDeny.ALLOW else AllowOrDeny.DENY)
+                        val allowed=warmup || gate.request(r.uri,r.isRedirect,r.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW,r.hasUserGesture)
+                        if(allowed && gate.active && gate.requests==1) queuedSource?.let { source ->
+                            // Deterministically replay a queued old-document callback while the
+                            // real Gecko HTTP redirect and private content-port flow continue.
+                            assertTrue(gate.location(source));assertFalse(gate.canInspect(source))
+                            assertFalse(gate.confirm(source,true,true));queuedSource=null
+                        }
+                        return GeckoResult.fromValue(if(allowed) AllowOrDeny.ALLOW else AllowOrDeny.DENY)
                     }
                     override fun onLocationChange(s: GeckoSession, u: String?, p: MutableList<GeckoSession.PermissionDelegate.ContentPermission>, gesture: Boolean) {
                         Log.i("GeckoPocTest", "SHARE_LOCATION uri=$u gesture=$gesture")
@@ -74,7 +82,8 @@ class GeckoFixtureTest {
                     session.loadUri(server.url(groupPath,"other"));assertTrue(channel.awaitPort(15_000))
                     withTimeout(15_000){while(!complete || currentUrl!=server.url(groupPath,"other"))delay(100)}
                     delay(200);currentUrl=null;complete=false
-                    assertTrue(gate.begin(origin+sharePath,true));session.loadUri(origin+sharePath)
+                    queuedSource=server.url(groupPath,"other")
+                    assertTrue(gate.begin(origin+sharePath,true,queuedSource));session.loadUri(origin+sharePath)
                     withTimeout(30_000) { while(gate.active) {
                         val u=currentUrl
                         if(u!=null && complete && channel.isConnected && channel.connectedUrl==u) {
@@ -124,7 +133,7 @@ class GeckoFixtureTest {
                     activity.publishShareResult(terminal,true)
                     assertTrue(activity.lastShareResultDialog!!.isShowing)
                     val message=activity.lastShareResultDialog!!.findViewById<android.widget.TextView>(android.R.id.message).text.toString()
-                    assertTrue(message.contains("LINK 0.4.1"));assertTrue(message.contains("PAUSED"));assertFalse(message.contains("synthetic"));assertFalse(message.contains("https:"))
+                    assertTrue(message.contains("LINK 0.4.2"));assertTrue(message.contains("PAUSED"));assertFalse(message.contains("synthetic"));assertFalse(message.contains("https:"))
                     expectedReport=message
                     activity.lastShareResultDialog!!.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).performClick()
                 }

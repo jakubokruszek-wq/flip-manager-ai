@@ -185,14 +185,14 @@ class PocActivity : ComponentActivity() {
                 val raw = input.text.toString().trim(); input.text.clear()
                 if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) || session !== currentSession || channel !== currentChannel || kind != PageKind.APPROVED_GROUP || shareBusy || responseBusy || scanning) return@setPositiveButton
                 val resolver = ShareLinkResolver(now = { android.os.SystemClock.elapsedRealtime() })
-                if (!resolver.begin(raw, true)) { ShareLinkResult.snapshot(resolver)?.let { publishShareResult(it, true) }; return@setPositiveButton }
+                if (!resolver.begin(raw, true, url)) { ShareLinkResult.snapshot(resolver)?.let { publishShareResult(it, true) }; return@setPositiveButton }
                 stopVisiblePosts(); shareResolver = resolver; shareBusy = true
-                output.text = "LINK 0.4.1: sprawdzanie przekierowania, maksymalnie 20 s."; render()
+                output.text = "LINK 0.4.2: sprawdzanie przekierowania, maksymalnie 20 s."; render()
                 currentSession.loadUri(raw)
                 shareJob = lifecycleScope.launch {
                     while (shareBusy && shareResolver === resolver && resolver.tick()) {
                         val expected = url
-                        if (expected != null && currentChannel.isConnected && currentChannel.connectedUrl == expected) {
+                        if (expected != null && resolver.canInspect(expected) && currentChannel.isConnected && currentChannel.connectedUrl == expected) {
                             val context = currentChannel.shareLinkContext(expected, true)
                             if (shareResolver !== resolver || !shareBusy) return@launch
                             if (url == expected && context != null) resolver.confirm(expected, context.first, context.second && progress == 100)
