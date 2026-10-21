@@ -91,16 +91,20 @@ class CollectorChannel(
 
     suspend fun awaitPort(timeoutMs: Long): Boolean = withTimeoutOrNull(timeoutMs) { portReady.await(); true } ?: false
 
-    suspend fun shareLinkContext(expectedUrl: String, consent: Boolean, newDocumentAfter: Long? = null): Pair<Boolean, Boolean>? {
-        if (!consent) return null
+    suspend fun shareLinkProof(expectedUrl: String, consent: Boolean, newDocumentAfter: Long? = null): ShareContextReply {
+        if (!consent) return ShareContextReply.ABSENT
         val nonce = UUID.randomUUID().toString(); shareNonce = nonce
         val reply = request(nonce, JSONObject().put("type", "shareLinkContext").put("nonce", nonce).put("consent", true)
-            .apply { if (newDocumentAfter != null) put("newDocumentAfter", newDocumentAfter) }.put("expectedUrl", expectedUrl).put("groupId", if (fixtureMode) FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID).put("fixture", fixtureMode), 1_500) ?: return null
-        if (reply.optString("type") != "shareLinkContextResult" || reply.optString("nonce") != nonce ||
-            reply.keys().asSequence().toSet() != setOf("type", "nonce", "safe", "complete", "fresh") || reply.opt("safe") !is Boolean || reply.opt("complete") !is Boolean || reply.opt("fresh") !is Boolean) return null
-        if (reply.getBoolean("safe") && !reply.getBoolean("fresh")) return null
-        return reply.getBoolean("safe") to reply.getBoolean("complete")
+            .apply { if (newDocumentAfter != null) put("newDocumentAfter", newDocumentAfter) }.put("expectedUrl", expectedUrl).put("groupId", if (fixtureMode) FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID).put("fixture", fixtureMode), 1_500)
+        return ShareContextReply.parse(reply, nonce)
     }
+    suspend fun shareLinkContext(expectedUrl: String, consent: Boolean, newDocumentAfter: Long? = null): Pair<Boolean, Boolean>? =
+        when(shareLinkProof(expectedUrl, consent, newDocumentAfter)) {
+            ShareContextReply.UNSAFE -> false to false
+            ShareContextReply.LOADING -> true to false
+            ShareContextReply.COMPLETE -> true to true
+            else -> null
+        }
     fun stopShareLinkContext() {
         shareNonce = null
         runCatching { port?.postMessage(JSONObject().put("type", "stopShareLinkContext").put("nonce", UUID.randomUUID().toString())) }

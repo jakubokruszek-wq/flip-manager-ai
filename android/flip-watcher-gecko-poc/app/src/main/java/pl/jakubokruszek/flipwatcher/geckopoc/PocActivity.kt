@@ -182,7 +182,7 @@ class PocActivity : ComponentActivity() {
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         }
         shareDialog = AlertDialog.Builder(this).setTitle("Sprawdź jeden udostępniony link")
-            .setMessage("NOWA JEDNORAZOWA ZGODA: otworzyć w tej sesji jeden wklejony link /share/p/ i sprawdzić jego przekierowanie? Do 20 s i 8 żądań nawigacji. Obejmuje adres poza stroną główną grupy, wyłącznie w celu rozpoznania dokładnego permalinku zatwierdzonej grupy. Bez odczytu treści postów, skryptów, odpowiedzi sieciowych, nagłówków i danych logowania. Kontrola bezpieczeństwa strony: tylko tytuł i obecność formularzy weryfikacji. Aplikacja zapisze lokalnie wyłącznie status, powód i liczniki ostatniej zakończonej próby, aby wynik nie zniknął po powrocie do grupy lub zamknięciu aplikacji. Nie zapisuje linku, ID ani treści posta i niczego nie wysyła. Przeglądarka korzysta z istniejącego profilu jak przy ręcznym otwarciu. Bez kolektora. Raport zawiera status i liczby, nie adres ani ID. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu lub wygaszenie: STOP. Jeśli Facebook zmieni dozwolony adres bez żądania nawigacji, aplikacja może raz otworzyć ten adres ponownie w tym samym limicie 20 s i 8 żądań. Taki wynik sprawdza adres, ale nie dowodzi powiązania z linkiem udostępnienia ani istnienia oferty. Zgoda nie uruchamia skanu.")
+            .setMessage("NOWA JEDNORAZOWA ZGODA: otworzyć w tej sesji jeden wklejony link /share/p/ i sprawdzić jego przekierowanie? Do 20 s i 8 żądań nawigacji. Obejmuje adres poza stroną główną grupy, wyłącznie w celu rozpoznania dokładnego permalinku zatwierdzonej grupy. Bez odczytu treści postów, skryptów, odpowiedzi sieciowych, nagłówków i danych logowania. Kontrola bezpieczeństwa strony: tytuł, obecność formularzy weryfikacji i metadane świeżości dokumentu; czas nie jest zapisywany. Aplikacja zapisze lokalnie wyłącznie status, powód i liczniki ostatniej zakończonej próby, aby wynik nie zniknął po powrocie do grupy lub zamknięciu aplikacji. Nie zapisuje linku, ID ani treści posta i niczego nie wysyła. Przeglądarka korzysta z istniejącego profilu jak przy ręcznym otwarciu. Bez kolektora. Raport zawiera status i liczby, nie adres ani ID. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu lub wygaszenie: STOP. Jeśli Facebook zmieni dozwolony adres bez żądania nawigacji, aplikacja może raz otworzyć ten adres ponownie w tym samym limicie 20 s i 8 żądań. Taki wynik sprawdza adres, ale nie dowodzi powiązania z linkiem udostępnienia ani istnienia oferty. Zgoda nie uruchamia skanu.")
             .setView(input).setNegativeButton("Anuluj", null)
             .setPositiveButton("Zgadzam się — sprawdź") { _, _ ->
                 val raw = input.text.toString().trim(); input.text.clear()
@@ -191,18 +191,41 @@ class PocActivity : ComponentActivity() {
                 if (!resolver.begin(raw, true, url)) { ShareLinkResult.snapshot(resolver)?.let { publishShareResult(it, true) }; return@setPositiveButton }
                 stopVisiblePosts(); shareResolver = resolver; shareBusy = true
                 sharePageLoading = false
+                resolver.waitingFor(ShareLinkWait.LOCATION)
                 sharePortAfterGeneration = currentChannel.connectionGeneration
                 shareDocumentAfter = System.currentTimeMillis()
-                output.text = "LINK 0.4.3: sprawdzanie przekierowania, maksymalnie 20 s."; render()
+                output.text = "LINK 0.4.4: sprawdzanie przekierowania, maksymalnie 20 s."; render()
                 currentSession.loadUri(raw)
                 shareJob = lifecycleScope.launch {
                     while (shareBusy && shareResolver === resolver && resolver.tick()) {
                         val expected = url
-                        if (expected != null && resolver.canInspect(expected) && currentChannel.connectionGeneration > sharePortAfterGeneration && currentChannel.isConnected && currentChannel.connectedUrl == expected) {
-                            val context = currentChannel.shareLinkContext(expected, true, shareDocumentAfter)
-                            if (shareResolver !== resolver || !shareBusy) return@launch
-                            if (url == expected && context != null) resolver.confirm(expected, context.first, context.second && progress == 100)
-                            if (!resolver.active) break
+                        when {
+                            resolver.pendingAddressReload != null -> resolver.waitingFor(ShareLinkWait.SOURCE_LOADING)
+                            expected == null || !resolver.canInspect(expected) -> resolver.waitingFor(ShareLinkWait.LOCATION)
+                            !currentChannel.isConnected -> resolver.waitingFor(ShareLinkWait.PORT)
+                            currentChannel.connectionGeneration <= sharePortAfterGeneration -> resolver.waitingFor(ShareLinkWait.NEW_PORT)
+                            currentChannel.connectedUrl != expected -> resolver.waitingFor(ShareLinkWait.PORT_ADDRESS)
+                            else -> {
+                                resolver.waitingFor(ShareLinkWait.CONTEXT_REPLY)
+                                val context = currentChannel.shareLinkProof(expected, true, shareDocumentAfter)
+                                if (shareResolver !== resolver || !shareBusy) return@launch
+                                if (url == expected) when(context) {
+                                    ShareContextReply.ABSENT -> resolver.waitingFor(ShareLinkWait.CONTEXT_REPLY)
+                                    ShareContextReply.MALFORMED -> resolver.waitingFor(ShareLinkWait.CONTEXT_PROTOCOL)
+                                    ShareContextReply.STALE -> resolver.waitingFor(ShareLinkWait.DOCUMENT_FRESHNESS)
+                                    ShareContextReply.UNSAFE -> resolver.confirm(expected, false, false)
+                                    ShareContextReply.LOADING -> {
+                                        resolver.waitingFor(ShareLinkWait.DOCUMENT_COMPLETE)
+                                        resolver.confirm(expected, true, false)
+                                    }
+                                    ShareContextReply.COMPLETE -> {
+                                        if (!resolver.hasExactPostAddress) resolver.waitingFor(ShareLinkWait.EXACT_PERMALINK)
+                                        else if (progress != 100) resolver.waitingFor(ShareLinkWait.NATIVE_PROGRESS)
+                                        resolver.confirm(expected, true, progress == 100)
+                                    }
+                                }
+                                if (!resolver.active) break
+                            }
                         }
                         delay(200)
                     }

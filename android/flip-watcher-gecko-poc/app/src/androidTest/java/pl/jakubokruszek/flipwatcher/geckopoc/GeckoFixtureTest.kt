@@ -191,11 +191,53 @@ class GeckoFixtureTest {
                     assertEquals("EXACT_APPROVED_ADDRESS_RELOADED",gate.reason)
                     // A real new page passes. A demanded future document fails even with a live trusted port.
                     assertNull(channel.shareLinkContext(origin+postPath,true,System.currentTimeMillis()+60_000))
+                    assertEquals(ShareContextReply.STALE,channel.shareLinkProof(origin+postPath,true,System.currentTimeMillis()+60_000))
                     val result=ShareLinkResult.snapshot(gate)!!
                     assertTrue(result.report().contains("Nie potwierdzono powiązania"))
                     assertFalse(result.report().contains("550000000000098"));assertFalse(result.encode().contains(origin))
                     Log.i("GeckoPocTest","HISTORY_ADDRESS ${result.report()}")
                 } finally {channel.stopShareLinkContext();channel.close();host!!.geckoView.releaseSession();session.close();server.close()}
+            }}}
+        }
+    }
+
+    @Test fun completeShareDocumentWithoutExactLinkReportsSpecificTimeout() {
+        ActivityScenario.launch(GeckoTestHostActivity::class.java).use { scenario ->
+            var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it}
+            runBlocking {withTimeout(45_000){withContext(Dispatchers.Main){
+                val path="/share/p/stayshere/"
+                val server=LoopbackFixtureServer(pages=mapOf(path to "share-link-post")){name -> runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}
+                val origin="http://127.0.0.1:${server.port}"
+                var clock=0L
+                val gate=ShareLinkResolver(FIXTURE_GROUP_ID,{clock},origin,allowAddressReload=true)
+                val session=GeckoSession(GeckoSessionSettings.Builder().build())
+                val channel=CollectorChannel(session,fixtureMode=true,onShareStop={gate.stop("UNSAFE_DOCUMENT")})
+                var current:String?=null;var complete=false
+                session.navigationDelegate=object:GeckoSession.NavigationDelegate{
+                    override fun onLoadRequest(s:GeckoSession,r:GeckoSession.NavigationDelegate.LoadRequest):GeckoResult<AllowOrDeny>{
+                        val warmup=gate.status==ShareLinkResolver.Status.IDLE && r.uri==server.url(groupPath,"other")
+                        return GeckoResult.fromValue(if(warmup||gate.request(r.uri,r.isRedirect))AllowOrDeny.ALLOW else AllowOrDeny.DENY)
+                    }
+                    override fun onLocationChange(s:GeckoSession,u:String?,p:MutableList<GeckoSession.PermissionDelegate.ContentPermission>,gesture:Boolean){current=u;if(gate.active)gate.location(u,gesture)}
+                }
+                session.progressDelegate=object:GeckoSession.ProgressDelegate{
+                    override fun onPageStart(s:GeckoSession,u:String){complete=false}
+                    override fun onPageStop(s:GeckoSession,success:Boolean){complete=success}
+                }
+                try{
+                    channel.attach(GeckoHost.collectorExtension(context));session.open(GeckoHost.runtime(context));host!!.geckoView.setSession(session);session.setActive(true)
+                    session.loadUri(server.url(groupPath,"other"));assertTrue(channel.awaitPort(15_000))
+                    withTimeout(15_000){while(!complete||current!=server.url(groupPath,"other"))delay(100)}
+                    val generation=channel.connectionGeneration
+                    gate.begin(origin+path,true,current);complete=false;session.loadUri(origin+path)
+                    withTimeout(15_000){while(!complete||current!=origin+path||channel.connectedUrl!=origin+path||channel.connectionGeneration<=generation)delay(100)}
+                    assertEquals(ShareContextReply.COMPLETE,channel.shareLinkProof(origin+path,true))
+                    assertFalse(gate.hasExactPostAddress);assertFalse(gate.confirm(origin+path,true,true))
+                    gate.waitingFor(ShareLinkWait.EXACT_PERMALINK);clock=20_000;assertFalse(gate.tick())
+                    assertEquals(ShareLinkResolver.Status.TIMEOUT,gate.status);assertEquals("DEADLINE_EXACT_PERMALINK",gate.reason)
+                    val result=ShareLinkResult.snapshot(gate)!!;assertEquals(0,result.confirmedIds);assertNotNull(ShareLinkResult.decode(result.encode()))
+                    Log.i("GeckoPocTest","SHARE_TIMEOUT ${result.report()}")
+                }finally{channel.stopShareLinkContext();channel.close();host!!.geckoView.releaseSession();session.close();server.close()}
             }}}
         }
     }
@@ -213,7 +255,7 @@ class GeckoFixtureTest {
                     activity.publishShareResult(terminal,true)
                     assertTrue(activity.lastShareResultDialog!!.isShowing)
                     val message=activity.lastShareResultDialog!!.findViewById<android.widget.TextView>(android.R.id.message).text.toString()
-                    assertTrue(message.contains("LINK 0.4.3"));assertTrue(message.contains("PAUSED"));assertFalse(message.contains("synthetic"));assertFalse(message.contains("https:"))
+                    assertTrue(message.contains("LINK 0.4.4"));assertTrue(message.contains("PAUSED"));assertFalse(message.contains("synthetic"));assertFalse(message.contains("https:"))
                     expectedReport=message
                     activity.lastShareResultDialog!!.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).performClick()
                 }

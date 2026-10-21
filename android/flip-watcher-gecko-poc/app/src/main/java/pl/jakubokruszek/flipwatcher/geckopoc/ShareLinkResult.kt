@@ -5,7 +5,7 @@ import org.json.JSONObject
 /** Fixed terminal-result schema. No link, post ID, page text, nonce or consent can be encoded. */
 class ShareLinkResult private constructor(val status: String, val reason: String, val requests: Int, val confirmedIds: Int) {
     fun encode(): String = JSONObject().put("status", status).put("reason", reason).put("requests", requests).put("confirmedIds", confirmedIds).toString()
-    fun report(): String = "LINK 0.4.3 • tylko lokalnie • $status\n" +
+    fun report(): String = "LINK 0.4.4 • tylko lokalnie • $status\n" +
         "Wynik: $reason\n${descriptions.getValue(reason)}\nŻądania nawigacji: $requests/8\n" +
         "Potwierdzone ID z adresu zatwierdzonej grupy: $confirmedIds\n" +
         "Ostatnia zakończona próba. Raport zawiera wyłącznie status, powód i liczniki — bez linku, ID i treści posta. Potwierdzenie adresu nie potwierdza treści oferty. Bez skanu i uploadu."
@@ -33,14 +33,14 @@ class ShareLinkResult private constructor(val status: String, val reason: String
             "MANUAL_NAVIGATION" to "Próba przerwana przez ręczną nawigację.",
             "LOAD_ERROR" to "Strona zgłosiła błąd ładowania.",
             "CANCELLED" to "Próba została anulowana.",
-        )
+        ) + ShareLinkWait.values().associate { it.code to it.explanation }
         private fun validated(status: String, reason: String, requests: Int, ids: Int): ShareLinkResult? {
             if (status !in setOf("CONFIRMED", "STOP", "TIMEOUT") || reason !in descriptions || requests !in 0..8 || ids !in 0..1) return null
             val confirmedReason = reason in setOf("EXACT_APPROVED_GROUP_LINK", "EXACT_APPROVED_ADDRESS_RELOADED")
             if (status == "CONFIRMED" && (!confirmedReason || ids != 1 || requests < 1)) return null
             if (status != "CONFIRMED" && (ids != 0 || confirmedReason)) return null
             if (reason == "EXACT_APPROVED_ADDRESS_RELOADED" && requests < 2) return null
-            if ((status == "TIMEOUT") != (reason == "DEADLINE")) return null
+            if ((status == "TIMEOUT") != ShareLinkWait.isTimeoutReason(reason)) return null
             return ShareLinkResult(status, reason, requests, ids)
         }
         fun snapshot(resolver: ShareLinkResolver): ShareLinkResult? = validated(resolver.status.name, resolver.reason, resolver.requests, if (resolver.status == ShareLinkResolver.Status.CONFIRMED) 1 else 0)

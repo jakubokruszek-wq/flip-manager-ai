@@ -19,6 +19,9 @@ class ShareLinkResolver(
     private var location: String? = null
     private var previousDocument: String? = null
     private var deadline = 0L
+    private var lastWait: ShareLinkWait? = null
+    fun waitingFor(condition: ShareLinkWait) { if (active) lastWait = condition }
+    val hasExactPostAddress: Boolean get() = location?.let(::uri)?.let(::exact) == true
     private var reloadTarget: String? = null
     private var reloadClaimed = false
     private var reloadUsed = false
@@ -54,7 +57,7 @@ class ShareLinkResolver(
         target = raw; awaitingDocument = true; deadline = now() + 20_000; status = Status.ACTIVE; reason = "WAITING"; return true
     }
     fun tick(): Boolean {
-        if (active && now() >= deadline) { status = Status.TIMEOUT; reason = "DEADLINE"; clear() }
+        if (active && now() >= deadline) { status = Status.TIMEOUT; reason = lastWait?.code ?: "DEADLINE"; clear() }
         return active
     }
     fun request(raw: String, redirect: Boolean, newWindow: Boolean = false, gesture: Boolean = false): Boolean {
@@ -114,8 +117,8 @@ class ShareLinkResolver(
     }
     fun disconnected() { if (active && !awaitingDocument) stop("PORT_LOST") }
     fun stop(why: String = "CANCELLED") { if (status == Status.CONFIRMED) return; status = Status.STOP; reason = why; clear() }
-    private fun clear() { target = null; requested = null; location = null; previousDocument = null; reloadTarget = null; reloadClaimed = false; awaitingDocument = false }
-    fun report() = "LINK 0.4.3 • tylko lokalnie • ${status.name}\n" +
+    private fun clear() { target = null; requested = null; location = null; previousDocument = null; reloadTarget = null; reloadClaimed = false; lastWait = null; awaitingDocument = false }
+    fun report() = "LINK 0.4.4 • tylko lokalnie • ${status.name}\n" +
         "Wynik: $reason\nŻądania nawigacji: $requests/8\nPotwierdzone ID z adresu zatwierdzonej grupy: ${if (status == Status.CONFIRMED) 1 else 0}\n" +
         "Potwierdzenie dotyczy adresu, nie treści ani kompletności oferty. Bez skanu, zapisu linku/ID i uploadu. Inna lub niezweryfikowana numeryczna grupa: STOP."
 }
