@@ -7,6 +7,23 @@ function groupURL(raw,group,fixture){try{const u=new URL(raw);return /^[A-Za-z0-
 function exact(raw,group){try{const u=new URL(raw);const p=u.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d{5,30})\/?$/);return u.protocol==='https:'&&!u.port&&!u.username&&!u.password&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&p?.[1]===group?p[2]:null;}catch{return null;}}
 function explicitIds(body,group){const ids=new Set();let n=0;for(const m of body.matchAll(/"(?:url|permalink|permalink_url)"\s*:\s*("(?:[^"\\]|\\.)*")/g)){if(++n>400)break;try{const id=exact(JSON.parse(m[1]),group);if(id)ids.add(id);}catch{}}return ids;}
 const bounded=(v,min,max)=>typeof v==='number'&&Number.isFinite(v)&&v>=min&&v<=max?v:null;
+// Private bounded image evidence. No URL/media key leaves the extension model.
+function imageURL(raw){try{const u=new URL(raw);if(u.protocol!=='https:'||u.port||u.username||u.password||!['facebook.com','fbcdn.net'].some(h=>u.hostname===h||u.hostname.endsWith('.'+h))||/\.(?:mp4|webm|m3u8)(?:$|\/)/i.test(u.pathname)||u.pathname.length>2048)return null;return u.origin+u.pathname;}catch{return null;}}
+function photoLinkId(raw){try{const u=new URL(raw);if(u.protocol!=='https:'||u.port||u.username||u.password||!['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))return null;
+ const id=/^\/photo(?:\.php)?\/?$/.test(u.pathname)?u.searchParams.get('fbid'):u.pathname.match(/^\/(?:[^/]+\/)?photos\/(?:(?:a|pcb)\.\d{5,30}\/)?(\d{5,30})\/?$/)?.[1];return /^\d{5,30}$/.test(id||'')?id:null;}catch{return null;}}
+function domPhotos(card,postId,group,core){
+ const result=[];const video=!!card.querySelector?.('video');
+ for(const n of Array.from(card.querySelectorAll('img,svg image')).slice(0,100)){
+  if(n.closest('[role="article"],article')!==card||n.closest('[role="comment"],[data-testid*="comment"],[data-ad-rendering-role*="comment"],video'))continue;
+  const rect=n.getBoundingClientRect();const a=n.closest('a[href]');const mediaId=photoLinkId(a?.href);
+  if(a&&!mediaId){const p=core.parsePostLink(a.href);if(p?.sourceType!=='GROUP'||p.sourceId!==group||p.postId!==postId)continue;}
+  if(rect.width<(mediaId?80:200)||rect.height<(mediaId?80:100)||(!mediaId&&video))continue;
+  const raw=n.currentSrc||n.getAttribute?.('src')||n.getAttribute?.('href')||n.getAttributeNS?.('http://www.w3.org/1999/xlink','href');
+  const url=imageURL(raw);if(!mediaId&&!url)continue;
+  result.push({url,mediaId,exactPostId:postId,exactAssociation:true,domPhoto:true});if(result.length===20)break;
+ }
+ return result;
+}
 function createModel(core,fields,group){
  const rowKeys=['postId','permalink','layer','price','priceSource','area','rooms','district','neighborhood','street','intent','usable','photos','qualification'];
  const qualifications=['CANDIDATE','NO_TEXT','FOREIGN_CITY','NOT_PROPERTY','INTENT','MISSING_FIELDS','CONFLICT','CLASSIFIER'];
@@ -20,14 +37,29 @@ function createModel(core,fields,group){
   return Object.fromEntries(rowKeys.map(k=>[k,r[k]]));
  }
 
- const rows=new Map(),blocked=new Map(),stats=zero();
+ const rows=new Map(),blocked=new Map(),photoEvidence=new Map(),stats=zero();
+ function photos(record,layer){
+  let evidence=photoEvidence.get(record.postId);
+  if(!evidence){if(photoEvidence.size>=20)return 0;evidence={ids:new Set(),urls:new Map()};photoEvidence.set(record.postId,evidence);}
+  for(const item of (Array.isArray(record.media)?record.media:[]).slice(0,100)){
+   if(item?.exactAssociation!==true||item.exactPostId!==record.postId)continue;
+   const id=typeof item.mediaId==='string'&&/^\d{5,30}$/.test(item.mediaId)?item.mediaId:null,url=imageURL(item.url);
+   if(!url&&!(layer==='DOM'&&item.domPhoto===true&&id))continue;
+   if(id&&evidence.ids.size<20)evidence.ids.add(id);
+   if(url&&(evidence.urls.has(url)||evidence.urls.size<20)){
+    const prior=evidence.urls.get(url);evidence.urls.set(url,prior||id||null);
+   }
+  }
+  return Math.min(20,evidence.ids.size+[...evidence.urls.values()].filter(id=>!id).length);
+ }
  function project(r,layer){
   if(!r||!/^\d{5,30}$/.test(r.postId)||exact(r.permalink,group)!==r.postId){stats.rejected++;return null;}
+  if(!rows.has(r.postId)&&rows.size>=20){stats.rejected++;return null;}
   const f=fields.previewFields({postText:typeof r.text==='string'?r.text.slice(0,12000):''});
   return {postId:r.postId,permalink:'https://www.facebook.com/groups/'+group+'/posts/'+r.postId+'/',layer,
    price:bounded(f.price,1,20000000),priceSource:bounded(f.price,1,20000000)!==null?f.priceSource:'NONE',area:bounded(f.area,1,9999),rooms:bounded(f.rooms,1,20),
    district:f.district,neighborhood:f.neighborhood,street:typeof f.street==='string'?f.street.slice(0,80):null,intent:f.intent,usable:f.usable===true,
-   photos:Math.min(20,Array.isArray(r.media)?r.media.length:0),qualification:f.qualification};
+   photos:photos(r,layer),qualification:f.qualification};
  }
  function merge(row){
   row=cleanRow(row);
@@ -55,14 +87,14 @@ function createModel(core,fields,group){
   }else rows.set(row.postId,{...row});
   stats.candidates=rows.size;
  }
- function add(record,layer){const row=project(record,layer);if(row){stats[layer==='DOM'?'dom':layer==='HYDRATION'?'hydration':'network']++;merge(row);}}
+ function add(record,layer){const row=project(record,layer);if(row){stats[layer==='DOM'?'dom':layer==='HYDRATION'?'hydration':'network']++;merge(row);const stored=rows.get(row.postId);if(stored)stored.photos=row.photos;}}
  function hydration(texts){const source={sourceType:'GROUP',sourceId:group,sourceUrl:'https://www.facebook.com/groups/'+group+'/',allowGroupRedirect:false};
   for(const body of texts.slice(0,64)){if(typeof body!=='string'||body.length>524288)continue;stats.scripts++;const ids=explicitIds(body,group);
    let found=[];try{found=core.extractStructuredRecordsFromText(body,'HYDRATION',source,0)||[];}catch{stats.rejected++;}
    for(const r of found.slice(0,100))if(ids.has(r.postId)&&r.sourceId===group)add(r,'HYDRATION');
   }
  }
- return {add,merge,hydration,stats,rows:()=>[...rows.values()].map(r=>({...r})),clear(){rows.clear();blocked.clear();Object.assign(stats,zero());}};
+ return {add,merge,hydration,stats,rows:()=>[...rows.values()].map(r=>({...r})),clear(){rows.clear();blocked.clear();photoEvidence.clear();Object.assign(stats,zero());}};
 }
 // Same semantic feed candidates as the desktop extension, plus their bounded ancestors.
 // Never scroll dialogs, comments or an arbitrary overflow widget.
@@ -144,8 +176,7 @@ function readDOM(w,model,core,group){
   const own=links.filter(l=>l.sourceType==='GROUP'&&l.sourceId===group),ids=[...new Set(own.map(l=>l.postId))];
   if(ids.length!==1||links.some(l=>l.sourceType!=='GROUP'||l.sourceId!==group)){if(ids.length)model.stats.ambiguous++;continue;}
   const text=ownMessageText(card);
-  const photos=Array.from(card.querySelectorAll('img')).filter(n=>n.closest('[role="article"],article')===card&&n.getBoundingClientRect().width>=200&&n.getBoundingClientRect().height>=100).slice(0,20).map(()=>({}));
-  model.add({postId:ids[0],permalink:own[0].permalink,text,media:photos},'DOM');
+  model.add({postId:ids[0],permalink:own[0].permalink,text,media:domPhotos(card,ids[0],group,core)},'DOM');
  }
 }
 async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{}){
@@ -206,5 +237,5 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{}){
  }catch{return empty('ERROR');}
  finally{setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
-const api={tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
+const api={imageURL,photoLinkId,domPhotos,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);

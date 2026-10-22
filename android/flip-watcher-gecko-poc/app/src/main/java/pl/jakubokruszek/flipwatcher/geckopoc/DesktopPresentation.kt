@@ -5,6 +5,8 @@ import java.util.Locale
 
 /** Transient presentation only. Clipboard and persistence continue using aggregate report(). */
 object DesktopPresentation {
+    fun photos(count:Int)=if(count==0)"Zdjęcia: brak rozpoznanego obrazu; pełna liczba nieustalona." else "Rozpoznane zdjęcia/miniatury: $count; pełna liczba zdjęć nieustalona."
+
     fun explanation(row:DesktopRow):String=when(row.qualification){
         "NO_TEXT"->"Brak tekstu przypisanego do dokładnego ID; nie można ocenić oferty."
         "FOREIGN_CITY"->"Reguła lokalizacji wykryła inne miasto niż Łódź."
@@ -31,7 +33,7 @@ object DesktopPresentation {
             for((i,row) in offers.withIndex()){
                 appendLine("\nKANDYDAT ${i+1}")
                 appendLine("Cena: ${number(row.price)} zł • ${number(row.area)} m² • pokoje: ${number(row.rooms)}")
-                appendLine("${row.district?:"—"} / ${row.neighborhood?:"—"} / ${row.street?:"—"} • zdjęcia: ${row.photos}")
+                appendLine("${row.district?:"—"} / ${row.neighborhood?:"—"} / ${row.street?:"—"} • ${photos(row.photos)}")
                 appendLine("ID: ${row.postId}\n${row.permalink}")
             }
             val other=rows.filterNot{DesktopSummary.eligible(it)}

@@ -92,6 +92,7 @@ jobs:
             grep -q "certificate SHA-256 digest: 878b11e677eb4a62883b0b8709fa19c969926708053a01d47f01b0548fb370a2" certs.txt
             unzip -l "$apk" | grep -E "assets/ext/flip_poc/(manifest.json|collector-core.js|poc-adapter.js|poc-content.js)" | wc -l | grep -qx 4
             unzip -p "$apk" assets/ext/flip_poc/collector-core.js | sha256sum | grep -q "^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b "
+            python3 pilot/assert-not-in-apk.py "$apk"
             sha256sum "$apk"
           done
 

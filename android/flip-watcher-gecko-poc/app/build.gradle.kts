@@ -39,6 +39,7 @@ abstract class BundleCollectorExtension : DefaultTask() {
 val collectorCoreSha256 = "32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b"
 
 android {
+    sourceSets.getByName("test").java.srcDir("../pilot/src")
     namespace = "pl.jakubokruszek.flipwatcher.geckopoc"
     compileSdk = 37
 
@@ -48,7 +49,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = providers.gradleProperty("GECKO_POC_VERSION_CODE").orElse("2700").get().toInt()
-        versionName = "0.5.7-gecko-poc"
+        versionName = "0.5.8-gecko-poc"
         buildConfigField("String", "COLLECTOR_CORE_SHA256", "\"$collectorCoreSha256\"")
         // No backend in this POC: there is no API URL, token or upload code at all.
         buildConfigField("boolean", "LIVE_UPLOAD_ENABLED", "false")

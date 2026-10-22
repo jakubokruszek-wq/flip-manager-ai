@@ -42,7 +42,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
             card.addView(label("Cena: ${number(row.price)} zł",22f))
             card.addView(label("${number(row.area)} m² • pokoje: ${number(row.rooms)}"))
             card.addView(label(listOfNotNull(row.district,row.neighborhood,row.street).joinToString(" / ").ifEmpty{"Lokalizacja: —"}))
-            card.addView(label("Rozpoznane zdjęcia: ${row.photos}",14f))
+            card.addView(label(DesktopPresentation.photos(row.photos),14f))
             card.addView(label("ID: ${row.postId}",12f))
             val link=OfferLinks.validated(row)
             card.addView(label(link?:"Brak bezpiecznego linku",14f).apply{

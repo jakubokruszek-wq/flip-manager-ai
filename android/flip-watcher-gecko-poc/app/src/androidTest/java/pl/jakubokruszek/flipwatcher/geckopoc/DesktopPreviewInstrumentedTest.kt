@@ -70,7 +70,7 @@ class DesktopPreviewInstrumentedTest {
                     assertEquals(3,reply.rows.size);assertEquals(3,reply.rows.map{it.postId}.distinct().size)
                     val listing=reply.rows.single{it.postId=="550000000000091"}
                     assertEquals(319000.0,listing.price!!,0.01);assertEquals(42.42,listing.area!!,0.01);assertEquals(2,listing.rooms!!);assertEquals("Retkinia",listing.neighborhood)
-                    assertEquals("MIXED",listing.layer);assertTrue(listing.photos>=1)
+                    assertEquals("MIXED",listing.layer);assertEquals("photo grid/SVG/duplicate/comment isolation",3,listing.photos)
                     val second=reply.rows.single{it.postId=="550000000000092"};assertEquals("MIXED",second.layer);assertEquals(425000.0,second.price!!,0.01);assertEquals(53.0,second.area!!,0.01)
                     val wanted=reply.rows.single{it.postId=="550000000000093"};assertEquals("BUY_PROPERTY",wanted.intent);assertNull(wanted.price);assertFalse(DesktopSummary.eligible(wanted));assertEquals("INTENT",wanted.qualification);assertTrue(DesktopPresentation.explanation(wanted).contains("prośba zakupu"))
                     val summary=DesktopSummary.create("DONE",trial.requests,reply);assertEquals("CONDITIONAL_GO",summary.verdict);assertEquals(2,summary.offers)

@@ -45,4 +45,8 @@ class DesktopPresentationTest {
         assertEquals(0,restored.stats.getValue("scrollSeen"));assertEquals(raw,old.toString())
         stats.put("PRIVATE",1);assertNull(DesktopSummary.decode(old.toString()))
     }
+    @Test fun photosAreNeverPresentedAsCompleteGallery(){
+        assertTrue(DesktopPresentation.photos(1).contains("1"));assertTrue(DesktopPresentation.photos(1).contains("pełna liczba zdjęć nieustalona"))
+        assertTrue(DesktopPresentation.photos(0).contains("brak rozpoznanego obrazu"));assertTrue(DesktopPresentation.photos(0).contains("nieustalona"))
+    }
 }
