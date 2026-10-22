@@ -48,4 +48,17 @@ class DesktopPreviewTest {
             assertNull(DesktopProtocol.parse(bad,nonce))
         }
     }
+    @Test fun scrollTimingAndStallsAreBoundedAndCannotCarryUnknownFields(){
+        val ok=message();ok.getJSONObject("stats").put("scrollElapsedMs",30000).put("scrollSteps",30).put("scrollMoves",3).put("scrollStalls",27).put("scrollAtEnd",2).put("scrollNoTarget",5)
+        assertNotNull(DesktopProtocol.parse(ok,nonce))
+        for((key,value) in listOf("scrollElapsedMs" to 30001,"scrollStalls" to 28,"scrollAtEnd" to 513,"scrollNoTarget" to 31)){
+            val bad=JSONObject(ok.toString());bad.getJSONObject("stats").put(key,value);assertNull(DesktopProtocol.parse(bad,nonce))
+        }
+    }
+    @Test fun priorThirtyStatHistoryIsReadableWithoutMutatingStoredHistory(){
+        val old=JSONObject(DesktopSummary.create("DONE",1,DesktopProtocol.parse(message(),nonce)!!).encode())
+        for(key in DesktopProtocol.statKeys.drop(30))old.getJSONObject("stats").remove(key)
+        val raw=old.toString();val restored=DesktopSummary.decode(raw)!!
+        assertEquals(0,restored.stats.getValue("scrollElapsedMs"));assertEquals(raw,old.toString())
+    }
 }

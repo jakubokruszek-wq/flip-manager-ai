@@ -6,7 +6,7 @@ import org.json.JSONObject
 class DesktopSummary private constructor(val verdict:String,val reason:String,val offers:Int,val navigations:Int,val stats:Map<String,Int>){
     fun encode():String=JSONObject().put("verdict",verdict).put("reason",reason).put("offers",offers).put("navigations",navigations).put("stats",JSONObject(stats)).toString()
     fun report():String=buildString {
-        appendLine("KOMPUTER 0.5.5 • tylko lokalnie • $verdict")
+        appendLine("KOMPUTER 0.5.6 • tylko lokalnie • $verdict")
         appendLine("Powód: $reason • tryb komputerowy: ${stats.getValue("desktop")} • nawigacje: $navigations/4")
         appendLine("Dokładne ID/permalinki: ${stats.getValue("candidates")} • kandydaci ofert po filtrach: $offers")
         appendLine("Odczyty rekordów DOM (powtórzenia): ${stats.getValue("dom")} • dane strony: ${stats.getValue("hydration")} • sieć: ${stats.getValue("network")}")
@@ -19,7 +19,9 @@ class DesktopSummary private constructor(val verdict:String,val reason:String,va
             appendLine("Źródło: punkty ekranu ${stats.getValue("scrollHit")} • wybrano okno ${stats.getValue("scrollRoot")} / kontener ${stats.getValue("scrollInner")}")
         }
         appendLine("Przewinięcia: ${stats.getValue("scrollMoves")}/${stats.getValue("scrollSteps")} • odczyty skryptów: ${stats.getValue("scripts")}")
-        appendLine("Przewijanie: do 30 s / 30 kroków; limit 20 ID i wspólne 60 s z ładowaniem mogą skrócić próbę.")
+        appendLine("Okno przewijania: ${stats.getValue("scrollElapsedMs")} ms / 30000 • próby bez ruchu: ${stats.getValue("scrollStalls")} • oczekiwania bez celu: ${stats.getValue("scrollNoTarget")} • kontenery na końcu: ${stats.getValue("scrollAtEnd")}")
+        appendLine("Przewijanie: do 30 s / 30 kroków; wspólne 60 s z ładowaniem może skrócić próbę. Przechowywane maksymalnie 20 ID.")
+        if(stats.getValue("scrollAtEnd")>0||stats.getValue("scrollStalls")>0)appendLine("UWAGA: osiągnięto koniec zakresu lub próba nie przesunęła strony; czekano na doładowanie. Brak nowych postów nie potwierdza kompletności.")
         if(stats.getValue("scrollSteps")==0&&stats.getValue("candidates")<20)appendLine("UWAGA: przewijanie nie rozpoczęło się — nie znaleziono dozwolonego kontenera z dostępnym zakresem przewijania. Wynik nie potwierdza kompletności grupy.")
         if(stats.getValue("scrollSteps")>0&&stats.getValue("scrollMoves")==0)appendLine("UWAGA: próby przewinięcia nie przesunęły kontenera; brak dalszych postów nie jest potwierdzony.")
         if(stats.getValue("limitSkipped")>0)appendLine("UWAGA: limit odpowiedzi wykorzystany; raport nie potwierdza odczytu wszystkich danych grupy.")
@@ -41,7 +43,7 @@ class DesktopSummary private constructor(val verdict:String,val reason:String,va
             if(verdict !in setOf("CONDITIONAL_GO","NO_GO")||reason !in DesktopTrial.reasons||j.opt("offers") !is Int||j.opt("navigations") !is Int)return null
             val offers=j.getInt("offers");val nav=j.getInt("navigations");val stored=j.getJSONObject("stats")
             // Read old count-only history without changing/deleting it; fresh protocol stays strict.
-            if(stored.keys().asSequence().toSet()==DesktopProtocol.statKeys.take(22).toSet())for(key in DesktopProtocol.statKeys.drop(22))stored.put(key,0)
+            for(size in listOf(22,30))if(stored.keys().asSequence().toSet()==DesktopProtocol.statKeys.take(size).toSet())for(key in DesktopProtocol.statKeys.drop(size))stored.put(key,0)
             val stats=DesktopProtocol.parseStats(stored)?:return null
             if(verdict=="NO_GO"&&offers!=0)return null
             if(offers !in 0..20||nav !in 0..4||offers>stats.getValue("candidates")||(verdict=="CONDITIONAL_GO")!=(reason=="DONE"&&offers>0))return null

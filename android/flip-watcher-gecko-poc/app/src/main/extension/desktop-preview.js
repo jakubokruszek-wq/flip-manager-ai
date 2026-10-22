@@ -1,7 +1,7 @@
 /* Isolated/native-consented local projection. No storage, upload or public page bridge. */
 (function(root){
 'use strict';
-const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit'];
+const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget'];
 const zero=()=>Object.fromEntries(statKeys.map(k=>[k,0]));
 function groupURL(raw,group,fixture){try{const u=new URL(raw);return /^[A-Za-z0-9._-]{1,100}$/.test(group)&&!u.username&&!u.password&&!u.hash&&(fixture||!u.search)&&u.pathname.replace(/\/$/,'')==='/groups/'+group&&((u.protocol==='https:'&&!u.port&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))||(fixture===true&&u.protocol==='http:'&&u.hostname==='127.0.0.1'));}catch{return false;}}
 function exact(raw,group){try{const u=new URL(raw);const p=u.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d{5,30})\/?$/);return u.protocol==='https:'&&!u.port&&!u.username&&!u.password&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&p?.[1]===group?p[2]:null;}catch{return null;}}
@@ -81,7 +81,7 @@ function scrollContainer(w,stats=null){
   for(const node of new Set([...layers.slice(0,3),...layers.slice(-3)])){hits++;ancestors(node);}
  }
  for(const card of cards)ancestors(card.parentElement);
- const evidence={scrollSeen:candidates.size,scrollNoRange:0,scrollHidden:0,scrollOffscreen:0,scrollUnbound:0,scrollRoot:0,scrollInner:0,scrollHit:hits};
+ const evidence={scrollSeen:candidates.size,scrollNoRange:0,scrollHidden:0,scrollOffscreen:0,scrollUnbound:0,scrollRoot:0,scrollInner:0,scrollHit:hits,scrollAtEnd:0};
  const usable=[];
  for(const node of candidates){
   if(node.isConnected===false||node.ownerDocument&&node.ownerDocument!==doc){evidence.scrollUnbound++;continue;}
@@ -95,9 +95,12 @@ function scrollContainer(w,stats=null){
    if(rect.width<250||rect.bottom<=0||rect.top>=w.innerHeight||rect.right<=0||rect.left>=w.innerWidth){evidence.scrollOffscreen++;continue;}
    if(!cards.some(c=>node.contains(c))){evidence.scrollUnbound++;continue;}
   }
+  // Total scroll extent is not evidence that this node can still move down.
+  const position=node===root?Math.max(Number(w.scrollY)||0,Number(node.scrollTop)||0):Number(node.scrollTop)||0;
+  if(node.scrollHeight-node.clientHeight-position<=2){evidence.scrollAtEnd++;continue;}
   usable.push({node,count:cards.filter(c=>node===root||node.contains(c)).length});
  }
- usable.sort((a,b)=>b.count-a.count||(a.node===root?-1:b.node===root?1:0)||b.node.clientHeight-a.node.clientHeight);
+ usable.sort((a,b)=>b.count-a.count||(a.node===root?1:b.node===root?-1:0)||b.node.clientHeight-a.node.clientHeight);
  const selected=usable[0]?.node||null;
  if(selected)evidence[selected===root?'scrollRoot':'scrollInner']=1;
  if(stats)for(const k of Object.keys(evidence))stats[k]=Math.max(stats[k]||0,evidence[k]);
@@ -139,26 +142,27 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{}){
   const ack=await send({type:'confirmDesktop',nonce:m.nonce,safe:true});if(!ack?.confirmed||invalid||!safe(m))return empty('CONTEXT');
   const active=async()=>{if(invalid||!safe(m)||w.performance.now()>=end)return false;const c=await send({type:'desktopContext',nonce:m.nonce});return !invalid&&safe(m)&&c?.active===true&&c.nonce===m.nonce;};
   // Reserve time for final extraction and native delivery within the original deadline.
-  const scrollEnd=Math.min(w.performance.now()+30000,end-1500);
+  const scrollStart=w.performance.now(),scrollEnd=Math.min(scrollStart+30000,end-1500);
   for(let step=0;step<=30;step++){
-   if(!await active())return empty('CONTEXT');readDOM(w,model,core,m.groupId);if(model.stats.candidates>=20||step===30||w.performance.now()>=scrollEnd)break;
+   if(!await active())return empty('CONTEXT');readDOM(w,model,core,m.groupId);if(step===30||w.performance.now()>=scrollEnd)break;
    let container=scrollContainer(w,model.stats);
    // Retry a not-yet-scrollable feed within the same bounded window.
-   if(!container){await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));continue;}
+   if(!container){model.stats.scrollNoTarget++;await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));continue;}
    const root=container===w.document.scrollingElement;
    const before=root?w.scrollY:container.scrollTop;
    const top=Math.max(400,Math.min(900,Math.round((root?w.innerHeight:container.clientHeight)*.85)));
    if(root)w.scrollBy({left:0,top,behavior:'instant'});else container.scrollBy({left:0,top,behavior:'instant'});
    model.stats.scrollSteps++;
    await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now()))); // measure rendered movement, at most one attempt per second
-   if((root?w.scrollY:container.scrollTop)>before)model.stats.scrollMoves++;
+   if((root?w.scrollY:container.scrollTop)>before)model.stats.scrollMoves++;else model.stats.scrollStalls++;
   }
+  model.stats.scrollElapsedMs=Math.min(30000,Math.max(0,Math.floor(w.performance.now()-scrollStart)));
   await pause(700);if(!await active())return empty('CONTEXT');readDOM(w,model,core,m.groupId);
   const result=await send({type:'readDesktop',nonce:m.nonce});if(invalid||!safe(m)||result?.status!=='OK')return empty('CONTEXT');
   for(const row of result.rows||[])model.merge(row);
   for(const k of ['network','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped'])model.stats[k]=result.stats?.[k]||0;
   model.stats.desktop=w.innerWidth>=900?1:0;
-  for(const k of statKeys)model.stats[k]=Math.max(0,Math.min(k==='bytes'?4194304:10000,Math.floor(model.stats[k])));
+  for(const k of statKeys)model.stats[k]=Math.max(0,Math.min(k==='bytes'?4194304:k==='scrollElapsedMs'?30000:10000,Math.floor(model.stats[k])));
   return {status:'OK',reason:'DONE',rows:model.rows(),stats:{...model.stats}};
  }catch{return empty('ERROR');}
  finally{setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}

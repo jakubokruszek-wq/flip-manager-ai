@@ -65,7 +65,7 @@ class DesktopPreviewInstrumentedTest {
                     assertTrue("thirty-second scroll window was skipped",android.os.SystemClock.elapsedRealtime()-startedAt>=30_000)
                     assertEquals("DONE",result.reason);assertEquals(1,trial.requests)
                     assertTrue(agents.size>=2);assertFalse(agents.last().contains("Mobile",true));assertFalse(agents.last().contains("Android",true))
-                    val reply=result.reply!!;assertEquals(1,reply.stats.getValue("desktop"));assertEquals(1,reply.stats.getValue("verified"));assertTrue(reply.stats.getValue("scrollMoves") in 5..30);assertTrue(reply.stats.getValue("scrollSteps") in 15..30);assertEquals(1,reply.stats.getValue("scrollInner"));assertTrue(reply.stats.getValue("scrollHit")>0)
+                    val reply=result.reply!!;assertEquals(1,reply.stats.getValue("desktop"));assertEquals(1,reply.stats.getValue("verified"));assertTrue(reply.stats.getValue("scrollMoves") in 5..30);assertTrue(reply.stats.getValue("scrollSteps") in 15..30);assertEquals(1,reply.stats.getValue("scrollInner"));assertTrue(reply.stats.getValue("scrollHit")>0);assertTrue("initial finite feed end was not observed",reply.stats.getValue("scrollAtEnd")>0);assertTrue("lazy feed wait was not observed",reply.stats.getValue("scrollNoTarget")>0);assertTrue(reply.stats.getValue("scrollElapsedMs") in 29000..30000)
                     assertTrue("initial response missing",reply.stats.getValue("bytes")>0);assertTrue(reply.stats.getValue("network")>=2)
                     assertEquals(3,reply.rows.size);assertEquals(3,reply.rows.map{it.postId}.distinct().size)
                     val listing=reply.rows.single{it.postId=="550000000000091"}
