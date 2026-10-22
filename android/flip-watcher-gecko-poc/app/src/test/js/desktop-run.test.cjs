@@ -74,3 +74,40 @@ const oldDoc='11111111-1111-4111-8111-111111111111',newDoc='22222222-2222-4222-8
 test('native document identity permits new rounded origin without cross-clock freshness failure',async()=>{const h=env();const r=await preview.run(h.w,{...m,documentAfter:2000,previousDocumentId:oldDoc,previousTimeOrigin:1000},core,fields,h.safe,h.send,h.setAbort,h.notify,newDoc);assert.equal(r.status,'OK');assert.equal(r.stats.scrollMoves,30);});
 test('same reconnected document or invalid proof never starts extraction despite later clocks',async()=>{for(const [previousDocumentId,documentId,previousTimeOrigin] of [[oldDoc,oldDoc,500],['invalid',newDoc,500],[oldDoc,null,500],[oldDoc,newDoc,NaN]]){const h=env();const r=await preview.run(h.w,{...m,previousDocumentId,previousTimeOrigin},core,fields,h.safe,h.send,h.setAbort,h.notify,documentId);assert.equal(r.status,'WAIT_FRESH');assert.equal(h.sent.length,0);assert.deepEqual(r.rows,[]);}});
 test('an older restored document cannot pass the new identity proof',async()=>{const h=env();const r=await preview.run(h.w,{...m,previousDocumentId:oldDoc,previousTimeOrigin:1100},core,fields,h.safe,h.send,h.setAbort,h.notify,newDoc);assert.equal(r.status,'WAIT_FRESH');assert.equal(h.sent.length,0);});
+
+function visibleTailRecovery(h,{overflow='hidden',foreign=false,dialog=false,move=true}={}){
+ const {feed,card,root}=innerFeed(h),doc=h.w.document;
+ root.ownerDocument=doc;root.isConnected=true;root.parentElement=null;root.closest=()=>null;root.getBoundingClientRect=()=>({width:980,top:0,bottom:800,left:0,right:980});
+ feed.ownerDocument=doc;feed.parentElement=root;feed.scrollHeight=1800;
+ card.ownerDocument=doc;card.isConnected=true;card.closest=()=>dialog?{}:null;card.scrollIntoView=()=>{throw Error('already visible tail must not align')};
+ card.getBoundingClientRect=()=>({width:700,height:200,left:0,right:700,top:300,bottom:500});
+ card.querySelectorAll=s=>s==='a[href]'?[{href:`https://www.facebook.com/groups/${foreign?'other':group}/posts/550000000000091/`,closest:()=>card}]:[];
+ h.w.getComputedStyle=n=>({overflowY:n===root?overflow:'auto'});
+ if(!move)h.w.scrollBy=()=>{};
+ return {feed,card,root};
+}
+test('visible last post and exhausted inner feed recover ordinary scrolling of hidden root',async()=>{
+ const h=env(),{feed}=visibleTailRecovery(h);const r=await preview.run(h.w,m,core,fields,h.safe,h.send,h.setAbort,h.notify);
+ assert.equal(r.status,'OK');assert.equal(feed.scrollTop,1200);assert(h.w.scrollY>10000);assert(r.stats.scrollMoves>=28);
+ assert.equal(r.stats.scrollTailAttempts,0);assert.equal(r.stats.scrollRoot,1);assert.equal(r.stats.scrollInner,1);assert.equal(r.stats.scrollElapsedMs,30000);
+});
+test('hidden ancestor recovery rejects foreign or dialog posts and clip overflow',()=>{
+ for(const options of [{foreign:true},{dialog:true},{overflow:'clip'}]){const h=env();const {feed}=visibleTailRecovery(h,options);feed.scrollTop=1200;assert.equal(preview.recoveryContainer(h.w,core,group),null);}
+});
+test('hidden recovery never invents successful moves if browser clamps the command',async()=>{
+ const h=env();visibleTailRecovery(h,{move:false});const r=await preview.run(h.w,m,core,fields,h.safe,h.send,h.setAbort,h.notify);
+ assert.equal(r.stats.scrollMoves,3);assert(r.stats.scrollStalls>0);assert.equal(h.w.scrollY,0);assert.equal(r.stats.scrollElapsedMs,30000);
+});
+test('loss of context during hidden recovery clears rows and stops before delivery',async()=>{
+ const h=env('lateUnsafe');visibleTailRecovery(h);const r=await preview.run(h.w,m,core,fields,h.safe,h.send,h.setAbort,h.notify);
+ assert.equal(r.status,'STOP');assert.deepEqual(r.rows,[]);assert(!h.sent.includes('readDesktop'));assert(h.disposed());
+});
+
+test('body-propagated hidden overflow and a deep root still permit exact ancestor recovery',()=>{
+ const h=env(),{root,feed,card}=visibleTailRecovery(h);const body={};h.w.document.body=body;root.contains=c=>c===card;
+ let parent=feed;for(let i=0;i<40;i++)parent={parentElement:parent,ownerDocument:h.w.document,closest:()=>null,clientHeight:0};card.parentElement=parent;
+ h.w.getComputedStyle=n=>({overflowY:n===root?'visible':n===body?'hidden':'auto'});
+ assert.equal(preview.recoveryContainer(h.w,core,group),root);
+ h.w.getComputedStyle=n=>({overflowY:n===root?'visible':n===body?'clip':'auto'});
+ assert.equal(preview.recoveryContainer(h.w,core,group),null);
+});

@@ -140,7 +140,7 @@ function scrollContainer(w,stats=null){
 }
 // A bound post below the actual viewport may sit behind a clipped ancestor even
 // when the chosen inner feed has reached its end. Use only ordinary DOM scrolling.
-function tailTarget(w,core,group){
+function boundTail(w,core,group){
  const doc=w.document;
  const cards=Array.from(doc.querySelectorAll('[role="article"],article')).filter(c=>!c.parentElement?.closest('[role="article"],article'));
  if(cards.length>100)return null;
@@ -148,6 +148,31 @@ function tailTarget(w,core,group){
  if(!card||card.isConnected===false||card.ownerDocument!==doc||typeof card.scrollIntoView!=='function'||card.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]'))return null;
  const links=Array.from(card.querySelectorAll('a[href]')).filter(a=>a.closest('[role="article"],article')===card).slice(0,100).map(a=>core.parsePostLink(a.href)).filter(Boolean);
  if(!links.length||links.some(l=>l.sourceType!=='GROUP'||l.sourceId!==group)||new Set(links.map(l=>l.postId)).size!==1)return null;
+ return card;
+}
+// overflow:hidden allows ordinary programmatic scrolling; overflow:clip does not.
+// Only recover through ancestors of the exact last post, after normal selection
+// and visible-tail alignment fail. Never change page styles or synthesize input.
+function recoveryContainer(w,core,group){
+ const card=boundTail(w,core,group);if(!card)return null;
+ const doc=w.document,root=doc.scrollingElement,usable=[],ancestors=[];
+ for(let node=card.parentElement,depth=0;node&&depth<32;node=node.parentElement,depth++)ancestors.push(node);
+ if(root?.contains?.(card)&&!ancestors.includes(root))ancestors.push(root);
+ for(const node of ancestors){
+  if(node.isConnected===false||node.ownerDocument!==doc||node.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]'))continue;
+  const style=w.getComputedStyle(node);
+  const propagatedHidden=node===root&&style?.overflowY==='visible'&&doc.body&&w.getComputedStyle(doc.body)?.overflowY==='hidden';
+  if(!style||!propagatedHidden&&!['hidden','auto','scroll','overlay'].includes(style.overflowY))continue;
+  if(node.clientHeight<100||node.scrollHeight-node.clientHeight-(Number(node===root?w.scrollY:node.scrollTop)||0)<=2)continue;
+  const rect=node.getBoundingClientRect();
+  if(rect.width<250||node!==root&&(rect.bottom<=0||rect.top>=w.innerHeight||rect.right<=0||rect.left>=w.innerWidth))continue;
+  usable.push(node);
+ }
+ // Move the outermost eligible ancestor, rather than another exhausted inner feed.
+ return usable.at(-1)||null;
+}
+function tailTarget(w,core,group){
+ const card=boundTail(w,core,group);if(!card)return null;
  const rect=card.getBoundingClientRect();
  const vp=w.visualViewport,top=Number(vp?.offsetTop)||0,height=Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight);
  if(rect.width<250||rect.height<1||rect.bottom<=top+height+2||rect.left>=w.innerWidth||rect.right<=0)return null;
@@ -205,7 +230,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
    model.stats.pageFocused=Math.max(model.stats.pageFocused,Number(w.document.hasFocus?.()===true));
    model.stats.pageVisible=Math.max(model.stats.pageVisible,Number(w.document.visibilityState==='visible'&&w.document.hidden!==true));
    readDOM(w,model,core,m.groupId);if(step===30||w.performance.now()>=scrollEnd)break;
-   let container=scrollContainer(w,model.stats);
+   let recovered=false,container=scrollContainer(w,model.stats);
    // Retry a not-yet-scrollable feed within the same bounded window.
    if(!container){
     noTargetStreak++;
@@ -219,10 +244,15 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
      await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));
      if(invalid||!safe(m))return empty('CONTEXT');
      if(moved()){model.stats.scrollMoves++;model.stats.scrollTailMoves++;}else model.stats.scrollStalls++;
-    }else{model.stats.scrollNoTarget++;await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));}
-    continue;
+     continue;
+    }
+    container=noTargetStreak>=2?recoveryContainer(w,core,m.groupId):null;
+    if(!container){model.stats.scrollNoTarget++;await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));continue;}
+    if(!await active()||recoveryContainer(w,core,m.groupId)!==container)return empty('CONTEXT');
+    if(w.performance.now()>=scrollEnd)break;
+    recovered=true;model.stats[container===w.document.scrollingElement?'scrollRoot':'scrollInner']=1;
    }
-   noTargetStreak=0;
+   if(!recovered)noTargetStreak=0;
    const root=container===w.document.scrollingElement;
    const before=root?w.scrollY:container.scrollTop;
    const top=Math.max(400,Math.min(900,Math.round((root?w.innerHeight:container.clientHeight)*.85)));
@@ -242,5 +272,5 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
  }catch{return empty('ERROR');}
  finally{setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
-const api={imageURL,photoLinkId,domPhotos,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
+const api={imageURL,photoLinkId,domPhotos,recoveryContainer,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);

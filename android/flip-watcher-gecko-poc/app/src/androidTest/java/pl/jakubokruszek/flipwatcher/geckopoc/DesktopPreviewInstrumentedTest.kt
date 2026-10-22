@@ -26,12 +26,12 @@ class DesktopPreviewInstrumentedTest {
             var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it}
             runBlocking{withTimeout(120_000){withContext(Dispatchers.Main){
                 val groupPath="/groups/$FIXTURE_GROUP_ID/"
-                val desktop=AtomicBoolean(false);val challenge=AtomicBoolean(false);val rootScroll=AtomicBoolean(false);val clipped=AtomicBoolean(false)
+                val desktop=AtomicBoolean(false);val challenge=AtomicBoolean(false);val rootScroll=AtomicBoolean(false);val clipped=AtomicBoolean(false);val hiddenRoot=AtomicBoolean(false)
                 val agents=CopyOnWriteArrayList<String>()
                 val server=LoopbackFixtureServer(pages=mapOf("/api/graphql/" to "desktop-network"),onRequest={path,ua->
                     if(path==groupPath){agents.add(ua.orEmpty());desktop.set(ua!=null&&!ua.contains("Mobile",true)&&!ua.contains("Android",true))}
                 }){name->
-                    val selected=if(name=="fixtures/desktop-start.html"&&!desktop.get())"fixtures/other.html" else if(name=="fixtures/desktop-start.html"&&clipped.get())"fixtures/desktop-tail.html" else name
+                    val selected=if(name=="fixtures/desktop-start.html"&&!desktop.get())"fixtures/other.html" else if(name=="fixtures/desktop-start.html"&&hiddenRoot.get())"fixtures/desktop-hidden-root.html" else if(name=="fixtures/desktop-start.html"&&clipped.get())"fixtures/desktop-tail.html" else name
                     runCatching{context.assets.open(selected).bufferedReader().use{it.readText()}}.getOrNull()?.let{body->
                         val page=if(selected=="fixtures/desktop-start.html"&&rootScroll.get())body.replace("<html>","<html style=\"overflow-y:auto\">").replace("margin:0;height:100vh;overflow:hidden","margin:0;min-height:9000px;overflow:hidden").replace("height:100vh;overflow-y:auto","height:auto;overflow:visible") else body
                         if(selected=="fixtures/desktop-start.html"&&challenge.get())page+"<script>setTimeout(function(){document.title='Checkpoint';document.body.insertAdjacentHTML('beforeend','<input type=password>');},1500);</script>" else page
@@ -90,6 +90,17 @@ class DesktopPreviewInstrumentedTest {
                     rootScroll.set(true);val rootTrial=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=rootTrial;assertTrue(rootTrial.begin(true))
                     val rootResult=DesktopSessionPreview.run(session,channel,rootTrial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=15_000)
                     assertEquals("DONE",rootResult.reason);assertTrue(rootResult.reply!!.stats.getValue("scrollMoves") in 5..30);assertEquals(2,DesktopSummary.create("DONE",rootTrial.requests,rootResult.reply).offers)
+                    // Inner end + already visible exact tail must recover hidden-root scrolling.
+                    rootScroll.set(false);hiddenRoot.set(true)
+                    val hiddenTrial=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=hiddenTrial;assertTrue(hiddenTrial.begin(true))
+                    val hiddenResult=DesktopSessionPreview.run(session,channel,hiddenTrial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=15_000)
+                    assertEquals("DONE",hiddenResult.reason);val hiddenReply=hiddenResult.reply!!
+                    assertEquals("inner feed must move first",1,hiddenReply.stats.getValue("scrollInner"))
+                    assertEquals("hidden root must recover",1,hiddenReply.stats.getValue("scrollRoot"))
+                    assertEquals("visible tail must not need alignment",0,hiddenReply.stats.getValue("scrollTailAttempts"))
+                    assertTrue("ancestor recovery did not produce new data",hiddenReply.rows.any{it.postId=="550000000000095"&&it.price==650000.0&&it.area==65.0})
+                    android.util.Log.i("GeckoPocTest","HIDDEN_ROOT_ACCEPTANCE ${DesktopSummary.create("DONE",hiddenTrial.requests,hiddenReply).report()}")
+                    hiddenRoot.set(false);rootScroll.set(true)
                     // Same runner and real page: a verification mutation must discard partial results.
                     challenge.set(true);val unsafe=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=unsafe;assertTrue(unsafe.begin(true))
                     val nonce=UUID.randomUUID().toString()
