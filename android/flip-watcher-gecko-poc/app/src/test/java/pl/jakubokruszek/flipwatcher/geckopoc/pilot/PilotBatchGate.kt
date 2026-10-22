@@ -44,7 +44,7 @@ class PilotBatchGate(private val now:()->Long=System::currentTimeMillis) {
             require(raw.getString("permalink")=="${PocPolicy.APPROVED_GROUP_URL}posts/$id/"&&raw.getString("sourceId")==PocPolicy.APPROVED_GROUP_ID&&raw.getString("sourceType")=="GROUP")
             require(raw.getString("identityConfidence")=="EXACT")
             val reasons=raw.getJSONArray("identityReasons");require((0 until reasons.length()).any{reasons.getString(it)=="STRUCTURED_EXACT_STORY_ROOT"})
-            val text=raw.getString("text");val author=raw.getString("author");require(text.length in 1..20_000&&author.length in 1..200)
+            val text=raw.getString("text");val author=raw.getString("author");require(text.length in 1..20_000&&text.isNotBlank()&&author.length in 1..200&&author.isNotBlank())
             val published=Instant.parse(raw.getString("publishedAt")).toEpochMilli();require(published in (time-72*60*60*1000L)..(time+5_000))
             val layers=raw.getJSONArray("discoveryLayers");require(layers.length() in 1..3&&(0 until layers.length()).all{layers.getString(it) in setOf("DOM","HYDRATION","NETWORK")})
             require(raw.opt("firstSeenIteration") is Int&&raw.getInt("firstSeenIteration") in 0..10000)

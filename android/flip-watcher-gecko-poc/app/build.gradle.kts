@@ -39,7 +39,6 @@ abstract class BundleCollectorExtension : DefaultTask() {
 val collectorCoreSha256 = "32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b"
 
 android {
-    sourceSets.getByName("test").java.srcDir("../pilot/src")
     namespace = "pl.jakubokruszek.flipwatcher.geckopoc"
     compileSdk = 37
 

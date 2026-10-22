@@ -46,7 +46,7 @@ class PilotBatchGateTest {
     }
     @Test fun selectedPreviewRowsUnknownDatesAndInventedExactLabelsAreNotSourceRecords(){
         rejected(raw=batch(JSONArray().put(JSONObject().put("postId",id).put("price",319000).put("photos",3))))
-        for((key,value) in listOf("publishedAt" to JSONObject.NULL,"text" to JSONObject.NULL,"author" to "","identityConfidence" to "UNVERIFIED","identityReasons" to JSONArray(),"permalink" to "https://www.facebook.com/photo.php?fbid=$id"))rejected(raw=batch(JSONArray().put(post().put(key,value))))
+        for((key,value) in listOf("publishedAt" to JSONObject.NULL,"text" to JSONObject.NULL,"author" to " ","text" to " ","identityConfidence" to "UNVERIFIED","identityReasons" to JSONArray(),"permalink" to "https://www.facebook.com/photo.php?fbid=$id"))rejected(raw=batch(JSONArray().put(post().put(key,value))))
         for(offset in listOf(-73*60*60*1000L,60_000L))rejected(raw=batch(JSONArray().put(post().put("publishedAt",Instant.ofEpochMilli(time+offset).toString()))))
     }
     @Test fun twentyPostsCapDuplicatesAndSourceProvenanceAreChecked(){

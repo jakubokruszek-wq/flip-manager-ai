@@ -18,7 +18,7 @@ Nie jest to gotowość do produkcyjnego LIVE. Lokalny podgląd pozostaje lokalny
 
 ## Dostarczony kod przygotowawczy
 
-`src/.../PilotBatchGate.kt` jest kompilowany WYŁĄCZNIE przez testy JVM, nie trafia
+`../app/src/test/java/pl/jakubokruszek/flipwatcher/geckopoc/pilot/PilotBatchGate.kt` jest kompilowany WYŁĄCZNIE przez testy JVM, nie trafia
 w APK lokalnego POC. Tworzy niemutowalny snapshot batcha pasującego do istniejącego
 `SignedCollectorClient.prepareCompletion`, nie podpisuje ani niczego nie wysyła.
 Wymaga nowej, jednorazowej zgody na przekazanie treści źródłowej i metadanych mediów,
