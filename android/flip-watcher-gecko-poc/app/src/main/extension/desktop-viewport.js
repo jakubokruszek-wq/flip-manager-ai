@@ -25,11 +25,18 @@ function cards(w,core,group){
 function point(w,core,group){
  const bound=cards(w,core,group);if(!bound.length)return null;
  const vp=w.visualViewport,width=Number(vp?.width)||w.innerWidth,height=Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight),left=Number(vp?.offsetLeft)||0,top=Number(vp?.offsetTop)||0;
- for(const [x,y] of [[.5,.6],[.5,.4],[.35,.6],[.65,.6]]){
+ const probes=[];
+ for(const {card} of bound.slice().reverse()){
+  const r=card.getBoundingClientRect?.();if(!r)continue;
+  const l=Math.max(left+width*.1,r.left),right=Math.min(left+width*.9,r.right),t=Math.max(top+height*.1,r.top),bottom=Math.min(top+height*.9,r.bottom);
+  if(right-l>=20&&bottom-t>=20)probes.push([((l+right)/2-left)/width,((t+bottom)/2-top)/height]);
+ }
+ probes.push([.5,.6],[.5,.4],[.35,.6],[.65,.6]);
+ for(const [x,y] of probes){
   const px=left+width*x,py=top+height*y,n=w.document.elementFromPoint?.(px,py);
-  if(!n||n.ownerDocument!==w.document||/^(IFRAME|FRAME|INPUT|TEXTAREA|SELECT)$/.test(n.tagName||'')||n.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]'))continue;
-  // Hit must belong to a bound card or a semantic feed containing one; no arbitrary widget.
-  if(bound.some(p=>p.card.contains(n))||n.closest('[role="feed"],[data-pagelet*="Feed"]')?.contains(bound[0].card))return {x,y};
+  if(!n||n.ownerDocument!==w.document||/^(IFRAME|FRAME|INPUT|TEXTAREA|SELECT)$/.test(n.tagName||'')||n.closest('[role="dialog"],[role="comment"],[data-testid*="comment"],aside,nav,header'))continue;
+  // Hit must belong to a bound card or a semantic feed/main containing one; no arbitrary sidebar widget.
+  if(bound.some(p=>p.card.contains(n))||bound.some(p=>n.closest('[role="feed"],[data-pagelet*="Feed"],main,[role="main"]')?.contains(p.card)))return {x,y};
  }
  return null;
 }

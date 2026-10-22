@@ -264,9 +264,9 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
     }
     container=noTargetStreak>=2?recoveryContainer(w,core,m.groupId):null;
     if(!container){
-     const point=viewport&&m.viewportConsent===true&&noTargetStreak>=2&&nativeFailures<3?viewport.point(w,core,m.groupId):null;
+     let point=viewport&&m.viewportConsent===true&&noTargetStreak>=2&&nativeFailures<3?viewport.point(w,core,m.groupId):null;
      if(point){
-      if(!await active())return empty('CONTEXT');const again=viewport.point(w,core,m.groupId);if(!again||again.x!==point.x||again.y!==point.y)return empty('CONTEXT');if(w.performance.now()>=scrollEnd)break;
+      if(!await active())return empty('CONTEXT');point=viewport.point(w,core,m.groupId);if(!point){model.stats.scrollNoTarget++;await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));continue;}if(w.performance.now()>=scrollEnd)break;
       const moved=viewport.trace(w),ack=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:'scroll',...point});
       if(invalid||!safe(m))return empty('CONTEXT');
       if(ack?.accepted===true){model.stats.scrollSteps++;model.stats.scrollNativeSteps++;await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));
