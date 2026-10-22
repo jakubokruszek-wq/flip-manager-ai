@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.EditText
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -48,6 +49,9 @@ import java.util.UUID
  */
 class PocActivity : ComponentActivity() {
     private lateinit var geckoView: GeckoView
+    private lateinit var offersPanel:OffersPanel
+    private lateinit var facebookTab:Button
+    private lateinit var offersTab:Button
     private lateinit var banner: TextView
     private lateinit var diagnostics: TextView
     private lateinit var output: TextView
@@ -214,9 +218,33 @@ class PocActivity : ComponentActivity() {
         desktopRows=rows.take(20)
         val saved=runCatching{desktopPrefs.edit().putString("last",summary.encode()).commit()}.getOrDefault(false)
         output.text=summary.report()+if(saved)"" else "\nUWAGA: nie zapisano raportu; skopiuj teraz."
-        if(show&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))showDesktopResult(summary)
+        if(::offersPanel.isInitialized)offersPanel.showRows(desktopRows)
+        if(show&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))selectContentTab(true)
+        render()
     }
-    private fun clearDesktopDetails(){desktopRows=emptyList();desktopResultText?.text="";desktopResultText=null;desktopResultDialog?.dismiss();desktopResultDialog=null}
+    private fun clearDesktopDetails(){
+        desktopRows=emptyList();desktopResultText?.text="";desktopResultText=null;desktopResultDialog?.dismiss();desktopResultDialog=null
+        if(::offersPanel.isInitialized)offersPanel.showRows(emptyList())
+        if(::offersTab.isInitialized)offersTab.text="Oferty (0)"
+    }
+    private fun busyForTabs()=desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad
+    private fun selectContentTab(offers:Boolean){
+        if(busyForTabs()||!::offersPanel.isInitialized)return
+        geckoView.visibility=if(offers)View.GONE else View.VISIBLE
+        offersPanel.visibility=if(offers)View.VISIBLE else View.GONE
+        facebookTab.isSelected=!offers;offersTab.isSelected=offers
+        facebookTab.setTypeface(null,if(offers)Typeface.NORMAL else Typeface.BOLD)
+        offersTab.setTypeface(null,if(offers)Typeface.BOLD else Typeface.NORMAL)
+        if(offers)geckoView.clearFocus()
+    }
+    private fun openOffer(row:DesktopRow){
+        if(!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)||busyForTabs()||desktopRows.none{it===row})return
+        val link=OfferLinks.validated(row)?:return
+        // Explicit user click; clear both UI copies/listeners before leaving the local preview.
+        clearDesktopDetails()
+        val intent=Intent(Intent.ACTION_VIEW,Uri.parse(link)).addCategory(Intent.CATEGORY_BROWSABLE)
+        if(runCatching{startActivity(intent)}.isFailure)offersPanel.showRows(emptyList(),"Nie udało się otworzyć posta. Sprawdź dostępność Facebooka lub przeglądarki.")
+    }
     private fun showDesktopResult(value:DesktopSummary?=DesktopSummary.decode(desktopPrefs.getString("last",null))){
         desktopResultDialog?.dismiss();desktopResultText?.text="";desktopResultText=null
         val report=value?.report()?:"Brak zakończonej próby komputerowej. Dotychczasowe raporty linków pozostają w archiwum."
@@ -412,7 +440,7 @@ class PocActivity : ComponentActivity() {
         val ext = extension ?: run { output.text = "Rozszerzenie kolektora nie jest gotowe: ${extensionError ?: "instalacja w toku"}"; return }
         // Default settings: normal mobile Firefox user agent, JavaScript and cookies as in the browser. No override, no spoofing.
         val newSession = GeckoSession(GeckoSessionSettings.Builder().build())
-        val newChannel = CollectorChannel(newSession, fixtureMode = false, onVisibleStop = { stopVisiblePosts() }, onPageDisconnect = { if(desktopBusy&&desktopGate?.phase==DesktopTrial.Phase.READING)finishDesktop("PORT_LOST"); shareResolver?.disconnected(); if (!responseReloadGate.allowOldDisconnect()) stopVisiblePosts(); if (shareBusy && shareResolver?.active != true) finishShare() }, onPageConnected = { responseReloadGate.connected() }, onShareStop = { if (shareBusy) finishShare("UNSAFE_DOCUMENT") }, onDesktopStop={if(desktopBusy)finishDesktop("CONTEXT")}) { value -> probe = value; render() }
+        val newChannel = CollectorChannel(newSession, fixtureMode = false, onVisibleStop = { stopVisiblePosts() }, onPageDisconnect = { if(!desktopBusy&&desktopRows.isNotEmpty())clearDesktopDetails(); if(desktopBusy&&desktopGate?.phase==DesktopTrial.Phase.READING)finishDesktop("PORT_LOST"); shareResolver?.disconnected(); if (!responseReloadGate.allowOldDisconnect()) stopVisiblePosts(); if (shareBusy && shareResolver?.active != true) finishShare() }, onPageConnected = { responseReloadGate.connected() }, onShareStop = { if (shareBusy) finishShare("UNSAFE_DOCUMENT") }, onDesktopStop={if(desktopBusy)finishDesktop("CONTEXT")}) { value -> probe = value; render() }
         newChannel.attach(ext)
         newSession.progressDelegate = progressDelegate
         newSession.contentDelegate = contentDelegate
@@ -448,6 +476,7 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun load(target: String, login: Boolean) {
+        selectContentTab(false)
         finishShare("MANUAL_NAVIGATION", clear = true)
         shareResolver = null
         val current = session ?: return
@@ -943,6 +972,11 @@ class PocActivity : ComponentActivity() {
         buttons["sharedLink"]?.isEnabled = buttons["responses"]?.isEnabled == true
         buttons["desktopPreview"]?.isEnabled = buttons["responses"]?.isEnabled == true
         buttons["tools"]?.isEnabled = !desktopBusy && !shareBusy && !responseBusy && !visibleBusy && !scanning && !inspectingDom && !measuringLoad
+        if(::offersTab.isInitialized){
+            val enabled=!busyForTabs()
+            facebookTab.isEnabled=enabled;offersTab.isEnabled=enabled
+            offersTab.text="Oferty (${desktopRows.count{DesktopSummary.eligible(it)}})"
+        }
         val p = probe
         diagnostics.text = buildString {
             appendLine("STAN: ${banner.text}")
@@ -969,7 +1003,10 @@ class PocActivity : ComponentActivity() {
             tag = "poc.tool.$key"
             setOnClickListener {
                 if (key in setOf("open", "group", "tools")) onClick()
-                else { diagnosticsDialog?.dismiss(); geckoView.postOnAnimation { if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) onClick() } }
+                else { diagnosticsDialog?.dismiss(); window.decorView.post { if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                    if(key !in setOf("desktopResult","lastShareLinkResult","results","beaconNoGo"))selectContentTab(false)
+                    onClick()
+                } } }
             }
             buttons[key] = this
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
@@ -1054,7 +1091,7 @@ class PocActivity : ComponentActivity() {
         val mainTools=LinearLayout(this).apply{
             orientation=LinearLayout.VERTICAL
             addView(row(button("desktopPreview","Próba komputerowa • podgląd"){startDesktopPreview()}))
-            addView(row(button("desktopResult","Oferty / wynik próby"){showDesktopResult()}))
+            addView(row(button("desktopResult","Oferty"){selectContentTab(true)}))
             addView(row(Button(this@PocActivity).apply{text="Archiwum narzędzi";setOnClickListener{toolPanel.visibility=if(toolPanel.visibility==View.VISIBLE)View.GONE else View.VISIBLE}}))
             addView(toolPanel)
         }
@@ -1071,7 +1108,26 @@ class PocActivity : ComponentActivity() {
                 button("group", "Otwórz grupę") { load(PocPolicy.APPROVED_GROUP_URL, login = false) },
                 button("tools", "Narzędzia / raport") { diagnosticsDialog?.show() },
             ))
-            addView(geckoView)
+            addView(LinearLayout(this@PocActivity).apply{
+                orientation=LinearLayout.VERTICAL
+                layoutParams=LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,0,1f)
+                facebookTab=Button(this@PocActivity).apply{tag="poc.tab.facebook";text="Facebook";isSelected=true;setTypeface(null,Typeface.BOLD);isAllCaps=false;setOnClickListener{selectContentTab(false)}}
+                offersTab=Button(this@PocActivity).apply{tag="poc.tab.offers";text="Oferty (0)";isAllCaps=false;setOnClickListener{selectContentTab(true)}}
+                addView(row(facebookTab,offersTab).apply{
+                    for(i in 0 until childCount)getChildAt(i).layoutParams=LinearLayout.LayoutParams(0,(48*dp).toInt(),1f)
+                })
+                addView(FrameLayout(this@PocActivity).apply{
+                    layoutParams=LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,0,1f)
+                    geckoView.layoutParams=FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT)
+                    addView(geckoView)
+                    offersPanel=OffersPanel(this@PocActivity,{openOffer(it)},{showDesktopResult()}).apply{
+                        layoutParams=FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT)
+                        visibility=View.GONE
+                        showRows(emptyList())
+                    }
+                    addView(offersPanel)
+                })
+            })
         }
         // Edge-to-edge (targetSdk 35+): keep the UI clear of the status/navigation bars and the keyboard.
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->

@@ -110,9 +110,18 @@ class DesktopPreviewInstrumentedTest {
                 val missing=row.copy(postId="550000000000098",permalink=row.permalink.replace(id,"550000000000098"),price=null,priceSource="NONE",area=null,rooms=null,usable=false,qualification="NO_TEXT")
                 stats["candidates"]=2
                 val summary=DesktopSummary.create("DONE",1,DesktopReply("OK","DONE",listOf(missing,row),stats))
-                var oldView:android.view.View?=null
+                var oldView:android.view.View?=null;var oldCards:android.view.View?=null
                 scenario.onActivity{a->
-                    a.publishDesktop(summary,listOf(missing,row));assertTrue(a.desktopResultDialog!!.isShowing)
+                    a.publishDesktop(summary,listOf(missing,row))
+                    val root=a.findViewById<android.view.ViewGroup>(android.R.id.content)
+                    oldCards=root.findViewWithTag<android.view.View>("poc.offers")
+                    assertEquals(android.view.View.VISIBLE,oldCards!!.visibility)
+                    assertTrue(texts(oldCards!!).contains(id));assertFalse(texts(oldCards!!).contains(missing.postId))
+                    root.findViewWithTag<android.widget.Button>("poc.tab.facebook").performClick()
+                    root.findViewWithTag<android.widget.Button>("poc.tab.offers").performClick()
+                    assertTrue(texts(oldCards!!).contains(id))
+                    root.findViewWithTag<android.widget.Button>("poc.offers.report").performClick()
+                    assertTrue(a.desktopResultDialog!!.isShowing)
                     oldView=a.desktopResultDialog!!.window!!.decorView
                     assertTrue(texts(oldView!!).contains("Brak tekstu przypisanego do dokładnego ID"));assertTrue(texts(oldView!!).contains(id));assertTrue(texts(oldView!!).contains("42,42 m²"));assertTrue(texts(oldView!!).indexOf("KANDYDAT 1")<texts(oldView!!).indexOf("RAPORT TECHNICZNY"))
                     assertFalse(prefs.getString("last","")!!.contains(id));assertFalse(prefs.getString("last","")!!.contains("Retkinia"))
@@ -122,16 +131,89 @@ class DesktopPreviewInstrumentedTest {
                 while(copied!=summary.report()&&System.currentTimeMillis()<end){scenario.onActivity{a->copied=a.getSystemService(android.content.ClipboardManager::class.java).primaryClip?.getItemAt(0)?.text?.toString()};runBlocking{delay(50)}}
                 assertEquals(summary.report(),copied);assertFalse(copied!!.contains(id))
                 scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED);scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
-                scenario.onActivity{assertFalse(texts(oldView!!).contains(id))}
+                scenario.onActivity{assertFalse(texts(oldView!!).contains(id));assertFalse(texts(oldCards!!).contains(id))}
                 scenario.recreate()
                 scenario.onActivity{a->a.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.widget.Button>("poc.tool.tools").performClick()}
                 scenario.onActivity{a->a.diagnosticsDialog!!.window!!.decorView.findViewWithTag<android.widget.Button>("poc.tool.desktopResult").performClick()}
-                scenario.onActivity{a->assertTrue(a.desktopResultDialog!!.isShowing);assertFalse(texts(a.desktopResultDialog!!.window!!.decorView).contains(id));assertTrue(texts(a.desktopResultDialog!!.window!!.decorView).contains("CONDITIONAL_GO"));assertTrue(texts(a.desktopResultDialog!!.window!!.decorView).contains("BRAK SZCZEGÓŁÓW OFERT W PAMIĘCI"))}
+                scenario.onActivity{a->
+                    val panel=a.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.view.View>("poc.offers")
+                    assertEquals(android.view.View.VISIBLE,panel.visibility);assertFalse(texts(panel).contains(id));assertTrue(texts(panel).contains("Brak ofert w pamięci"))
+                    panel.findViewWithTag<android.widget.Button>("poc.offers.report").performClick()
+                    assertTrue(a.desktopResultDialog!!.isShowing);assertFalse(texts(a.desktopResultDialog!!.window!!.decorView).contains(id));assertTrue(texts(a.desktopResultDialog!!.window!!.decorView).contains("CONDITIONAL_GO"))
+                }
                 assertTrue(history.getBoolean(key,false));assertEquals(link,context.getSharedPreferences("share_link_terminal_result_v1",Context.MODE_PRIVATE).getString("last",null))
             }
         }finally{
             if(original==null)prefs.edit().remove("last").commit() else prefs.edit().putString("last",original).commit()
             if(existed)history.edit().putBoolean(key,old).commit() else history.edit().remove(key).commit()
         }
+    }
+    @Test fun offerLinkClickIsExplicitExactAndCannotReuseClearedCards(){
+        val launched=CopyOnWriteArrayList<android.content.Intent>()
+        val instrumentation=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+        val monitor=object:android.app.Instrumentation.ActivityMonitor(){
+            override fun onStartActivity(intent:android.content.Intent):android.app.Instrumentation.ActivityResult?{
+                if(intent.action!=android.content.Intent.ACTION_VIEW)return null
+                launched.add(android.content.Intent(intent))
+                return android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_CANCELED,null)
+            }
+        }
+        instrumentation.addMonitor(monitor)
+        val prefs=context.getSharedPreferences("desktop_trial_summary_v1",Context.MODE_PRIVATE);val saved=prefs.getString("last",null)
+        try{
+            ActivityScenario.launch(PocActivity::class.java).use{scenario->
+                val id="550000000000097"
+                val row=DesktopRow(id,"https://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/posts/$id/","NETWORK",319000.0,"EXPLICIT_TOTAL",42.42,2,"Polesie","Retkinia",null,"SELL_PROPERTY",true,1,"CANDIDATE")
+                val stats=DesktopProtocol.emptyStats().toMutableMap().apply{put("candidates",1);put("verified",1);put("desktop",1)}
+                val summary=DesktopSummary.create("DONE",1,DesktopReply("OK","DONE",listOf(row),stats))
+                var stale:android.widget.Button?=null
+                scenario.onActivity{a->
+                    a.publishDesktop(summary,listOf(row))
+                    val root=a.findViewById<android.view.ViewGroup>(android.R.id.content)
+                    assertTrue(launched.isEmpty()) // Showing/switching tabs never opens a link.
+                    stale=root.findViewWithTag("poc.offer.open.$id")
+                    assertTrue(stale!!.isEnabled);stale!!.performClick()
+                    assertEquals(1,launched.size);assertEquals(row.permalink,launched.single().dataString)
+                    assertNull(launched.single().extras);assertTrue(launched.single().hasCategory(android.content.Intent.CATEGORY_BROWSABLE))
+                    assertFalse(texts(root.findViewWithTag("poc.offers")).contains(id))
+                    assertNull(stale!!.tag);assertEquals("",stale!!.text.toString())
+                    stale!!.performClick();assertEquals(1,launched.size)
+                    assertFalse(prefs.getString("last","")!!.contains(id))
+                }
+                scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED);scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+                scenario.onActivity{stale!!.performClick();assertEquals(1,launched.size)}
+            }
+        }finally{instrumentation.removeMonitor(monitor);if(saved==null)prefs.edit().remove("last").commit() else prefs.edit().putString("last",saved).commit()}
+    }
+    @Test fun switchingRealGeckoBetweenTabsKeepsTheSameDocumentAndPort(){
+        val prefs=context.getSharedPreferences("desktop_trial_summary_v1",Context.MODE_PRIVATE);val saved=prefs.getString("last",null)
+        try{
+            ActivityScenario.launch(PocActivity::class.java).use{scenario->
+                var activity:PocActivity?=null;scenario.onActivity{activity=it}
+                runBlocking{withTimeout(40_000){withContext(Dispatchers.Main){
+                    val a=activity!!;val root=a.findViewById<android.view.ViewGroup>(android.R.id.content)
+                    val view=root.findViewWithTag<GeckoView>("poc.browser")
+                    val server=LoopbackFixtureServer{asset->runCatching{context.assets.open(asset).bufferedReader().use{it.readText()}}.getOrNull()}
+                    val target=server.url("/groups/$FIXTURE_GROUP_ID/","desktop-start")
+                    val session=GeckoSession(GeckoSessionSettings.Builder().build())
+                    var disconnects=0
+                    val channel=CollectorChannel(session,fixtureMode=true,onPageDisconnect={disconnects++})
+                    try{
+                        channel.attach(GeckoHost.collectorExtension(context));session.open(GeckoHost.runtime(context));view.setSession(session);session.setActive(true)
+                        session.loadUri(target);assertTrue(channel.awaitPort(15_000));val generation=channel.connectionGeneration
+                        val id="550000000000096"
+                        val row=DesktopRow(id,"https://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/posts/$id/","DOM",319000.0,"EXPLICIT_TOTAL",42.42,2,null,null,null,"SELL_PROPERTY",true,0,"CANDIDATE")
+                        val stats=DesktopProtocol.emptyStats().toMutableMap().apply{put("candidates",1);put("verified",1);put("desktop",1)}
+                        a.publishDesktop(DesktopSummary.create("DONE",1,DesktopReply("OK","DONE",listOf(row),stats)),listOf(row))
+                        repeat(2){
+                            delay(400);assertTrue(channel.isConnected);assertEquals(generation,channel.connectionGeneration)
+                            root.findViewWithTag<android.widget.Button>("poc.tab.facebook").performClick();delay(200)
+                            root.findViewWithTag<android.widget.Button>("poc.tab.offers").performClick()
+                        }
+                        assertTrue(texts(root.findViewWithTag("poc.offers")).contains(id));assertTrue(channel.isConnected);assertEquals(0,disconnects);assertEquals(target,channel.connectedUrl)
+                    }finally{channel.close();view.releaseSession();session.close();server.close()}
+                }}}
+            }
+        }finally{if(saved==null)prefs.edit().remove("last").commit() else prefs.edit().putString("last",saved).commit()}
     }
 }
