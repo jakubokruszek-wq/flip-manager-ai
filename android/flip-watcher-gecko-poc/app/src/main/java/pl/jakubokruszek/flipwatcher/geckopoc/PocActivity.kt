@@ -115,6 +115,7 @@ class PocActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if(android.os.Build.VERSION.SDK_INT>=33)setRecentsScreenshotEnabled(false)
         setContentView(buildLayout())
         lifecycleScope.launch {
             extension = runCatching { GeckoHost.collectorExtension(this@PocActivity) }
