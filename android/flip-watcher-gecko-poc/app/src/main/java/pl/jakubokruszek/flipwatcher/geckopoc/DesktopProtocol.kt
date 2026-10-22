@@ -17,7 +17,7 @@ object DesktopProtocol {
         DesktopDocumentProof(id,time.toDouble())
     }.getOrNull()
 
-    val statKeys=listOf("candidates","dom","hydration","network","duplicates","rejected","ambiguous","scripts","scrollSteps","scrollMoves","requests","bytes","verified","desktop","filtered","completed","streamErrors","decodeErrors","oversize","limitSkipped","articles","mobile","scrollSeen","scrollNoRange","scrollHidden","scrollOffscreen","scrollUnbound","scrollRoot","scrollInner","scrollHit","scrollElapsedMs","scrollStalls","scrollAtEnd","scrollNoTarget","scrollTailAttempts","scrollTailMoves","pageFocused","pageVisible")
+    val statKeys=listOf("candidates","dom","hydration","network","duplicates","rejected","ambiguous","scripts","scrollSteps","scrollMoves","requests","bytes","verified","desktop","filtered","completed","streamErrors","decodeErrors","oversize","limitSkipped","articles","mobile","scrollSeen","scrollNoRange","scrollHidden","scrollOffscreen","scrollUnbound","scrollRoot","scrollInner","scrollHit","scrollElapsedMs","scrollStalls","scrollAtEnd","scrollNoTarget","scrollTailAttempts","scrollTailMoves","pageFocused","pageVisible","scrollNativeSteps","scrollNativeMoves","photoPreviewFrames","photoPreviews","viewportHeight","visualViewportHeight","rootRemaining")
     private val rowKeys=setOf("postId","permalink","layer","price","priceSource","area","rooms","district","neighborhood","street","intent","usable","photos","qualification")
     val qualifications=setOf("CANDIDATE","NO_TEXT","FOREIGN_CITY","NOT_PROPERTY","INTENT","MISSING_FIELDS","CONFLICT","CLASSIFIER")
     val intents=setOf("SELL_PROPERTY","BUY_PROPERTY","RENT_OFFER","RENT_WANTED","SERVICE","OTHER","UNKNOWN")
@@ -55,6 +55,7 @@ object DesktopProtocol {
         if(result.getValue("scrollSeen")>512||result.getValue("scrollHit")>30||result.getValue("scrollRoot")>1||result.getValue("scrollInner")>1||listOf("scrollNoRange","scrollHidden","scrollOffscreen","scrollUnbound").any{result.getValue(it)>512})return null
         if(result.getValue("scrollStalls")>result.getValue("scrollSteps")-result.getValue("scrollMoves")||result.getValue("scrollAtEnd")>512||result.getValue("scrollNoTarget")>30)return null
         if(result.getValue("scrollTailAttempts")>2||result.getValue("scrollTailAttempts")>result.getValue("scrollSteps")||result.getValue("scrollTailMoves")>result.getValue("scrollTailAttempts")||result.getValue("scrollTailMoves")>result.getValue("scrollMoves")||result.getValue("pageFocused")>1||result.getValue("pageVisible")>1)return null
+        if(result.getValue("scrollNativeSteps")>result.getValue("scrollSteps")||result.getValue("scrollNativeMoves")>result.getValue("scrollNativeSteps")||result.getValue("scrollNativeMoves")>result.getValue("scrollMoves")||result.getValue("photoPreviewFrames")>20||result.getValue("photoPreviews")>60)return null
         return result
     }
     fun emptyStats()=statKeys.associateWith{0}

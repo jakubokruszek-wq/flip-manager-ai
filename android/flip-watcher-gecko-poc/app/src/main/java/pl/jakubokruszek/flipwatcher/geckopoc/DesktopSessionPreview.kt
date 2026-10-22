@@ -11,7 +11,7 @@ import org.mozilla.geckoview.GeckoSessionSettings
 object DesktopSessionPreview {
     data class Outcome(val reason:String,val reply:DesktopReply?,val userAgent:String?)
     suspend fun run(session:GeckoSession,channel:CollectorChannel,gate:DesktopTrial,nonce:String,target:String,
-                    currentUrl:()->String?,fixture:Boolean=false,windowMs:Int=60_000):Outcome=withContext(Dispatchers.Main){
+                    currentUrl:()->String?,fixture:Boolean=false,windowMs:Int=60_000,view:org.mozilla.geckoview.GeckoView?=null,images:DesktopThumbnails?=null):Outcome=withContext(Dispatchers.Main){
         val group=if(fixture)FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID
         var ua:String?=null
         val start=android.os.SystemClock.elapsedRealtime()
@@ -46,6 +46,9 @@ object DesktopSessionPreview {
                 gate.waitFor(DesktopTrial.Phase.READING)
                 val generation=channel.connectionGeneration
                 session.setFocused(true)
+                if(view!=null&&images!=null&&channel.viewportBridge==null)channel.viewportBridge=DesktopViewportBridge(view,nonce,images,{
+                    live()&&gate.phase==DesktopTrial.Phase.READING&&currentUrl()==expected&&channel.connectionGeneration==generation&&channel.connectedUrl==expected
+                })
                 val reply=channel.desktopPreview(nonce,documentAfter,remaining().toInt(),group,previousDocument)
                 if(!live())return@withContext failure(gate.reason)
                 if(currentUrl()!=expected||generation!=channel.connectionGeneration)return@withContext failure("NAVIGATION")

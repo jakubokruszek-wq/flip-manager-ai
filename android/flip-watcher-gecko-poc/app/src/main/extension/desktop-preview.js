@@ -1,7 +1,7 @@
 /* Isolated/native-consented local projection. No storage, upload or public page bridge. */
 (function(root){
 'use strict';
-const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible'];
+const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible','scrollNativeSteps','scrollNativeMoves','photoPreviewFrames','photoPreviews','viewportHeight','visualViewportHeight','rootRemaining'];
 const zero=()=>Object.fromEntries(statKeys.map(k=>[k,0]));
 function groupURL(raw,group,fixture){try{const u=new URL(raw);return /^[A-Za-z0-9._-]{1,100}$/.test(group)&&!u.username&&!u.password&&!u.hash&&(fixture||!u.search)&&u.pathname.replace(/\/$/,'')==='/groups/'+group&&((u.protocol==='https:'&&!u.port&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))||(fixture===true&&u.protocol==='http:'&&u.hostname==='127.0.0.1'));}catch{return false;}}
 function exact(raw,group){try{const u=new URL(raw);const p=u.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d{5,30})\/?$/);return u.protocol==='https:'&&!u.port&&!u.username&&!u.password&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&p?.[1]===group?p[2]:null;}catch{return null;}}
@@ -11,7 +11,7 @@ const bounded=(v,min,max)=>typeof v==='number'&&Number.isFinite(v)&&v>=min&&v<=m
 function imageURL(raw){try{const u=new URL(raw);if(u.protocol!=='https:'||u.port||u.username||u.password||!['facebook.com','fbcdn.net'].some(h=>u.hostname===h||u.hostname.endsWith('.'+h))||/\.(?:mp4|webm|m3u8)(?:$|\/)/i.test(u.pathname)||u.pathname.length>2048)return null;return u.origin+u.pathname;}catch{return null;}}
 function photoLinkId(raw){try{const u=new URL(raw);if(u.protocol!=='https:'||u.port||u.username||u.password||!['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))return null;
  const id=/^\/photo(?:\.php)?\/?$/.test(u.pathname)?u.searchParams.get('fbid'):u.pathname.match(/^\/(?:[^/]+\/)?photos\/(?:(?:a|pcb)\.\d{5,30}\/)?(\d{5,30})\/?$/)?.[1];return /^\d{5,30}$/.test(id||'')?id:null;}catch{return null;}}
-function domPhotos(card,postId,group,core){
+function photoNodes(card,postId,group,core){
  const result=[];const video=!!card.querySelector?.('video');
  for(const n of Array.from(card.querySelectorAll('img,svg image')).slice(0,100)){
   if(n.closest('[role="article"],article')!==card||n.closest('[role="comment"],[data-testid*="comment"],[data-ad-rendering-role*="comment"],video'))continue;
@@ -20,10 +20,11 @@ function domPhotos(card,postId,group,core){
   if(rect.width<(mediaId?80:200)||rect.height<(mediaId?80:100)||(!mediaId&&video))continue;
   const raw=n.currentSrc||n.getAttribute?.('src')||n.getAttribute?.('href')||n.getAttributeNS?.('http://www.w3.org/1999/xlink','href');
   const url=imageURL(raw);if(!mediaId&&!url)continue;
-  result.push({url,mediaId,exactPostId:postId,exactAssociation:true,domPhoto:true});if(result.length===20)break;
+  result.push({node:n,item:{url,mediaId,exactPostId:postId,exactAssociation:true,domPhoto:true}});if(result.length===20)break;
  }
  return result;
 }
+function domPhotos(card,postId,group,core){return photoNodes(card,postId,group,core).map(p=>p.item);}
 function createModel(core,fields,group){
  const rowKeys=['postId','permalink','layer','price','priceSource','area','rooms','district','neighborhood','street','intent','usable','photos','qualification'];
  const qualifications=['CANDIDATE','NO_TEXT','FOREIGN_CITY','NOT_PROPERTY','INTENT','MISSING_FIELDS','CONFLICT','CLASSIFIER'];
@@ -144,11 +145,12 @@ function boundTail(w,core,group){
  const doc=w.document;
  const cards=Array.from(doc.querySelectorAll('[role="article"],article')).filter(c=>!c.parentElement?.closest('[role="article"],article'));
  if(cards.length>100)return null;
- const card=cards.at(-1);
- if(!card||card.isConnected===false||card.ownerDocument!==doc||typeof card.scrollIntoView!=='function'||card.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]'))return null;
+ for(const card of cards.slice().reverse()){
+ if(!card||card.isConnected===false||card.ownerDocument!==doc||typeof card.scrollIntoView!=='function'||card.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]'))continue;
  const links=Array.from(card.querySelectorAll('a[href]')).filter(a=>a.closest('[role="article"],article')===card).slice(0,100).map(a=>core.parsePostLink(a.href)).filter(Boolean);
- if(!links.length||links.some(l=>l.sourceType!=='GROUP'||l.sourceId!==group)||new Set(links.map(l=>l.postId)).size!==1)return null;
+ if(!links.length||links.some(l=>l.sourceType!=='GROUP'||l.sourceId!==group)||new Set(links.map(l=>l.postId)).size!==1)continue;
  return card;
+ }return null;
 }
 // overflow:hidden allows ordinary programmatic scrolling; overflow:clip does not.
 // Only recover through ancestors of the exact last post, after normal selection
@@ -224,12 +226,26 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   const active=async()=>{if(invalid||!safe(m)||w.performance.now()>=end)return false;const c=await send({type:'desktopContext',nonce:m.nonce});return !invalid&&safe(m)&&c?.active===true&&c.nonce===m.nonce;};
   // Reserve time for final extraction and native delivery within the original deadline.
   const scrollStart=w.performance.now(),scrollEnd=Math.min(scrollStart+30000,end-1500);
-  let noTargetStreak=0,lastTailAt=-Infinity;
+  let noTargetStreak=0,lastTailAt=-Infinity,nativeFailures=0;const photoSlots=new Map(),viewport=w.FlipDesktopViewport;
   for(let step=0;step<=30;step++){
    if(!await active())return empty('CONTEXT');
    model.stats.pageFocused=Math.max(model.stats.pageFocused,Number(w.document.hasFocus?.()===true));
    model.stats.pageVisible=Math.max(model.stats.pageVisible,Number(w.document.visibilityState==='visible'&&w.document.hidden!==true));
-   readDOM(w,model,core,m.groupId);if(step===30||w.performance.now()>=scrollEnd)break;
+   readDOM(w,model,core,m.groupId);
+   model.stats.viewportHeight=Math.min(10000,Math.round(w.innerHeight));model.stats.visualViewportHeight=Math.min(10000,Math.round(w.visualViewport?.height||w.innerHeight));
+   model.stats.rootRemaining=Math.max(0,Math.min(10000,Math.round((w.document.scrollingElement?.scrollHeight||0)-(w.document.scrollingElement?.clientHeight||0)-(w.scrollY||0))));
+   if(viewport&&m.photosConsent===true&&model.stats.photoPreviewFrames<20&&w.performance.now()<scrollEnd-1200){
+    const shot=viewport.photos(w,core,m.groupId,photoNodes,photoSlots);
+    if(shot){model.stats.photoPreviewFrames++;const ack=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:'photos',width:shot.width,height:shot.height,tiles:shot.tiles});
+     if(invalid||!safe(m))return empty('CONTEXT');
+     if(ack?.accepted===true&&ack.count===shot.tiles.length){
+      const commit=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:shot.valid()&&safe(m)?'commit':'drop',frameId:ack.requestId});
+      if(invalid||!safe(m))return empty('CONTEXT');
+      if(commit?.accepted===true&&commit.count===shot.tiles.length){for(const key of shot.keys)key.done=true;model.stats.photoPreviews+=commit.count;}
+     }
+    }
+   }
+   if(step===30||w.performance.now()>=scrollEnd)break;
    let recovered=false,container=scrollContainer(w,model.stats);
    // Retry a not-yet-scrollable feed within the same bounded window.
    if(!container){
@@ -247,7 +263,19 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
      continue;
     }
     container=noTargetStreak>=2?recoveryContainer(w,core,m.groupId):null;
-    if(!container){model.stats.scrollNoTarget++;await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));continue;}
+    if(!container){
+     const point=viewport&&m.viewportConsent===true&&noTargetStreak>=2&&nativeFailures<3?viewport.point(w,core,m.groupId):null;
+     if(point){
+      if(!await active())return empty('CONTEXT');const again=viewport.point(w,core,m.groupId);if(!again||again.x!==point.x||again.y!==point.y)return empty('CONTEXT');if(w.performance.now()>=scrollEnd)break;
+      const moved=viewport.trace(w),ack=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:'scroll',...point});
+      if(invalid||!safe(m))return empty('CONTEXT');
+      if(ack?.accepted===true){model.stats.scrollSteps++;model.stats.scrollNativeSteps++;await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));
+       if(invalid||!safe(m))return empty('CONTEXT');
+       if(moved()){model.stats.scrollMoves++;model.stats.scrollNativeMoves++;nativeFailures=0;}else{model.stats.scrollStalls++;nativeFailures++;}continue;
+      }nativeFailures++;
+     }
+     model.stats.scrollNoTarget++;await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));continue;
+    }
     if(!await active()||recoveryContainer(w,core,m.groupId)!==container)return empty('CONTEXT');
     if(w.performance.now()>=scrollEnd)break;
     recovered=true;model.stats[container===w.document.scrollingElement?'scrollRoot':'scrollInner']=1;
@@ -272,5 +300,5 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
  }catch{return empty('ERROR');}
  finally{setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
-const api={imageURL,photoLinkId,domPhotos,recoveryContainer,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
+const api={imageURL,photoLinkId,photoNodes,domPhotos,recoveryContainer,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);

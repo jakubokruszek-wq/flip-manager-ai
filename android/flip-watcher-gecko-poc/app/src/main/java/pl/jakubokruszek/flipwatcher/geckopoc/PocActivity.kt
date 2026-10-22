@@ -77,6 +77,7 @@ class PocActivity : ComponentActivity() {
     private var scanning = false
     private var visibleEpoch = 0L
     private var visibleBusy = false
+    internal val desktopThumbnails=DesktopThumbnails()
     private var desktopBusy=false
     private var desktopGate:DesktopTrial?=null
     private var desktopNonce:String?=null
@@ -189,15 +190,15 @@ class PocActivity : ComponentActivity() {
         if(desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||kind!=PageKind.APPROVED_GROUP||progress!=100||channel?.isConnected!=true)return
         val currentSession=session?:return;val currentChannel=channel?:return;val target=url?:return
         desktopConsentDialog=AlertDialog.Builder(this).setTitle("Jedna próba komputerowa — lokalnie")
-            .setMessage("NOWA JEDNORAZOWA ZGODA: przełączyć tę sesję na standardowy tryb komputerowy GeckoView i raz otworzyć zatwierdzoną grupę? Do 60 s łącznie, maksymalnie 20 przechowywanych postów i do 30 s przewijania (maksymalnie 30 kroków, co 1 s, w tym do 2 wyrównań ostatniego potwierdzonego posta do ekranu przy zatrzymaniu; wolne ładowanie skraca okno). Odczyt widocznego DOM, danych strony i odpowiedzi fetch/XHR/other tej grupy: do 64 odpowiedzi, 2 MiB każda, 4 MiB łącznie. Nasłuch zostanie uzbrojony PRZED otwarciem. Bez odczytu Beacon, nagłówków, wysyłanych formularzy, cookies lub tokenów. Pełne treści tylko przejściowo w ograniczonym RAM rozszerzenia. Podgląd pokazuje dokładne ID/permalinki oraz heurystyczne pola i liczbę zdjęć. Dane podglądu nie są zapisywane i znikają po pauzie. Lokalnie zostaje wyłącznie raport status/liczniki, bez ID i treści. Bez uploadu, backendu i produkcyjnego kolektora; nie resetuje starego limitu skanu. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu lub wygaszenie: STOP. Tryb komputerowy pozostaje w tej sesji do jej zamknięcia. Zgoda nie jest zapamiętywana.")
+            .setMessage("NOWA JEDNORAZOWA ZGODA: przełączyć tę sesję na standardowy tryb komputerowy GeckoView i raz otworzyć zatwierdzoną grupę? Do 60 s łącznie, maksymalnie 20 przechowywanych postów i do 30 s przewijania (maksymalnie 30 kroków, co 1 s, w tym do 2 wyrównań ostatniego potwierdzonego posta do ekranu przy zatrzymaniu; wolne ładowanie skraca okno). Odczyt widocznego DOM, danych strony i odpowiedzi fetch/XHR/other tej grupy: do 64 odpowiedzi, 2 MiB każda, 4 MiB łącznie. Nasłuch zostanie uzbrojony PRZED otwarciem. Bez odczytu Beacon, nagłówków, wysyłanych formularzy, cookies lub tokenów. Pełne treści tylko przejściowo w ograniczonym RAM rozszerzenia. Podgląd pokazuje dokładne ID/permalinki, heurystyczne pola i do 3 lokalnych miniatur na post. NOWA ZGODA obejmuje zwykłe przewijanie wejściem kółka myszy przez oficjalne API GeckoView przy zatrzymaniu DOM oraz wycięcie widocznych zdjęć: przejściowy obraz widoku Gecko w RAM Androida, usuwany natychmiast po wycięciu; miniatury tylko w RAM do pauzy/zmiany strony. Bez zapisu obrazów, dodatkowego pobierania mediów, adresów zdjęć w Androidzie i bez uploadu. Dane podglądu nie są zapisywane i znikają po pauzie. Lokalnie zostaje wyłącznie raport status/liczniki, bez ID i treści. Bez uploadu, backendu i produkcyjnego kolektora; nie resetuje starego limitu skanu. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu lub wygaszenie: STOP. Tryb komputerowy pozostaje w tej sesji do jej zamknięcia. Zgoda nie jest zapamiętywana.")
             .setNegativeButton("Anuluj",null).setPositiveButton("Zgadzam się — uruchom próbę"){_,_->
                 if(!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)||session!==currentSession||channel!==currentChannel||url!=target||kind!=PageKind.APPROVED_GROUP||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||progress!=100||!currentChannel.isConnected)return@setPositiveButton
                 stopVisiblePosts();finishShare("CANCELLED",clear=true);clearDesktopDetails()
                 val gate=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()})
                 if(!gate.begin(true)){publishDesktop(DesktopSummary.create("NO_CONSENT_OR_CONTEXT",0),emptyList());return@setPositiveButton}
-                geckoView.requestFocus();desktopGate=gate;desktopBusy=true;desktopRows=emptyList();desktopNonce=UUID.randomUUID().toString();render()
+                clearDesktopDetails();geckoView.requestFocus();desktopGate=gate;desktopBusy=true;desktopRows=emptyList();desktopNonce=UUID.randomUUID().toString();render()
                 desktopJob=lifecycleScope.launch{
-                    val result=DesktopSessionPreview.run(currentSession,currentChannel,gate,desktopNonce!!,target,{url})
+                    val result=DesktopSessionPreview.run(currentSession,currentChannel,gate,desktopNonce!!,target,{url},view=geckoView,images=desktopThumbnails)
                     if(desktopGate===gate&&desktopBusy){userAgent=result.userAgent;finishDesktop(result.reason,result.reply)}
                 }
             }.create()
@@ -216,15 +217,17 @@ class PocActivity : ComponentActivity() {
     }
     internal fun publishDesktop(summary:DesktopSummary,rows:List<DesktopRow>,show:Boolean=true){
         desktopRows=rows.take(20)
+        desktopThumbnails.retain(desktopRows.filter{DesktopSummary.eligible(it)}.map{it.postId}.toSet())
         val saved=runCatching{desktopPrefs.edit().putString("last",summary.encode()).commit()}.getOrDefault(false)
         output.text=summary.report()+if(saved)"" else "\nUWAGA: nie zapisano raportu; skopiuj teraz."
-        if(::offersPanel.isInitialized)offersPanel.showRows(desktopRows)
+        if(::offersPanel.isInitialized)offersPanel.showRows(desktopRows,thumbnails={desktopThumbnails.rows(it)})
         if(show&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))selectContentTab(true)
         render()
     }
     private fun clearDesktopDetails(){
         desktopRows=emptyList();desktopResultText?.text="";desktopResultText=null;desktopResultDialog?.dismiss();desktopResultDialog=null
         if(::offersPanel.isInitialized)offersPanel.showRows(emptyList())
+        desktopThumbnails.clear()
         if(::offersTab.isInitialized)offersTab.text="Oferty (0)"
     }
     private fun busyForTabs()=desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad

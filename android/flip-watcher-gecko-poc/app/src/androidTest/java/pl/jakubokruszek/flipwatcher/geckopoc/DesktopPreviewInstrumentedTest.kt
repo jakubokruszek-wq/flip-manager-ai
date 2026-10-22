@@ -113,6 +113,68 @@ class DesktopPreviewInstrumentedTest {
         }
     }
 
+    @Test fun nativeWheelUnblocksFeedAndRenderedThumbnailsStayOnlyInRam(){
+        ActivityScenario.launch(GeckoTestHostActivity::class.java).use {scenario->
+            var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it}
+            runBlocking{withTimeout(70_000){withContext(Dispatchers.Main){
+                val server=LoopbackFixtureServer{asset->
+                    val selected=if(asset=="fixtures/desktop-start.html")"fixtures/desktop-viewport.html" else asset
+                    runCatching{context.assets.open(selected).bufferedReader().use{it.readText()}}.getOrNull()
+                }
+                val target=server.url("/groups/$FIXTURE_GROUP_ID/","desktop-start")
+                val session=GeckoSession(GeckoSessionSettings.Builder().build());val images=DesktopThumbnails()
+                var gate:DesktopTrial?=null;var current:String?=null;var loaded=false
+                val channel=CollectorChannel(session,fixtureMode=true,onDesktopStop={gate?.stop("CONTEXT")})
+                session.navigationDelegate=object:GeckoSession.NavigationDelegate{
+                    override fun onLoadRequest(s:GeckoSession,q:GeckoSession.NavigationDelegate.LoadRequest):GeckoResult<AllowOrDeny>{
+                        val ok=if(gate==null)q.uri==target else gate!!.request(q.uri,q.isRedirect,q.target==GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW,q.hasUserGesture)
+                        return GeckoResult.fromValue(if(ok)AllowOrDeny.ALLOW else AllowOrDeny.DENY)
+                    }
+                    override fun onLocationChange(s:GeckoSession,u:String?,p:MutableList<GeckoSession.PermissionDelegate.ContentPermission>,gesture:Boolean){current=u;if(gate?.active==true)gate!!.location(u)}
+                }
+                session.progressDelegate=object:GeckoSession.ProgressDelegate{
+                    override fun onPageStart(s:GeckoSession,u:String){loaded=false}
+                    override fun onPageStop(s:GeckoSession,success:Boolean){loaded=success}
+                }
+                try{
+                    channel.attach(GeckoHost.collectorExtension(context));session.open(GeckoHost.runtime(context));host!!.geckoView.setSession(session);session.setActive(true)
+                    session.loadUri(target);assertTrue(channel.awaitPort(15_000));withTimeout(15_000){while(!loaded||current!=target)delay(100)}
+                    val trial=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=trial;assertTrue(trial.begin(true))
+                    val result=DesktopSessionPreview.run(session,channel,trial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=40_000,view=host!!.geckoView,images=images)
+                    assertEquals("DONE",result.reason);val reply=result.reply!!
+                    assertTrue("official wheel request absent",reply.stats.getValue("scrollNativeSteps")>0)
+                    assertTrue("native request ACK is not motion proof",reply.stats.getValue("scrollNativeMoves")>0)
+                    assertTrue("wheel must load a NEW exact offer",reply.rows.any{it.postId=="550000000000096"&&it.price==680000.0&&it.area==68.0})
+                    val thumbs=images.rows("550000000000091")
+                    assertEquals("actual rendered image crops missing",2,thumbs.size)
+                    assertTrue(thumbs.all{it.width<=192&&it.height<=144})
+                    val colors=thumbs.map{it.getPixel(it.width/2,it.height/2)}
+                    assertTrue("red picture missing",colors.any{android.graphics.Color.red(it)>200&&android.graphics.Color.green(it)<40})
+                    assertTrue("green picture missing",colors.any{android.graphics.Color.green(it)>200&&android.graphics.Color.red(it)<40})
+                    val row=reply.rows.single{it.postId=="550000000000091"}
+                    val panel=OffersPanel(context,{},{});panel.showRows(listOf(row),thumbnails={images.rows(it)})
+                    val image=panel.findViewWithTag<android.widget.ImageView>("poc.offer.photo.${row.postId}.0")
+                    assertNotNull(image.drawable)
+                    panel.showRows(emptyList());assertNull(image.drawable)
+                    images.clear();assertTrue(thumbs.all{it.isRecycled});assertEquals(0,images.count)
+                    assertFalse(DesktopSummary.create("DONE",trial.requests,reply).encode().contains(row.postId))
+                    android.util.Log.i("GeckoPocTest","VIEWPORT_ACCEPTANCE ${DesktopSummary.create("DONE",trial.requests,reply).report()}")
+                }finally{channel.abortDesktop();images.clear();channel.close();host!!.geckoView.releaseSession();session.close();server.close()}
+            }}}
+        }
+    }
+
+    @Test fun nativeViewportWithoutLiveGateCannotCaptureOrScroll(){
+        ActivityScenario.launch(GeckoTestHostActivity::class.java).use{scenario->scenario.onActivity{host->
+            val nonce=UUID.randomUUID().toString();val images=DesktopThumbnails()
+            val bridge=DesktopViewportBridge(host.geckoView,nonce,images,{false})
+            val request=org.json.JSONObject().put("type","desktopViewportRequest").put("nonce",nonce).put("requestId",UUID.randomUUID().toString()).put("action","scroll").put("x",0.5).put("y",0.6)
+            var ack:org.json.JSONObject?=null;bridge.handle(request){ack=it}
+            assertFalse(ack!!.getBoolean("accepted"));assertEquals(0,images.count)
+            bridge.close();ack=null;bridge.handle(request.put("requestId",UUID.randomUUID().toString())){ack=it};assertNull(ack)
+        }}
+    }
+
     private fun texts(view:android.view.View):String=when(view){
         is android.widget.TextView->view.text.toString()
         is android.view.ViewGroup->(0 until view.childCount).joinToString("\n"){texts(view.getChildAt(it))}
@@ -133,12 +195,15 @@ class DesktopPreviewInstrumentedTest {
                 val missing=row.copy(postId="550000000000098",permalink=row.permalink.replace(id,"550000000000098"),price=null,priceSource="NONE",area=null,rooms=null,usable=false,qualification="NO_TEXT")
                 stats["candidates"]=2
                 val summary=DesktopSummary.create("DONE",1,DesktopReply("OK","DONE",listOf(missing,row),stats))
-                var oldView:android.view.View?=null;var oldCards:android.view.View?=null
+                var oldView:android.view.View?=null;var oldCards:android.view.View?=null;var oldImage:android.widget.ImageView?=null
+                val transientPicture=android.graphics.Bitmap.createBitmap(10,10,android.graphics.Bitmap.Config.ARGB_8888)
                 scenario.onActivity{a->
+                    assertTrue(a.desktopThumbnails.put(id,0,transientPicture))
                     a.publishDesktop(summary,listOf(missing,row))
                     val root=a.findViewById<android.view.ViewGroup>(android.R.id.content)
                     oldCards=root.findViewWithTag<android.view.View>("poc.offers")
                     assertEquals(android.view.View.VISIBLE,oldCards!!.visibility)
+                    oldImage=root.findViewWithTag("poc.offer.photo.$id.0");assertNotNull(oldImage!!.drawable)
                     assertTrue(texts(oldCards!!).contains(id));assertFalse(texts(oldCards!!).contains(missing.postId))
                     root.findViewWithTag<android.widget.Button>("poc.tab.facebook").performClick()
                     root.findViewWithTag<android.widget.Button>("poc.tab.offers").performClick()
@@ -154,7 +219,7 @@ class DesktopPreviewInstrumentedTest {
                 while(copied!=summary.report()&&System.currentTimeMillis()<end){scenario.onActivity{a->copied=a.getSystemService(android.content.ClipboardManager::class.java).primaryClip?.getItemAt(0)?.text?.toString()};runBlocking{delay(50)}}
                 assertEquals(summary.report(),copied);assertFalse(copied!!.contains(id))
                 scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED);scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
-                scenario.onActivity{assertFalse(texts(oldView!!).contains(id));assertFalse(texts(oldCards!!).contains(id))}
+                scenario.onActivity{assertFalse(texts(oldView!!).contains(id));assertFalse(texts(oldCards!!).contains(id));assertNull(oldImage!!.drawable);assertTrue(transientPicture.isRecycled);assertEquals(0,it.desktopThumbnails.count)}
                 scenario.recreate()
                 scenario.onActivity{a->a.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.widget.Button>("poc.tool.tools").performClick()}
                 scenario.onActivity{a->a.diagnosticsDialog!!.window!!.decorView.findViewWithTag<android.widget.Button>("poc.tool.desktopResult").performClick()}

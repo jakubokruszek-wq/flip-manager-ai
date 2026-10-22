@@ -27,6 +27,7 @@ class CollectorChannel(
 ) {
     private var shareNonce: String? = null
     private var desktopNonce: String? = null
+    internal var viewportBridge:DesktopViewportBridge?=null
     private var port: WebExtension.Port? = null
     private var portReady: CompletableDeferred<Unit> = CompletableDeferred()
     private val pending = HashMap<String, CompletableDeferred<JSONObject?>>()
@@ -45,6 +46,7 @@ class CollectorChannel(
             if (port !== this@CollectorChannel.port) return
             val json = ScanProtocol.asJson(message) ?: return
             when (json.optString("type")) {
+                "desktopViewportRequest" -> viewportBridge?.handle(json){ack->if(port===this@CollectorChannel.port)runCatching{port.postMessage(ack)}}
                 "desktopPreviewStop" -> if(json.optString("nonce")==desktopNonce)onDesktopStop()
                 "shareLinkStop" -> if (json.optString("nonce") == shareNonce) onShareStop()
                 "visiblePostsStop" -> onVisibleStop()
@@ -107,10 +109,10 @@ class CollectorChannel(
     }
     suspend fun desktopPreview(nonce:String,documentAfter:Long,remainingMs:Int,group:String=PocPolicy.APPROVED_GROUP_ID,previous:DesktopDocumentProof?=null):DesktopReply? {
         if(desktopNonce!=nonce||previous==null)return null
-        val result=request(nonce,JSONObject().put("type","desktopPreview").put("nonce",nonce).put("consent",true).put("groupId",group).put("allowLoopback",fixtureMode).put("documentAfter",documentAfter).put("remainingMs",remainingMs).put("previousDocumentId",previous.documentId).put("previousTimeOrigin",previous.timeOrigin),remainingMs.toLong().coerceIn(500,60_000))
+        val result=request(nonce,JSONObject().put("type","desktopPreview").put("nonce",nonce).put("consent",true).put("groupId",group).put("allowLoopback",fixtureMode).put("documentAfter",documentAfter).put("remainingMs",remainingMs).put("previousDocumentId",previous.documentId).put("previousTimeOrigin",previous.timeOrigin).put("viewportConsent",viewportBridge!=null).put("photosConsent",viewportBridge!=null),remainingMs.toLong().coerceIn(500,60_000))
         return DesktopProtocol.parse(result,nonce,group)
     }
-    fun abortDesktop(){desktopNonce=null;runCatching{port?.postMessage(JSONObject().put("type","abortDesktopPreview").put("nonce",UUID.randomUUID().toString()))}}
+    fun abortDesktop(){viewportBridge?.close();viewportBridge=null;desktopNonce=null;runCatching{port?.postMessage(JSONObject().put("type","abortDesktopPreview").put("nonce",UUID.randomUUID().toString()))}}
 
     suspend fun shareLinkProof(expectedUrl: String, consent: Boolean, newDocumentAfter: Long? = null): ShareContextReply {
         if (!consent) return ShareContextReply.ABSENT

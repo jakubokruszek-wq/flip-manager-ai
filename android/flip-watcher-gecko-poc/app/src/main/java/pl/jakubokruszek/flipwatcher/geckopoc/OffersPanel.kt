@@ -9,6 +9,8 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.ImageView
+import android.graphics.Bitmap
 import java.text.NumberFormat
 import java.util.Locale
 
@@ -19,9 +21,10 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
     private fun erase(view:View){
         view.setOnClickListener(null);view.contentDescription=null;view.tag=null
         if(view is TextView)view.text=""
+        if(view is ImageView)view.setImageDrawable(null)
         if(view is ViewGroup)for(i in 0 until view.childCount)erase(view.getChildAt(i))
     }
-    fun showRows(rows:List<DesktopRow>,notice:String?=null){
+    fun showRows(rows:List<DesktopRow>,notice:String?=null,thumbnails:(String)->List<Bitmap> = {emptyList()}){
         erase(content);content.removeAllViews()
         val dp=resources.displayMetrics.density
         content.setPadding((12*dp).toInt(),(8*dp).toInt(),(12*dp).toInt(),(12*dp).toInt())
@@ -43,6 +46,13 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
             card.addView(label("${number(row.area)} m² • pokoje: ${number(row.rooms)}"))
             card.addView(label(listOfNotNull(row.district,row.neighborhood,row.street).joinToString(" / ").ifEmpty{"Lokalizacja: —"}))
             card.addView(label(DesktopPresentation.photos(row.photos),14f))
+            val pictures=thumbnails(row.postId).filter{!it.isRecycled}.take(3)
+            if(pictures.isEmpty())card.addView(label("Brak lokalnej miniatury — zdjęcie mogło nie być widoczne podczas próby.",13f))
+            for((index,image) in pictures.withIndex())card.addView(ImageView(context).apply{
+                tag="poc.offer.photo.${row.postId}.$index";isSaveEnabled=false;adjustViewBounds=true;scaleType=ImageView.ScaleType.FIT_CENTER
+                contentDescription="Lokalna miniatura ${index+1}";setImageBitmap(image)
+                layoutParams=LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,(180*dp).toInt())
+            })
             card.addView(label("ID: ${row.postId}",12f))
             val link=OfferLinks.validated(row)
             card.addView(label(link?:"Brak bezpiecznego linku",14f).apply{

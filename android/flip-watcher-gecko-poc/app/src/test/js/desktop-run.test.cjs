@@ -111,3 +111,31 @@ test('body-propagated hidden overflow and a deep root still permit exact ancesto
  h.w.getComputedStyle=n=>({overflowY:n===root?'visible':n===body?'clip':'auto'});
  assert.equal(preview.recoveryContainer(h.w,core,group),null);
 });
+
+test('a trailing placeholder cannot disable exact ancestor recovery',()=>{
+ const h=env(),{feed,root}=visibleTailRecovery(h);feed.scrollTop=1200;
+ const query=h.w.document.querySelectorAll;const placeholder={parentElement:null,ownerDocument:h.w.document,isConnected:true,closest:()=>null,scrollIntoView(){},querySelectorAll:()=>[]};
+ h.w.document.querySelectorAll=s=>s==='[role="article"],article'?[...query(s),placeholder]:query(s);
+ assert.equal(preview.recoveryContainer(h.w,core,group),root);
+});
+
+test('official native viewport fallback requires consent and counts only observed movement',async()=>{
+ for(const consent of [false,true]){const h=env();h.w.document.scrollingElement.scrollHeight=800;let shifts=0,calls=0;
+ h.w.FlipDesktopViewport={point:()=>({x:.5,y:.6}),trace:()=>{const before=shifts;return()=>shifts>before},photos:()=>null};
+ h.notify=async msg=>{if(msg.type==='desktopViewportRequest'){calls++;shifts++;return{accepted:true,count:0}}};
+ const r=await preview.run(h.w,{...m,viewportConsent:consent},core,fields,h.safe,h.send,h.setAbort,h.notify);
+ assert.equal(r.status,'OK');if(consent){assert.equal(r.stats.scrollNativeMoves,29);assert.equal(calls,29);}else{assert.equal(calls,0);assert.equal(r.stats.scrollNativeMoves,0);}}
+});
+test('accepted but unmoved native requests stop after three failures',async()=>{
+ const h=env();h.w.document.scrollingElement.scrollHeight=800;
+ h.w.FlipDesktopViewport={point:()=>({x:.5,y:.6}),trace:()=>()=>false,photos:()=>null};h.notify=async()=>({accepted:true,count:0});
+ const r=await preview.run(h.w,{...m,viewportConsent:true},core,fields,h.safe,h.send,h.setAbort,h.notify);
+ assert.equal(r.stats.scrollNativeSteps,3);assert.equal(r.stats.scrollNativeMoves,0);assert.equal(r.stats.scrollStalls,3);
+});
+test('native preview pixels require a second stable-frame confirmation and separate photo consent',async()=>{
+ for(const [consent,stable] of [[false,true],[true,false],[true,true]]){const h=env();const requests=[];
+ h.w.FlipDesktopViewport={photos:()=>({width:980,height:800,tiles:[{postId:'550000000000091',slot:0,x:0,y:0,width:100,height:100}],keys:[{}],valid:()=>stable})};
+ h.notify=async msg=>{requests.push(msg);return{requestId:newDoc,accepted:true,count:msg.action==='drop'?0:1}};
+ const r=await preview.run(h.w,{...m,photosConsent:consent},core,fields,h.safe,h.send,h.setAbort,h.notify);
+ assert.equal(r.status,'OK');if(!consent)assert.equal(requests.length,0);else if(!stable){assert.equal(r.stats.photoPreviews,0);assert(requests.some(m=>m.action==='drop'));}else assert(r.stats.photoPreviews>0);}
+});
