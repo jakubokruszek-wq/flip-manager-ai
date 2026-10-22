@@ -174,7 +174,8 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{}){
     noTargetStreak++;
     const tail=noTargetStreak>=2&&model.stats.scrollTailAttempts<2&&w.performance.now()-lastTailAt>=5000?tailTarget(w,core,m.groupId):null;
     if(tail){
-     if(!await active()||w.performance.now()>=scrollEnd||tailTarget(w,core,m.groupId)!==tail)return empty('CONTEXT');
+     if(!await active()||tailTarget(w,core,m.groupId)!==tail)return empty('CONTEXT');
+     if(w.performance.now()>=scrollEnd)break;
      const moved=scrollTrace(w,tail);lastTailAt=w.performance.now();
      tail.scrollIntoView({block:'end',inline:'nearest',behavior:'instant'});
      model.stats.scrollTailAttempts++;model.stats.scrollSteps++;
