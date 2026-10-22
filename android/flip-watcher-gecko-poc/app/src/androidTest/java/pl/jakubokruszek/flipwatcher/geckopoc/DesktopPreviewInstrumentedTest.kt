@@ -60,10 +60,12 @@ class DesktopPreviewInstrumentedTest {
                     session.loadUri(target);assertTrue(channel.awaitPort(15_000));withTimeout(15_000){while(!complete||current!=target)delay(100)}
                     assertTrue(agents.first().contains("Mobile")||agents.first().contains("Android"))
                     val trial=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=trial;assertTrue(trial.begin(true))
-                    val result=DesktopSessionPreview.run(session,channel,trial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=15_000)
+                    val startedAt=android.os.SystemClock.elapsedRealtime()
+                    val result=DesktopSessionPreview.run(session,channel,trial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=45_000)
+                    assertTrue("thirty-second scroll window was skipped",android.os.SystemClock.elapsedRealtime()-startedAt>=30_000)
                     assertEquals("DONE",result.reason);assertEquals(1,trial.requests)
                     assertTrue(agents.size>=2);assertFalse(agents.last().contains("Mobile",true));assertFalse(agents.last().contains("Android",true))
-                    val reply=result.reply!!;assertEquals(1,reply.stats.getValue("desktop"));assertEquals(1,reply.stats.getValue("verified"));assertEquals(5,reply.stats.getValue("scrollMoves"));assertEquals(5,reply.stats.getValue("scrollSteps"));assertEquals(1,reply.stats.getValue("scrollInner"));assertTrue(reply.stats.getValue("scrollHit")>0)
+                    val reply=result.reply!!;assertEquals(1,reply.stats.getValue("desktop"));assertEquals(1,reply.stats.getValue("verified"));assertTrue(reply.stats.getValue("scrollMoves") in 5..30);assertTrue(reply.stats.getValue("scrollSteps") in 15..30);assertEquals(1,reply.stats.getValue("scrollInner"));assertTrue(reply.stats.getValue("scrollHit")>0)
                     assertTrue("initial response missing",reply.stats.getValue("bytes")>0);assertTrue(reply.stats.getValue("network")>=2)
                     assertEquals(3,reply.rows.size);assertEquals(3,reply.rows.map{it.postId}.distinct().size)
                     val listing=reply.rows.single{it.postId=="550000000000091"}
@@ -77,7 +79,7 @@ class DesktopPreviewInstrumentedTest {
                     // HTML owns viewport overflow: hidden BODY must not suppress root scrolling.
                     rootScroll.set(true);val rootTrial=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=rootTrial;assertTrue(rootTrial.begin(true))
                     val rootResult=DesktopSessionPreview.run(session,channel,rootTrial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=15_000)
-                    assertEquals("DONE",rootResult.reason);assertEquals(5,rootResult.reply!!.stats.getValue("scrollMoves"));assertEquals(2,DesktopSummary.create("DONE",rootTrial.requests,rootResult.reply).offers)
+                    assertEquals("DONE",rootResult.reason);assertTrue(rootResult.reply!!.stats.getValue("scrollMoves") in 5..30);assertEquals(2,DesktopSummary.create("DONE",rootTrial.requests,rootResult.reply).offers)
                     // Same runner and real page: a verification mutation must discard partial results.
                     challenge.set(true);val unsafe=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=unsafe;assertTrue(unsafe.begin(true))
                     val nonce=UUID.randomUUID().toString()

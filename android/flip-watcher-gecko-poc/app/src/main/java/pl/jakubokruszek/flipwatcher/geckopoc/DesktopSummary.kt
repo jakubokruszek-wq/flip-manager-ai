@@ -6,7 +6,7 @@ import org.json.JSONObject
 class DesktopSummary private constructor(val verdict:String,val reason:String,val offers:Int,val navigations:Int,val stats:Map<String,Int>){
     fun encode():String=JSONObject().put("verdict",verdict).put("reason",reason).put("offers",offers).put("navigations",navigations).put("stats",JSONObject(stats)).toString()
     fun report():String=buildString {
-        appendLine("KOMPUTER 0.5.4 • tylko lokalnie • $verdict")
+        appendLine("KOMPUTER 0.5.5 • tylko lokalnie • $verdict")
         appendLine("Powód: $reason • tryb komputerowy: ${stats.getValue("desktop")} • nawigacje: $navigations/4")
         appendLine("Dokładne ID/permalinki: ${stats.getValue("candidates")} • kandydaci ofert po filtrach: $offers")
         appendLine("Odczyty rekordów DOM (powtórzenia): ${stats.getValue("dom")} • dane strony: ${stats.getValue("hydration")} • sieć: ${stats.getValue("network")}")
@@ -19,6 +19,7 @@ class DesktopSummary private constructor(val verdict:String,val reason:String,va
             appendLine("Źródło: punkty ekranu ${stats.getValue("scrollHit")} • wybrano okno ${stats.getValue("scrollRoot")} / kontener ${stats.getValue("scrollInner")}")
         }
         appendLine("Przewinięcia: ${stats.getValue("scrollMoves")}/${stats.getValue("scrollSteps")} • odczyty skryptów: ${stats.getValue("scripts")}")
+        appendLine("Przewijanie: do 30 s / 30 kroków; limit 20 ID i wspólne 60 s z ładowaniem mogą skrócić próbę.")
         if(stats.getValue("scrollSteps")==0&&stats.getValue("candidates")<20)appendLine("UWAGA: przewijanie nie rozpoczęło się — nie znaleziono dozwolonego kontenera z dostępnym zakresem przewijania. Wynik nie potwierdza kompletności grupy.")
         if(stats.getValue("scrollSteps")>0&&stats.getValue("scrollMoves")==0)appendLine("UWAGA: próby przewinięcia nie przesunęły kontenera; brak dalszych postów nie jest potwierdzony.")
         if(stats.getValue("limitSkipped")>0)appendLine("UWAGA: limit odpowiedzi wykorzystany; raport nie potwierdza odczytu wszystkich danych grupy.")

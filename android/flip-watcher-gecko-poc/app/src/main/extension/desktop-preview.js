@@ -138,18 +138,19 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{}){
   dispose=w.FlipVisiblePosts.watch(w,m,abort);
   const ack=await send({type:'confirmDesktop',nonce:m.nonce,safe:true});if(!ack?.confirmed||invalid||!safe(m))return empty('CONTEXT');
   const active=async()=>{if(invalid||!safe(m)||w.performance.now()>=end)return false;const c=await send({type:'desktopContext',nonce:m.nonce});return !invalid&&safe(m)&&c?.active===true&&c.nonce===m.nonce;};
-  for(let step=0;step<=5;step++){
-   if(!await active())return empty('CONTEXT');readDOM(w,model,core,m.groupId);if(model.stats.candidates>=20||step===5)break;
+  // Reserve time for final extraction and native delivery within the original deadline.
+  const scrollEnd=Math.min(w.performance.now()+30000,end-1500);
+  for(let step=0;step<=30;step++){
+   if(!await active())return empty('CONTEXT');readDOM(w,model,core,m.groupId);if(model.stats.candidates>=20||step===30||w.performance.now()>=scrollEnd)break;
    let container=scrollContainer(w,model.stats);
-   // A freshly loaded feed can acquire its scroll extent after content_idle.
-   for(let wait=0;!container&&wait<5;wait++){await pause(500);if(!await active())return empty('CONTEXT');container=scrollContainer(w,model.stats);}
-   if(!container)break;
+   // Retry a not-yet-scrollable feed within the same bounded window.
+   if(!container){await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));continue;}
    const root=container===w.document.scrollingElement;
    const before=root?w.scrollY:container.scrollTop;
    const top=Math.max(400,Math.min(900,Math.round((root?w.innerHeight:container.clientHeight)*.85)));
    if(root)w.scrollBy({left:0,top,behavior:'instant'});else container.scrollBy({left:0,top,behavior:'instant'});
    model.stats.scrollSteps++;
-   await pause(500); // measure after rendering, not immediately after scrollBy
+   await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now()))); // measure rendered movement, at most one attempt per second
    if((root?w.scrollY:container.scrollTop)>before)model.stats.scrollMoves++;
   }
   await pause(700);if(!await active())return empty('CONTEXT');readDOM(w,model,core,m.groupId);

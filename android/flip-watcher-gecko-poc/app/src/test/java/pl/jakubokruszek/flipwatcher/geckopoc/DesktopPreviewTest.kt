@@ -40,4 +40,12 @@ class DesktopPreviewTest {
     @Test fun summaryPersistsOnlyFixedAggregateAndCannotRestorePostData(){val reply=DesktopProtocol.parse(message(),nonce)!!;val s=DesktopSummary.create("DONE",1,reply);assertEquals("CONDITIONAL_GO",s.verdict);assertEquals(1,s.offers);assertFalse(s.encode().contains("550000000000001"));assertFalse(s.encode().contains("319000"));assertFalse(s.encode().contains("Retkinia"));assertFalse(s.report().contains("/groups/"));assertEquals(s.report(),DesktopSummary.decode(s.encode())!!.report())}
     @Test fun unsafeAndNonSaleRowsCannotProduceGo(){val reply=DesktopProtocol.parse(message(),nonce)!!;assertEquals("NO_GO",DesktopSummary.create("CONTEXT",1,reply).verdict);val wanted=reply.copy(rows=reply.rows.map{it.copy(intent="BUY_PROPERTY",price=null)});assertEquals("NO_GO",DesktopSummary.create("DONE",1,wanted).verdict);assertEquals("NO_GO",DesktopSummary.create("DONE",1,reply.copy(rows=emptyList())).verdict)}
     @Test fun persistedSummaryRejectsExtraFieldsUnknownReasonsAndRawMapKeys(){val s=DesktopSummary.create("DONE",1,DesktopProtocol.parse(message(),nonce)!!);assertNull(DesktopSummary.decode(JSONObject(s.encode()).put("postId","PRIVATE").toString()));assertNull(DesktopSummary.decode(JSONObject(s.encode()).put("reason","PRIVATE").toString()));assertNull(DesktopSummary.decode(JSONObject(s.encode()).put("stats",JSONObject().put("PRIVATE",1)).toString()));assertEquals("PROTOCOL",DesktopSummary.create("DONE",1,DesktopReply("OK","DONE",emptyList(),mapOf("PRIVATE" to 1))).reason)}
+    @Test fun thirtyStepsAreAcceptedButOverLimitAndInventedMovesAreRejected(){
+        val valid=message();valid.getJSONObject("stats").put("scrollSteps",30).put("scrollMoves",29)
+        assertNotNull(DesktopProtocol.parse(valid,nonce))
+        for((steps,moves) in listOf(31 to 30,30 to 31)){
+            val bad=message();bad.getJSONObject("stats").put("scrollSteps",steps).put("scrollMoves",moves)
+            assertNull(DesktopProtocol.parse(bad,nonce))
+        }
+    }
 }

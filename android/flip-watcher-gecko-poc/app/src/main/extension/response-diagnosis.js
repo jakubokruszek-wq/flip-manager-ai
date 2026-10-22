@@ -8,7 +8,7 @@
       (fixture || !u.search) && ((u.protocol==="https:" && !u.port && ["facebook.com","www.facebook.com","m.facebook.com"].includes(u.hostname)) || (fixture && u.protocol==="http:" && u.hostname==="127.0.0.1")) && u.pathname.replace(/\/$/,"") === "/groups/"+group; } catch {return false;}
   }
   function create(api, core, timers=scope, options={}) {
-    const maxLoad=options.desktop===true?60000:25000, maxBody=options.desktop===true?2097152:MAX_BODY, maxTotal=options.desktop===true?4194304:MAX_TOTAL, maxResponses=options.desktop===true?16:8, maxStreams=options.desktop===true?8:4;
+    const maxLoad=options.desktop===true?60000:25000, maxBody=options.desktop===true?2097152:MAX_BODY, maxTotal=options.desktop===true?4194304:MAX_TOTAL, maxResponses=options.desktop===true?64:8, maxStreams=options.desktop===true?8:4;
     let current=null, listenerReady=false;const revoked=new Set();
     const now=()=>timers.performance?.now?.() ?? Date.now();
     const available=()=>listenerReady && typeof api?.webRequest?.filterResponseData==="function";

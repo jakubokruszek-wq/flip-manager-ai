@@ -40,7 +40,7 @@ object DesktopProtocol {
     fun parseStats(j:JSONObject):Map<String,Int>? {
         if(j.keys().asSequence().toSet()!=statKeys.toSet())return null
         val result=statKeys.associateWith{key->val v=j.opt(key);if(v !is Int||v<0||v>(if(key=="bytes")4194304 else 10000))return null;v}
-        if(result.getValue("candidates")>20||result.getValue("verified")>1||result.getValue("desktop")>1||result.getValue("scrollSteps")>5||result.getValue("scrollMoves")>result.getValue("scrollSteps"))return null
+        if(result.getValue("candidates")>20||result.getValue("verified")>1||result.getValue("desktop")>1||result.getValue("scrollSteps")>30||result.getValue("scrollMoves")>result.getValue("scrollSteps"))return null
         if(result.getValue("scrollSeen")>512||result.getValue("scrollHit")>30||result.getValue("scrollRoot")>1||result.getValue("scrollInner")>1||listOf("scrollNoRange","scrollHidden","scrollOffscreen","scrollUnbound").any{result.getValue(it)>512})return null
         return result
     }
