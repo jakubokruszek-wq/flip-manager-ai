@@ -34,9 +34,9 @@ function createModel(core,fields,group){
   if(!row||exact(row.permalink,group)!==row.postId){stats.rejected++;return;}
   const old=rows.get(row.postId);
   if(!old&&rows.size>=20){stats.rejected++;return;}
-  if(old){stats.duplicates++;if(old.qualification==='NO_TEXT'&&row.qualification!=='NO_TEXT')old.qualification=row.qualification;
+  if(old){stats.duplicates++;const foreign=old.qualification==='FOREIGN_CITY'||row.qualification==='FOREIGN_CITY';if(old.qualification==='NO_TEXT'&&row.qualification!=='NO_TEXT')old.qualification=row.qualification;
    else if(row.qualification!=='NO_TEXT'&&old.qualification!==row.qualification)old.qualification='CLASSIFIER';
-   const bad=blocked.get(row.postId)||new Set();
+   const bad=blocked.get(row.postId)||new Set();if(foreign)bad.add('foreignCity');
    for(const k of ['price','area','rooms','district','neighborhood','street']){
     if(old[k]!=null&&row[k]!=null&&old[k]!==row[k]){bad.add(k);stats.ambiguous++;}
     old[k]=bad.has(k)?null:old[k]??row[k];
@@ -44,8 +44,10 @@ function createModel(core,fields,group){
    if(bad.has('price'))old.priceSource='NONE';else if(old.priceSource==='NONE')old.priceSource=row.priceSource;
    if(old.intent!==row.intent&&old.intent!=='UNKNOWN'&&row.intent!=='UNKNOWN'){old.intent='UNKNOWN';old.usable=false;bad.add('intent');}
    else if(old.intent==='UNKNOWN'&&!bad.has('intent'))old.intent=row.intent;
-   if(!bad.has('intent'))old.usable=old.usable||row.usable;
+   if(!bad.has('intent')&&!bad.has('foreignCity'))old.usable=old.usable||row.usable;
+   if(bad.has('foreignCity'))old.usable=false;
    if(bad.has('intent'))old.qualification='CONFLICT';
+   else if(bad.has('foreignCity'))old.qualification='FOREIGN_CITY';
    else if(old.usable&&['SELL_PROPERTY','UNKNOWN'].includes(old.intent)&&[old.price,old.area,old.rooms].some(v=>v!==null))old.qualification='CANDIDATE';
    else if(!['SELL_PROPERTY','UNKNOWN'].includes(old.intent))old.qualification='INTENT';
    else if(['CANDIDATE','MISSING_FIELDS','CLASSIFIER'].includes(old.qualification)&&[old.price,old.area,old.rooms].every(v=>v===null))old.qualification='MISSING_FIELDS';
