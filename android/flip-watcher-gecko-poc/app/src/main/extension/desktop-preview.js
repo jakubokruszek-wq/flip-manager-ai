@@ -110,14 +110,15 @@ function scrollContainer(w,stats=null){
 // when the chosen inner feed has reached its end. Use only ordinary DOM scrolling.
 function tailTarget(w,core,group){
  const doc=w.document;
- const cards=Array.from(doc.querySelectorAll('[role="article"],article')).filter(c=>!c.parentElement?.closest('[role="article"],article')).slice(0,100);
+ const cards=Array.from(doc.querySelectorAll('[role="article"],article')).filter(c=>!c.parentElement?.closest('[role="article"],article'));
+ if(cards.length>100)return null;
  const card=cards.at(-1);
  if(!card||card.isConnected===false||card.ownerDocument!==doc||typeof card.scrollIntoView!=='function'||card.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]'))return null;
  const links=Array.from(card.querySelectorAll('a[href]')).filter(a=>a.closest('[role="article"],article')===card).slice(0,100).map(a=>core.parsePostLink(a.href)).filter(Boolean);
  if(!links.length||links.some(l=>l.sourceType!=='GROUP'||l.sourceId!==group)||new Set(links.map(l=>l.postId)).size!==1)return null;
  const rect=card.getBoundingClientRect();
  const vp=w.visualViewport,top=Number(vp?.offsetTop)||0,height=Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight);
- if(rect.width<250||rect.height<1||rect.bottom<=top+height-16||rect.left>=w.innerWidth||rect.right<=0)return null;
+ if(rect.width<250||rect.height<1||rect.bottom<=top+height+2||rect.left>=w.innerWidth||rect.right<=0)return null;
  return card;
 }
 function scrollTrace(w,card){
