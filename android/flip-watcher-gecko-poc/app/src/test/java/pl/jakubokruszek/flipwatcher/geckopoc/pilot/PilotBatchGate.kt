@@ -43,7 +43,7 @@ class PilotBatchGate(private val now:()->Long=System::currentTimeMillis) {
             require(Regex("^[0-9]{5,30}$").matches(id)&&seen.add(id))
             require(raw.getString("permalink")=="${PocPolicy.APPROVED_GROUP_URL}posts/$id/"&&raw.getString("sourceId")==PocPolicy.APPROVED_GROUP_ID&&raw.getString("sourceType")=="GROUP")
             require(raw.getString("identityConfidence")=="EXACT")
-            val reasons=raw.getJSONArray("identityReasons");require((0 until reasons.length()).any{reasons.getString(it)=="STRUCTURED_EXACT_STORY_ROOT"})
+            val reasons=raw.getJSONArray("identityReasons");require(reasons.length() in 1..10);require((0 until reasons.length()).any{reasons.getString(it)=="STRUCTURED_EXACT_STORY_ROOT"})
             val text=raw.getString("text");val author=raw.getString("author");require(text.length in 1..20_000&&text.isNotBlank()&&author.length in 1..200&&author.isNotBlank())
             val published=Instant.parse(raw.getString("publishedAt")).toEpochMilli();require(published in (time-72*60*60*1000L)..(time+5_000))
             val layers=raw.getJSONArray("discoveryLayers");require(layers.length() in 1..3&&(0 until layers.length()).all{layers.getString(it) in setOf("DOM","HYDRATION","NETWORK")})
@@ -53,7 +53,7 @@ class PilotBatchGate(private val now:()->Long=System::currentTimeMillis) {
             for(m in 0 until images.length()){
                 val image=images.getJSONObject(m);require(image.opt("exactAssociation")==true&&image.getString("exactPostId")==id)
                 require(image.getString("url").length<=2048);val url=java.net.URI(image.getString("url"));require(url.scheme=="https"&&url.rawUserInfo==null&&url.port==-1&&url.rawFragment==null&&url.host!=null&&listOf("facebook.com","fbcdn.net").any{url.host==it||url.host.endsWith(".$it")})
-                require(!Regex("(?:^|&)(?:access_token|token|authorization|cookie)=",RegexOption.IGNORE_CASE).containsMatchIn(url.rawQuery.orEmpty()))
+                require(!Regex("(?:^|&)(?:access_token|token|authorization|cookie)=",RegexOption.IGNORE_CASE).containsMatchIn(url.query.orEmpty()))
                 val mediaId=if(image.isNull("mediaId"))JSONObject.NULL else image.getString("mediaId").also{require(Regex("^[0-9]{5,30}$").matches(it))}
                 media.put(JSONObject().put("url",url.toString()).put("mediaId",mediaId).put("exactPostId",id).put("exactAssociation",true).put("discoveryLayers",JSONArray(layers.toString())))
             }

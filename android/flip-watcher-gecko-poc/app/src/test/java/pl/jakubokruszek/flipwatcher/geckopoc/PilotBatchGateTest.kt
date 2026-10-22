@@ -57,7 +57,7 @@ class PilotBatchGateTest {
     @Test fun mediaNeedsExactParentAndSafeOriginWithoutCredentialParameters(){
         val image=JSONObject().put("url","https://scontent.fbcdn.net/image.jpg").put("mediaId","880000000000001").put("exactPostId",id).put("exactAssociation",true)
         val valid=batch(JSONArray().put(post().put("media",JSONArray().put(image))));assertEquals(1,PilotBatchGate{time}.prepare(permit(),claim(),valid).forCompletion().getJSONArray("posts").getJSONObject(0).getJSONArray("media").length())
-        for((key,value) in listOf("exactPostId" to "550000000000092","exactAssociation" to false,"url" to "https://fbcdn.net.evil.test/a.jpg","url" to "https://scontent.fbcdn.net/a.jpg?access_token=SECRET")){val copy=JSONObject(image.toString()).put(key,value);rejected(raw=batch(JSONArray().put(post().put("media",JSONArray().put(copy)))))}
+        for((key,value) in listOf("exactPostId" to "550000000000092","exactAssociation" to false,"url" to "https://fbcdn.net.evil.test/a.jpg","url" to "https://scontent.fbcdn.net/a.jpg?access_token=SECRET","url" to "https://scontent.fbcdn.net/a.jpg?access%5Ftoken=SECRET")){val copy=JSONObject(image.toString()).put(key,value);rejected(raw=batch(JSONArray().put(post().put("media",JSONArray().put(copy)))))}
     }
     @Test fun sourceHealthCannotInventCaptureOrOverflowBounds(){
         for((key,value) in listOf("capturedPostCount" to 2,"scrolls" to 31,"durationMs" to 60001,"visibleCardCount" to -1,"stopReason" to "PRIVATE text")){val b=batch();b.getJSONObject("health").put(key,value);rejected(raw=b)}
