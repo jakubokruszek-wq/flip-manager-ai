@@ -113,12 +113,14 @@ class DesktopPreviewInstrumentedTest {
         }
     }
 
-    @Test fun nativeWheelUnblocksFeedAndRenderedThumbnailsStayOnlyInRam(){
+    @Test fun nativeWheelUnblocksFiniteFeedAndRenderedThumbnailsStayOnlyInRam()=checkNativeViewport(false)
+    @Test fun nativeWheelMovesDeepAnonymousScrollerAndRenderedThumbnailsStayOnlyInRam()=checkNativeViewport(true)
+    private fun checkNativeViewport(deep:Boolean){
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use {scenario->
             var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it}
             runBlocking{withTimeout(70_000){withContext(Dispatchers.Main){
                 val server=LoopbackFixtureServer{asset->
-                    val selected=if(asset=="fixtures/desktop-start.html")"fixtures/desktop-viewport.html" else asset
+                    val selected=if(asset=="fixtures/desktop-start.html")(if(deep)"fixtures/desktop-viewport-deep.html" else "fixtures/desktop-viewport.html") else asset
                     runCatching{context.assets.open(selected).bufferedReader().use{it.readText()}}.getOrNull()
                 }
                 val target=server.url("/groups/$FIXTURE_GROUP_ID/","desktop-start")
@@ -142,8 +144,10 @@ class DesktopPreviewInstrumentedTest {
                     val trial=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=trial;assertTrue(trial.begin(true))
                     val result=DesktopSessionPreview.run(session,channel,trial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=40_000,view=host!!.geckoView,images=images)
                     assertEquals("DONE",result.reason);val reply=result.reply!!
+                    android.util.Log.i("GeckoPocTest","VIEWPORT_BEFORE_ASSERT deep=$deep pictures=${images.count} newOffer=${reply.rows.any{it.postId=="550000000000096"}} ${DesktopSummary.create("DONE",trial.requests,reply).report()}")
                     assertTrue("official wheel request absent",reply.stats.getValue("scrollNativeSteps")>0)
-                    assertTrue("native request ACK is not motion proof",reply.stats.getValue("scrollNativeMoves")>0)
+                    if(deep)assertTrue("native request ACK is not motion proof",reply.stats.getValue("scrollNativeMoves")>0)
+                    else assertTrue("wheel must unlock actual further progress beyond finite initial range",reply.stats.getValue("scrollMoves")>4)
                     assertTrue("wheel must load a NEW exact offer",reply.rows.any{it.postId=="550000000000096"&&it.price==680000.0&&it.area==68.0})
                     val thumbs=images.rows("550000000000091")
                     assertEquals("actual rendered image crops missing",2,thumbs.size)

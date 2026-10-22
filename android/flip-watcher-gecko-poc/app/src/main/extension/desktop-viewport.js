@@ -43,7 +43,7 @@ function photos(w,core,group,photoNodes,slots){
  const vp=w.visualViewport,width=Number(vp?.width)||w.innerWidth,height=Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight),left=Number(vp?.offsetLeft)||0,top=Number(vp?.offsetTop)||0;
  if(!Number.isFinite(width)||!Number.isFinite(height)||width<100||height<100||width>10000||height>10000)return null;
  const tiles=[],keys=[],checks=[];
- const result=()=>({width,height,tiles,keys,valid:()=>checks.every(check=>check())});
+ const result=()=>({width,height,tiles,keys,valid:()=>Math.abs((Number(w.visualViewport?.width)||w.innerWidth)-width)<1&&Math.abs(Math.min(w.innerHeight,Number(w.visualViewport?.height)||w.innerHeight)-height)<1&&Math.abs((Number(w.visualViewport?.offsetLeft)||0)-left)<1&&Math.abs((Number(w.visualViewport?.offsetTop)||0)-top)<1&&checks.every(check=>check())});
  for(const {card,id} of cards(w,core,group)){
   if(!slots.has(id)){if(slots.size===20)continue;slots.set(id,new Map());}const media=slots.get(id);
   for(const {node,item} of photoNodes(card,id,group,core)){

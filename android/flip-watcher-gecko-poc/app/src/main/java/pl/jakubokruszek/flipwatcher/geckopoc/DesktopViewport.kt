@@ -84,7 +84,7 @@ class DesktopViewportBridge(private val view:GeckoView,private val nonce:String,
             try{if(!active()){ack(false);return};view.onGenericMotionEvent(event);scrolls++;lastScroll=stamp;ack(true)}finally{event.recycle()}
             return
         }
-        if(captures>=20||abs((r.width/r.height)/(view.width.toDouble()/view.height)-1)>0.12){ack(false);return}
+        if(captures>=20||abs((r.width/r.height)/(view.width.toDouble()/view.height)-1)>0.005){ack(false);return}
         busy=true;captures++;val started=now()
         try{view.capturePixels().accept({frame->
             try{
@@ -92,8 +92,8 @@ class DesktopViewportBridge(private val view:GeckoView,private val nonce:String,
                 val crops=ArrayList<Pair<DesktopViewportProtocol.Tile,Bitmap>>()
                 try{
                     for(t in r.tiles){
-                        val x=floor(t.x/r.width*frame.width).toInt();val y=floor(t.y/r.height*frame.height).toInt()
-                        val right=floor((t.x+t.width)/r.width*frame.width).toInt().coerceAtMost(frame.width);val bottom=floor((t.y+t.height)/r.height*frame.height).toInt().coerceAtMost(frame.height)
+                        val x=floor(t.x/r.width*frame.width).toInt()+2;val y=floor(t.y/r.height*frame.height).toInt()+2
+                        val right=floor((t.x+t.width)/r.width*frame.width).toInt().coerceAtMost(frame.width)-2;val bottom=floor((t.y+t.height)/r.height*frame.height).toInt().coerceAtMost(frame.height)-2
                         if(x<0||y<0||right<=x||bottom<=y)throw IllegalArgumentException("crop")
                         val crop=Bitmap.createBitmap(frame,x,y,right-x,bottom-y);val factor=min(192.0/crop.width,144.0/crop.height).coerceAtMost(1.0)
                         val small=Bitmap.createScaledBitmap(crop,max(1,(crop.width*factor).toInt()),max(1,(crop.height*factor).toInt()),true)
