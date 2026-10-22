@@ -24,7 +24,9 @@ const code=texts[1]+'\n'+location+'\n'+prefix+'\nfunction previewFields(input) {
  const explicitCity=explicitPolishCity(text);
  const foreignCity=explicitCity!==null&&explicitCity!=='Łódź';
  const usable=!foreignCity&&(realEstateLanguage||[price.price,effectiveArea,rooms,neighborhood,district,street].filter(x=>x!==null).length>=3);
- return {price:sale?price.price:null,priceSource:sale?price.source:'NONE',area:concrete?effectiveArea:null,rooms:concrete?rooms:null,district:foreignCity?null:district,neighborhood:foreignCity?null:neighborhood,street,intent,usable};
+ const hasFields=[sale?price.price:null,concrete?effectiveArea:null,concrete?rooms:null].some(v=>v!==null);
+ const qualification=!text.trim()?'NO_TEXT':!sale?'INTENT':foreignCity?'FOREIGN_CITY':!usable?'NOT_PROPERTY':!hasFields?'MISSING_FIELDS':'CANDIDATE';
+ return {qualification,price:sale?price.price:null,priceSource:sale?price.source:'NONE',area:concrete?effectiveArea:null,rooms:concrete?rooms:null,district:foreignCity?null:district,neighborhood:foreignCity?null:neighborhood,street,intent,usable};
 }\n`;
 const js=stripTypeScriptTypes(code,{mode:'strip'}).replace(/^export /gm,'');
 const output='/* Generated from pinned existing property rules; scripts/desktop-fields.cjs --check */\n(function(root){\n"use strict";\n'+js+'\nconst api={previewFields};if(typeof module!=="undefined")module.exports=api;root.FlipDesktopFields=api;\n})(globalThis);\n';

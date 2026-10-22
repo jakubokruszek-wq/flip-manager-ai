@@ -6,7 +6,7 @@ import org.json.JSONObject
 class DesktopSummary private constructor(val verdict:String,val reason:String,val offers:Int,val navigations:Int,val stats:Map<String,Int>){
     fun encode():String=JSONObject().put("verdict",verdict).put("reason",reason).put("offers",offers).put("navigations",navigations).put("stats",JSONObject(stats)).toString()
     fun report():String=buildString {
-        appendLine("KOMPUTER 0.5.2 • tylko lokalnie • $verdict")
+        appendLine("KOMPUTER 0.5.3 • tylko lokalnie • $verdict")
         appendLine("Powód: $reason • tryb komputerowy: ${stats.getValue("desktop")} • nawigacje: $navigations/4")
         appendLine("Dokładne ID/permalinki: ${stats.getValue("candidates")} • kandydaci ofert po filtrach: $offers")
         appendLine("Odczyty rekordów DOM (powtórzenia): ${stats.getValue("dom")} • dane strony: ${stats.getValue("hydration")} • sieć: ${stats.getValue("network")}")
@@ -14,6 +14,10 @@ class DesktopSummary private constructor(val verdict:String,val reason:String,va
         appendLine("Błędy strumienia/dekodowania: ${stats.getValue("streamErrors")}/${stats.getValue("decodeErrors")} • zbyt duże: ${stats.getValue("oversize")} • pominięte limitem: ${stats.getValue("limitSkipped")}")
         appendLine("Kontenery article: ${stats.getValue("articles")} • mobilne: ${stats.getValue("mobile")}")
         appendLine("Duplikaty: ${stats.getValue("duplicates")} • niejednoznaczności: ${stats.getValue("ambiguous")} • odrzucone: ${stats.getValue("rejected")}")
+        if(stats.getValue("scrollSeen")>0){
+            appendLine("Wybór przewijania (liczby bez DOM): sprawdzone ${stats.getValue("scrollSeen")} • bez zakresu ${stats.getValue("scrollNoRange")} • ukryte/niedozwolone ${stats.getValue("scrollHidden")} • poza ekranem ${stats.getValue("scrollOffscreen")} • niepowiązane ${stats.getValue("scrollUnbound")}")
+            appendLine("Źródło: punkty ekranu ${stats.getValue("scrollHit")} • wybrano okno ${stats.getValue("scrollRoot")} / kontener ${stats.getValue("scrollInner")}")
+        }
         appendLine("Przewinięcia: ${stats.getValue("scrollMoves")}/${stats.getValue("scrollSteps")} • odczyty skryptów: ${stats.getValue("scripts")}")
         if(stats.getValue("scrollSteps")==0&&stats.getValue("candidates")<20)appendLine("UWAGA: przewijanie nie rozpoczęło się — nie znaleziono dozwolonego kontenera z dostępnym zakresem przewijania. Wynik nie potwierdza kompletności grupy.")
         if(stats.getValue("scrollSteps")>0&&stats.getValue("scrollMoves")==0)appendLine("UWAGA: próby przewinięcia nie przesunęły kontenera; brak dalszych postów nie jest potwierdzony.")
@@ -34,7 +38,10 @@ class DesktopSummary private constructor(val verdict:String,val reason:String,va
             val j=JSONObject(raw);if(j.keys().asSequence().toSet()!=setOf("verdict","reason","offers","navigations","stats"))return null
             val verdict=j.getString("verdict");val reason=j.getString("reason")
             if(verdict !in setOf("CONDITIONAL_GO","NO_GO")||reason !in DesktopTrial.reasons||j.opt("offers") !is Int||j.opt("navigations") !is Int)return null
-            val offers=j.getInt("offers");val nav=j.getInt("navigations");val stats=DesktopProtocol.parseStats(j.getJSONObject("stats"))?:return null
+            val offers=j.getInt("offers");val nav=j.getInt("navigations");val stored=j.getJSONObject("stats")
+            // Read old count-only history without changing/deleting it; fresh protocol stays strict.
+            if(stored.keys().asSequence().toSet()==DesktopProtocol.statKeys.take(22).toSet())for(key in DesktopProtocol.statKeys.drop(22))stored.put(key,0)
+            val stats=DesktopProtocol.parseStats(stored)?:return null
             if(verdict=="NO_GO"&&offers!=0)return null
             if(offers !in 0..20||nav !in 0..4||offers>stats.getValue("candidates")||(verdict=="CONDITIONAL_GO")!=(reason=="DONE"&&offers>0))return null
             DesktopSummary(verdict,reason,offers,nav,stats)

@@ -3,11 +3,12 @@ package pl.jakubokruszek.flipwatcher.geckopoc
 import org.json.JSONObject
 
 /** Transient selected fields only. Never persisted, logged or copied with the count-only report. */
-data class DesktopRow(val postId:String,val permalink:String,val layer:String,val price:Double?,val priceSource:String,val area:Double?,val rooms:Int?,val district:String?,val neighborhood:String?,val street:String?,val intent:String,val usable:Boolean,val photos:Int)
+data class DesktopRow(val postId:String,val permalink:String,val layer:String,val price:Double?,val priceSource:String,val area:Double?,val rooms:Int?,val district:String?,val neighborhood:String?,val street:String?,val intent:String,val usable:Boolean,val photos:Int,val qualification:String="CLASSIFIER")
 data class DesktopReply(val status:String,val reason:String,val rows:List<DesktopRow>,val stats:Map<String,Int>)
 object DesktopProtocol {
-    val statKeys=listOf("candidates","dom","hydration","network","duplicates","rejected","ambiguous","scripts","scrollSteps","scrollMoves","requests","bytes","verified","desktop","filtered","completed","streamErrors","decodeErrors","oversize","limitSkipped","articles","mobile")
-    private val rowKeys=setOf("postId","permalink","layer","price","priceSource","area","rooms","district","neighborhood","street","intent","usable","photos")
+    val statKeys=listOf("candidates","dom","hydration","network","duplicates","rejected","ambiguous","scripts","scrollSteps","scrollMoves","requests","bytes","verified","desktop","filtered","completed","streamErrors","decodeErrors","oversize","limitSkipped","articles","mobile","scrollSeen","scrollNoRange","scrollHidden","scrollOffscreen","scrollUnbound","scrollRoot","scrollInner","scrollHit")
+    private val rowKeys=setOf("postId","permalink","layer","price","priceSource","area","rooms","district","neighborhood","street","intent","usable","photos","qualification")
+    val qualifications=setOf("CANDIDATE","NO_TEXT","FOREIGN_CITY","NOT_PROPERTY","INTENT","MISSING_FIELDS","CONFLICT","CLASSIFIER")
     val intents=setOf("SELL_PROPERTY","BUY_PROPERTY","RENT_OFFER","RENT_WANTED","SERVICE","OTHER","UNKNOWN")
     fun parse(message:Any?,nonce:String,group:String=PocPolicy.APPROVED_GROUP_ID):DesktopReply? = runCatching {
         val j=ScanProtocol.asJson(message)?:return null
@@ -30,7 +31,8 @@ object DesktopProtocol {
             val layer=r.getString("layer");if(layer !in setOf("DOM","HYDRATION","NETWORK","MIXED"))return null
             val intent=r.getString("intent");if(intent !in intents||r.opt("usable") !is Boolean||r.opt("photos") !is Int||r.getInt("photos") !in 0..20)return null
             val district=text("district",30);if(district!=null&&district !in setOf("Bałuty","Widzew","Polesie","Śródmieście","Górna"))return null
-            DesktopRow(id,link,layer,price,source,area,rooms?.toInt(),district,text("neighborhood",40),text("street",80),intent,r.getBoolean("usable"),r.getInt("photos"))
+            val qualification=r.getString("qualification");if(qualification !in qualifications)return null
+            DesktopRow(id,link,layer,price,source,area,rooms?.toInt(),district,text("neighborhood",40),text("street",80),intent,r.getBoolean("usable"),r.getInt("photos"),qualification)
         }
         if(stats.getValue("candidates")!=rows.size)return null
         DesktopReply(status,reason,rows,stats)
@@ -39,6 +41,7 @@ object DesktopProtocol {
         if(j.keys().asSequence().toSet()!=statKeys.toSet())return null
         val result=statKeys.associateWith{key->val v=j.opt(key);if(v !is Int||v<0||v>(if(key=="bytes")4194304 else 10000))return null;v}
         if(result.getValue("candidates")>20||result.getValue("verified")>1||result.getValue("desktop")>1||result.getValue("scrollSteps")>5||result.getValue("scrollMoves")>result.getValue("scrollSteps"))return null
+        if(result.getValue("scrollSeen")>512||result.getValue("scrollHit")>30||result.getValue("scrollRoot")>1||result.getValue("scrollInner")>1||listOf("scrollNoRange","scrollHidden","scrollOffscreen","scrollUnbound").any{result.getValue(it)>512})return null
         return result
     }
     fun emptyStats()=statKeys.associateWith{0}

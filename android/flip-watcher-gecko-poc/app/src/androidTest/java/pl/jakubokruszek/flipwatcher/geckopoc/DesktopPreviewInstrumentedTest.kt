@@ -63,14 +63,14 @@ class DesktopPreviewInstrumentedTest {
                     val result=DesktopSessionPreview.run(session,channel,trial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=15_000)
                     assertEquals("DONE",result.reason);assertEquals(1,trial.requests)
                     assertTrue(agents.size>=2);assertFalse(agents.last().contains("Mobile",true));assertFalse(agents.last().contains("Android",true))
-                    val reply=result.reply!!;assertEquals(1,reply.stats.getValue("desktop"));assertEquals(1,reply.stats.getValue("verified"));assertEquals(5,reply.stats.getValue("scrollMoves"));assertEquals(5,reply.stats.getValue("scrollSteps"))
+                    val reply=result.reply!!;assertEquals(1,reply.stats.getValue("desktop"));assertEquals(1,reply.stats.getValue("verified"));assertEquals(5,reply.stats.getValue("scrollMoves"));assertEquals(5,reply.stats.getValue("scrollSteps"));assertEquals(1,reply.stats.getValue("scrollInner"));assertTrue(reply.stats.getValue("scrollHit")>0)
                     assertTrue("initial response missing",reply.stats.getValue("bytes")>0);assertTrue(reply.stats.getValue("network")>=2)
                     assertEquals(3,reply.rows.size);assertEquals(3,reply.rows.map{it.postId}.distinct().size)
                     val listing=reply.rows.single{it.postId=="550000000000091"}
                     assertEquals(319000.0,listing.price!!,0.01);assertEquals(42.42,listing.area!!,0.01);assertEquals(2,listing.rooms!!);assertEquals("Retkinia",listing.neighborhood)
                     assertEquals("MIXED",listing.layer);assertTrue(listing.photos>=1)
                     val second=reply.rows.single{it.postId=="550000000000092"};assertEquals("MIXED",second.layer);assertEquals(425000.0,second.price!!,0.01);assertEquals(53.0,second.area!!,0.01)
-                    val wanted=reply.rows.single{it.postId=="550000000000093"};assertEquals("BUY_PROPERTY",wanted.intent);assertNull(wanted.price);assertFalse(DesktopSummary.eligible(wanted))
+                    val wanted=reply.rows.single{it.postId=="550000000000093"};assertEquals("BUY_PROPERTY",wanted.intent);assertNull(wanted.price);assertFalse(DesktopSummary.eligible(wanted));assertEquals("INTENT",wanted.qualification);assertTrue(DesktopPresentation.explanation(wanted).contains("prośba zakupu"))
                     val summary=DesktopSummary.create("DONE",trial.requests,reply);assertEquals("CONDITIONAL_GO",summary.verdict);assertEquals(2,summary.offers)
                     assertFalse(summary.encode().contains("550000000000091"));assertFalse(summary.encode().contains("PRIVATE"))
                     android.util.Log.i("GeckoPocTest","DESKTOP_ACCEPTANCE ${summary.report()}")
@@ -107,12 +107,14 @@ class DesktopPreviewInstrumentedTest {
                 val id="550000000000099"
                 val row=DesktopRow(id,"https://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/posts/$id/","DOM",319000.0,"EXPLICIT_TOTAL",42.42,2,"Polesie","Retkinia",null,"SELL_PROPERTY",true,1)
                 val stats=DesktopProtocol.emptyStats().toMutableMap().apply{put("candidates",1);put("verified",1);put("desktop",1)}
-                val summary=DesktopSummary.create("DONE",1,DesktopReply("OK","DONE",listOf(row),stats))
+                val missing=row.copy(postId="550000000000098",permalink=row.permalink.replace(id,"550000000000098"),price=null,priceSource="NONE",area=null,rooms=null,usable=false,qualification="NO_TEXT")
+                stats["candidates"]=2
+                val summary=DesktopSummary.create("DONE",1,DesktopReply("OK","DONE",listOf(missing,row),stats))
                 var oldView:android.view.View?=null
                 scenario.onActivity{a->
-                    a.publishDesktop(summary,listOf(row));assertTrue(a.desktopResultDialog!!.isShowing)
+                    a.publishDesktop(summary,listOf(missing,row));assertTrue(a.desktopResultDialog!!.isShowing)
                     oldView=a.desktopResultDialog!!.window!!.decorView
-                    assertTrue(texts(oldView!!).contains(id));assertTrue(texts(oldView!!).contains("42,42 m²"));assertTrue(texts(oldView!!).indexOf("KANDYDAT 1")<texts(oldView!!).indexOf("RAPORT TECHNICZNY"))
+                    assertTrue(texts(oldView!!).contains("Brak tekstu przypisanego do dokładnego ID"));assertTrue(texts(oldView!!).contains(id));assertTrue(texts(oldView!!).contains("42,42 m²"));assertTrue(texts(oldView!!).indexOf("KANDYDAT 1")<texts(oldView!!).indexOf("RAPORT TECHNICZNY"))
                     assertFalse(prefs.getString("last","")!!.contains(id));assertFalse(prefs.getString("last","")!!.contains("Retkinia"))
                     a.desktopResultDialog!!.getButton(android.app.AlertDialog.BUTTON_NEUTRAL).performClick()
                 }

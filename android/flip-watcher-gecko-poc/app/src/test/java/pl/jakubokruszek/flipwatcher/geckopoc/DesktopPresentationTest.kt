@@ -26,4 +26,23 @@ class DesktopPresentationTest {
         stats["candidates"]=20
         assertFalse(DesktopSummary.create("DONE",1,reply).report().contains("przewijanie nie rozpoczęło się"))
     }
+    @Test fun eachExcludedPostHasAFixedReasonWithoutRestoringRawText(){
+        for((reason,expected) in listOf("NO_TEXT" to "Brak tekstu", "FOREIGN_CITY" to "inne miasto", "NOT_PROPERTY" to "nie spełnił reguł", "MISSING_FIELDS" to "Brak rozpoznanej ceny", "CONFLICT" to "Sprzeczne konkretne intencje")){
+            val r=row("550000000000001",usable=false).copy(qualification=reason)
+            val text=DesktopPresentation.preview("SAFE_COUNTS",listOf(r),true)
+            assertTrue(text.contains("Powód:"));assertTrue(text.contains(expected));assertFalse(text.contains("KANDYDAT 1"))
+        }
+    }
+    @Test fun intentReasonsSeparateBuyRentalServicesAndUnknownCause(){
+        for((intent,expected) in listOf("BUY_PROPERTY" to "prośba zakupu", "RENT_OFFER" to "oferta najmu", "RENT_WANTED" to "poszukiwanie najmu", "SERVICE" to "usługowe", "UNKNOWN" to "dokładnej przyczyny nie ustalono"))
+            assertTrue(DesktopPresentation.explanation(row("550000000000001",intent,false)).contains(expected))
+    }
+    @Test fun oldAggregateHistoryIsReadableWithoutInventingNewContainerEvidence(){
+        val current=DesktopSummary.create("EMPTY",1)
+        val old=org.json.JSONObject(current.encode());val stats=old.getJSONObject("stats")
+        for(key in DesktopProtocol.statKeys.drop(22))stats.remove(key)
+        val raw=old.toString();val restored=DesktopSummary.decode(raw)!!
+        assertEquals(0,restored.stats.getValue("scrollSeen"));assertEquals(raw,old.toString())
+        stats.put("PRIVATE",1);assertNull(DesktopSummary.decode(old.toString()))
+    }
 }
