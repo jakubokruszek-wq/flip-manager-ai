@@ -28,6 +28,7 @@ class PilotBatchGateTest {
     @Test fun snapshotPreservesRealFieldsAndMeasuredCountersButStripsUnrelatedSecrets(){
         val raw=batch();raw.getJSONArray("posts").getJSONObject(0).put("cookie","SECRET");raw.put("token","SECRET")
         val value=PilotBatchGate{time}.prepare(permit(),claim(),raw);assertEquals(1,value.posts);assertFalse(value.toString().contains(id));assertFalse(value.toString().contains("REAL_SOURCE_FIXTURE"))
+        System.getProperty("pilot.fixture.output")?.let{path->java.io.File(path).apply{parentFile.mkdirs();writeText(value.forCompletion().toString())}}
         val body=value.forCompletion();assertFalse(body.toString().contains("SECRET"));assertEquals(7,body.getJSONObject("health").getInt("visibleCardCount"));assertEquals(29,body.getJSONObject("health").getInt("scrolls"));assertEquals(30000,body.getJSONObject("health").getInt("durationMs"))
         body.put("sourceId","other");raw.getJSONArray("posts").getJSONObject(0).put("text","MUTATED");assertEquals(PocPolicy.APPROVED_GROUP_ID,value.forCompletion().getString("sourceId"));assertFalse(value.forCompletion().toString().contains("MUTATED"))
     }

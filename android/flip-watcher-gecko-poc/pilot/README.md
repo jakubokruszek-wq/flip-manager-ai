@@ -39,6 +39,12 @@ Testy JVM: zgody/ekran/kontekst, zużycie zgody, lease/źródło, brak prawdziwy
 w kartach podglądu, daty, fałszywe ID, duplikaty/21 rekordów, media, health oraz
 niemutowalność snapshotu. To test granicy przygotowania, nie wysyłki/receiptu.
 
+CI dodatkowo przekazuje faktyczny snapshot wygenerowany przez JVM do niezmienionego
+`normalizeFacebookCollectorBatch` z PR #23. Plik referencyjny ma przypięty commit
+i SHA256. Test dodaje wyłącznie syntetyczne batchId, które w docelowym przepływie
+nadaje istniejący SignedCollectorClient.prepareCompletion. Zapis pliku dotyczy tylko
+sztucznych danych JVM w build/, nigdy rzeczywistych postów z telefonu. Brak HTTP.
+
 ## Docelowa ścieżka pilota do podłączenia
 
 1. Osobny profil/instalacja pilota i osobne parowanie ANDROID_WEBVIEW w istniejącym

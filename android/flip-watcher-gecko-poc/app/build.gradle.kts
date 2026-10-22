@@ -131,3 +131,8 @@ dependencies {
     androidTestImplementation("androidx.test:core-ktx:1.6.1")
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
 }
+
+// Synthetic contract fixture only: this task is JVM tests, never the foreground application.
+tasks.withType<Test>().configureEach {
+    systemProperty("pilot.fixture.output", layout.buildDirectory.file("pilot-fixture.json").get().asFile.absolutePath)
+}
