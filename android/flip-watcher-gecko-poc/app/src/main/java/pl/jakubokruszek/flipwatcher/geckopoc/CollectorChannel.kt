@@ -28,6 +28,7 @@ class CollectorChannel(
     private var shareNonce: String? = null
     private var desktopNonce: String? = null
     internal var viewportBridge:DesktopViewportBridge?=null
+    internal var lastViewportCaptureCounts:List<Int> = emptyList();private set
     private var port: WebExtension.Port? = null
     private var portReady: CompletableDeferred<Unit> = CompletableDeferred()
     private val pending = HashMap<String, CompletableDeferred<JSONObject?>>()
@@ -103,7 +104,7 @@ class CollectorChannel(
     }
     suspend fun armDesktop(nonce:String,consent:Boolean,group:String=PocPolicy.APPROVED_GROUP_ID,windowMs:Int=60_000):String {
         if(!consent)return "STOP"
-        desktopNonce=nonce
+        desktopNonce=nonce;lastViewportCaptureCounts=emptyList()
         val result=request(nonce,JSONObject().put("type","armDesktopPreview").put("nonce",nonce).put("consent",true).put("desktopConsent",true).put("groupId",group).put("allowLoopback",fixtureMode).put("windowMs",windowMs),5_000)
         return if(result?.optString("type")=="desktopArmed"&&result.optString("nonce")==nonce)result.optString("status").takeIf{it in setOf("ARMED","STOP","BUSY","UNSUPPORTED")}?:"STOP" else "STOP"
     }
@@ -112,7 +113,7 @@ class CollectorChannel(
         val result=request(nonce,JSONObject().put("type","desktopPreview").put("nonce",nonce).put("consent",true).put("groupId",group).put("allowLoopback",fixtureMode).put("documentAfter",documentAfter).put("remainingMs",remainingMs).put("previousDocumentId",previous.documentId).put("previousTimeOrigin",previous.timeOrigin).put("viewportConsent",viewportBridge!=null).put("photosConsent",viewportBridge!=null),remainingMs.toLong().coerceIn(500,60_000))
         return DesktopProtocol.parse(result,nonce,group)
     }
-    fun abortDesktop(){viewportBridge?.close();viewportBridge=null;desktopNonce=null;runCatching{port?.postMessage(JSONObject().put("type","abortDesktopPreview").put("nonce",UUID.randomUUID().toString()))}}
+    fun abortDesktop(){viewportBridge?.let{it.close();lastViewportCaptureCounts=it.captureCounts.toList()};viewportBridge=null;desktopNonce=null;runCatching{port?.postMessage(JSONObject().put("type","abortDesktopPreview").put("nonce",UUID.randomUUID().toString()))}}
 
     suspend fun shareLinkProof(expectedUrl: String, consent: Boolean, newDocumentAfter: Long? = null): ShareContextReply {
         if (!consent) return ShareContextReply.ABSENT

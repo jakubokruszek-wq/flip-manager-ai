@@ -234,15 +234,19 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
    readDOM(w,model,core,m.groupId);
    model.stats.viewportHeight=Math.min(10000,Math.round(w.innerHeight));model.stats.visualViewportHeight=Math.min(10000,Math.round(w.visualViewport?.height||w.innerHeight));
    model.stats.rootRemaining=Math.max(0,Math.min(10000,Math.round((w.document.scrollingElement?.scrollHeight||0)-(w.document.scrollingElement?.clientHeight||0)-(w.scrollY||0))));
-   if(viewport&&m.photosConsent===true&&model.stats.photoPreviewFrames<20&&w.performance.now()<scrollEnd-1200){
-    const shot=viewport.photos(w,core,m.groupId,photoNodes,photoSlots);
-    if(shot){model.stats.photoPreviewFrames++;const ack=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:'photos',width:shot.width,height:shot.height,tiles:shot.tiles});
+   if(viewport&&m.photosConsent===true){
+    // A cold or still-changing first frame must not be lost by scrolling away.
+    // One bounded retry, still inside the original capture/time budgets.
+    for(let attempt=0;attempt<2&&model.stats.photoPreviewFrames<20&&w.performance.now()<scrollEnd-1200;attempt++){
+     const shot=viewport.photos(w,core,m.groupId,photoNodes,photoSlots);if(!shot)break;
+     model.stats.photoPreviewFrames++;const ack=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:'photos',width:shot.width,height:shot.height,tiles:shot.tiles});
      if(invalid||!safe(m))return empty('CONTEXT');
      if(ack?.accepted===true&&ack.count===shot.tiles.length){
       const commit=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:shot.valid()&&safe(m)?'commit':'drop',frameId:ack.requestId});
       if(invalid||!safe(m))return empty('CONTEXT');
-      if(commit?.accepted===true&&commit.count===shot.tiles.length){for(const key of shot.keys)key.done=true;model.stats.photoPreviews+=commit.count;}
+      if(commit?.accepted===true&&commit.count===shot.tiles.length){for(const key of shot.keys)key.done=true;model.stats.photoPreviews+=commit.count;break;}
      }
+     if(attempt===0){await pause(Math.min(150,Math.max(0,scrollEnd-w.performance.now())));if(invalid||!safe(m))return empty('CONTEXT');}
     }
    }
    if(step===30||w.performance.now()>=scrollEnd)break;

@@ -55,6 +55,7 @@ class DesktopThumbnails {
 /** Official GeckoView wheel input and rendered-pixel crops, under the same live native gate. */
 class DesktopViewportBridge(private val view:GeckoView,private val nonce:String,private val images:DesktopThumbnails,
                             private val live:()->Boolean,private val now:()->Long={android.os.SystemClock.elapsedRealtime()}) {
+    internal val captureCounts=IntArray(8) // attempts,inactive,aspect,frame,late,error,pending,committed; counts only
     private var closed=false;private var busy=false;private var captures=0;private var scrolls=0;private var lastScroll=Long.MIN_VALUE
     private val requests=HashSet<String>()
     private var pendingFrame:String?=null;private var pendingAt=0L
@@ -65,14 +66,14 @@ class DesktopViewportBridge(private val view:GeckoView,private val nonce:String,
     fun handle(j:JSONObject,reply:(JSONObject)->Unit){
         val r=DesktopViewportProtocol.parse(j,nonce)?:return
         fun ack(ok:Boolean,count:Int=0){if(!closed)reply(JSONObject().put("type","desktopViewportAck").put("nonce",nonce).put("requestId",r.requestId).put("accepted",ok).put("count",count))}
-        if(!active()||busy||requests.size>=90||!requests.add(r.requestId)){ack(false);return}
+        if(!active()||busy||requests.size>=90||!requests.add(r.requestId)){if(r.action=="photos")captureCounts[1]++;ack(false);return}
         if(pendingFrame!=null&&now()-pendingAt>1000)discard()
         if(r.action in setOf("commit","drop")){
             if(r.frameId!=pendingFrame){ack(false);return}
             if(r.action=="drop"){discard();ack(true);return}
             val count=pendingCrops.size
             for((t,b) in pendingCrops)images.put(t.postId,t.slot,b)
-            pendingCrops=emptyList();pendingFrame=null;ack(true,count);return
+            pendingCrops=emptyList();pendingFrame=null;captureCounts[7]+=count;ack(true,count);return
         }
         if(pendingFrame!=null){ack(false);return}
         if(r.action=="scroll"){
@@ -84,11 +85,14 @@ class DesktopViewportBridge(private val view:GeckoView,private val nonce:String,
             try{if(!active()){ack(false);return};view.onGenericMotionEvent(event);scrolls++;lastScroll=stamp;ack(true)}finally{event.recycle()}
             return
         }
-        if(captures>=20||abs((r.width/r.height)/(view.width.toDouble()/view.height)-1)>0.005){ack(false);return}
+        captureCounts[0]++
+        if(captures>=20||abs((r.width/r.height)/(view.width.toDouble()/view.height)-1)>0.005){captureCounts[2]++;ack(false);return}
         busy=true;captures++;val started=now()
         try{view.capturePixels().accept({frame->
             try{
-                if(frame==null||!active()||now()-started>800||frame.width!=view.width||frame.height!=view.height||frame.width.toLong()*frame.height>4_000_000){ack(false);return@accept}
+                if(!active()){captureCounts[1]++;ack(false);return@accept}
+                if(now()-started>800){captureCounts[4]++;ack(false);return@accept}
+                if(frame==null||frame.width!=view.width||frame.height!=view.height||frame.width.toLong()*frame.height>4_000_000){captureCounts[3]++;ack(false);return@accept}
                 val crops=ArrayList<Pair<DesktopViewportProtocol.Tile,Bitmap>>()
                 try{
                     for(t in r.tiles){
@@ -100,11 +104,11 @@ class DesktopViewportBridge(private val view:GeckoView,private val nonce:String,
                         val owned=if(small===frame||small===crop)requireNotNull(small.copy(Bitmap.Config.ARGB_8888,false)) else small
                         if(crop!==frame&&crop!==owned)crop.recycle();crops.add(t to owned)
                     }
-                    if(!active()||now()-started>800){ack(false);return@accept}
+                    if(!active()||now()-started>800){captureCounts[4]++;ack(false);return@accept}
                     // The entire frame is transient; only already-visible image rectangles survive.
-                    pendingCrops=crops.toList();pendingFrame=r.requestId;pendingAt=now();crops.clear();ack(true,r.tiles.size)
+                    pendingCrops=crops.toList();pendingFrame=r.requestId;pendingAt=now();captureCounts[6]++;crops.clear();ack(true,r.tiles.size)
                 }finally{for((_,b) in crops)if(!b.isRecycled)b.recycle()}
-            }catch(_:Exception){ack(false)}finally{frame?.recycle();busy=false}
-        },{busy=false;ack(false)})}catch(_:Exception){busy=false;ack(false)}
+            }catch(_:Exception){captureCounts[5]++;ack(false)}finally{frame?.recycle();busy=false}
+        },{busy=false;captureCounts[5]++;ack(false)})}catch(_:Exception){busy=false;captureCounts[5]++;ack(false)}
     }
 }

@@ -139,3 +139,11 @@ test('native preview pixels require a second stable-frame confirmation and separ
  const r=await preview.run(h.w,{...m,photosConsent:consent},core,fields,h.safe,h.send,h.setAbort,h.notify);
  assert.equal(r.status,'OK');if(!consent)assert.equal(requests.length,0);else if(!stable){assert.equal(r.stats.photoPreviews,0);assert(requests.some(m=>m.action==='drop'));}else assert(r.stats.photoPreviews>0);}
 });
+test('failed first image frame retries before any scroll moves the images offscreen',async()=>{
+ const h=env();let attempts=0;const key={done:false};const events=[];
+ h.w.FlipDesktopViewport={photos:()=>key.done||h.w.scrollY>0?null:{width:980,height:800,tiles:[{postId:'550000000000091',slot:0,x:0,y:0,width:100,height:100}],keys:[key],valid:()=>true}};
+ const scroll=h.w.scrollBy.bind(h.w);h.w.scrollBy=o=>{events.push('scroll');scroll(o)};
+ h.notify=async msg=>{events.push(msg.action);if(msg.action==='photos'&&++attempts===1)return{accepted:false,count:0};return{requestId:newDoc,accepted:true,count:1}};
+ const r=await preview.run(h.w,{...m,photosConsent:true},core,fields,h.safe,h.send,h.setAbort,h.notify);
+ assert.equal(r.status,'OK');assert.equal(r.stats.photoPreviews,1);assert.equal(r.stats.photoPreviewFrames,2);assert.deepEqual(events.slice(0,4),['photos','photos','commit','scroll']);assert.equal(r.stats.scrollElapsedMs,30000);
+});
