@@ -91,7 +91,7 @@ class DesktopViewportBridge(private val view:GeckoView,private val nonce:String,
         try{view.capturePixels().accept({frame->
             try{
                 if(!active()){captureCounts[1]++;ack(false);return@accept}
-                if(now()-started>800){captureCounts[4]++;ack(false);return@accept}
+                if(now()-started>3000){captureCounts[4]++;ack(false);return@accept}
                 if(frame==null||frame.width!=view.width||frame.height!=view.height||frame.width.toLong()*frame.height>4_000_000){captureCounts[3]++;ack(false);return@accept}
                 val crops=ArrayList<Pair<DesktopViewportProtocol.Tile,Bitmap>>()
                 try{
@@ -104,7 +104,7 @@ class DesktopViewportBridge(private val view:GeckoView,private val nonce:String,
                         val owned=if(small===frame||small===crop)requireNotNull(small.copy(Bitmap.Config.ARGB_8888,false)) else small
                         if(crop!==frame&&crop!==owned)crop.recycle();crops.add(t to owned)
                     }
-                    if(!active()||now()-started>800){captureCounts[4]++;ack(false);return@accept}
+                    if(!active()||now()-started>3000){captureCounts[4]++;ack(false);return@accept}
                     // The entire frame is transient; only already-visible image rectangles survive.
                     pendingCrops=crops.toList();pendingFrame=r.requestId;pendingAt=now();captureCounts[6]++;crops.clear();ack(true,r.tiles.size)
                 }finally{for((_,b) in crops)if(!b.isRecycled)b.recycle()}

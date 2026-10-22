@@ -11,7 +11,7 @@ function transport(port,w){
   pending.delete(m.requestId);w.clearTimeout(p.timer);p.resolve(m);
  });
  return {clear,request(m){if(pending.size||!uuid.test(m.nonce||''))return Promise.resolve(null);
-  const requestId=w.crypto.randomUUID();return new Promise(resolve=>{const timer=w.setTimeout(()=>{pending.delete(requestId);resolve(null);},1000);pending.set(requestId,{resolve,timer,nonce:m.nonce});try{port.postMessage({...m,requestId});}catch{clear();}});
+  const requestId=w.crypto.randomUUID();return new Promise(resolve=>{const timer=w.setTimeout(()=>{pending.delete(requestId);resolve(null);},m.action==='photos'?3500:1000);pending.set(requestId,{resolve,timer,nonce:m.nonce});try{port.postMessage({...m,requestId});}catch{clear();}});
  }};
 }
 function cards(w,core,group){
@@ -46,12 +46,14 @@ function trace(w){
  const sy=Number(w.scrollY)||0,vy=Number(vp?.offsetTop)||0;
  return ()=>Number(w.scrollY)>sy+1||Number(w.visualViewport?.offsetTop)>vy+1||positions.some(([c,y])=>c.isConnected!==false&&c.getBoundingClientRect().top<y-1);
 }
-function photos(w,core,group,photoNodes,slots){
+function photos(w,core,group,photoNodes,slots,allowedIds){
+ if(!allowedIds||typeof allowedIds.has!=='function')return null;
  const vp=w.visualViewport,width=Number(vp?.width)||w.innerWidth,height=Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight),left=Number(vp?.offsetLeft)||0,top=Number(vp?.offsetTop)||0;
  if(!Number.isFinite(width)||!Number.isFinite(height)||width<100||height<100||width>10000||height>10000)return null;
  const tiles=[],keys=[],checks=[];
  const result=()=>({width,height,tiles,keys,valid:()=>Math.abs((Number(w.visualViewport?.width)||w.innerWidth)-width)<1&&Math.abs(Math.min(w.innerHeight,Number(w.visualViewport?.height)||w.innerHeight)-height)<1&&Math.abs((Number(w.visualViewport?.offsetLeft)||0)-left)<1&&Math.abs((Number(w.visualViewport?.offsetTop)||0)-top)<1&&checks.every(check=>check())});
  for(const {card,id} of cards(w,core,group)){
+  if(!allowedIds.has(id))continue;
   if(!slots.has(id)){if(slots.size===20)continue;slots.set(id,new Map());}const media=slots.get(id);
   for(const {node,item} of photoNodes(card,id,group,core)){
    if(node.tagName==='IMG'&&(node.complete!==true||node.naturalWidth<1))continue;
@@ -64,7 +66,7 @@ function photos(w,core,group,photoNodes,slots){
    const uncovered=()=>points.every(([px,py])=>{const hit=w.document.elementFromPoint?.(px,py);return hit===node||node.contains?.(hit)});
    if(!uncovered())continue;
    const source=node.currentSrc||node.getAttribute?.('href')||node.getAttribute?.('src');
-   checks.push(()=>{const after=node.getBoundingClientRect();return node.isConnected!==false&&node.ownerDocument===w.document&&["left","top","right","bottom"].every(k=>Math.abs(after[k]-r[k])<1)&&source===(node.currentSrc||node.getAttribute?.('href')||node.getAttribute?.('src'))&&uncovered();});
+   checks.push(()=>{const after=node.getBoundingClientRect();return node.isConnected!==false&&node.ownerDocument===w.document&&cards(w,core,group).some(p=>p.card===card&&p.id===id)&&["left","top","right","bottom"].every(k=>Math.abs(after[k]-r[k])<1)&&source===(node.currentSrc||node.getAttribute?.('href')||node.getAttribute?.('src'))&&uncovered();});
    tiles.push({postId:id,slot:mark.slot,x,y,width:right-x,height:bottom-y});keys.push(mark);
    if(tiles.length===3)return result();
   }
