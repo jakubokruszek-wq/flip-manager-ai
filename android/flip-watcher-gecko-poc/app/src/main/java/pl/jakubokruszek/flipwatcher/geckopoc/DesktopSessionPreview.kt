@@ -19,6 +19,10 @@ object DesktopSessionPreview {
         fun live():Boolean {if(remaining()==0L&&gate.active)gate.stop("DEADLINE_${gate.phase.name}");return gate.tick()}
         fun failure(reason:String):Outcome {if(gate.active)gate.stop(reason);return Outcome(gate.reason,null,ua)}
         try {
+            val sourceGeneration=channel.connectionGeneration
+            val previousDocument=channel.desktopDocumentProof(group)?:return@withContext failure("PROTOCOL")
+            if(!live())return@withContext failure(gate.reason)
+            if(channel.connectionGeneration!=sourceGeneration||channel.connectedUrl!=target)return@withContext failure("NAVIGATION")
             val armed=channel.armDesktop(nonce,true,group,windowMs)
             if(!live())return@withContext failure(gate.reason)
             if(armed!="ARMED")return@withContext failure("ARM_${armed.takeIf{it in setOf("STOP","BUSY","UNSUPPORTED")}?:"STOP"}")
@@ -31,7 +35,8 @@ object DesktopSessionPreview {
             if(!live())return@withContext failure(gate.reason)
             if(session.settings.userAgentMode!=GeckoSessionSettings.USER_AGENT_MODE_DESKTOP||session.settings.viewportMode!=GeckoSessionSettings.VIEWPORT_MODE_DESKTOP||resolvedUa==null||resolvedUa.contains("Mobile",true)||resolvedUa.contains("Android",true))return@withContext failure("DESKTOP_NOT_APPLIED")
             if(!live())return@withContext failure(gate.reason)
-            val portAfter=channel.connectionGeneration
+            if(channel.connectionGeneration!=sourceGeneration)return@withContext failure("NAVIGATION")
+            val portAfter=sourceGeneration
             val documentAfter=System.currentTimeMillis()
             session.loadUri(target)
             while(live()){
@@ -41,7 +46,7 @@ object DesktopSessionPreview {
                 gate.waitFor(DesktopTrial.Phase.READING)
                 val generation=channel.connectionGeneration
                 session.setFocused(true)
-                val reply=channel.desktopPreview(nonce,documentAfter,remaining().toInt(),group)
+                val reply=channel.desktopPreview(nonce,documentAfter,remaining().toInt(),group,previousDocument)
                 if(!live())return@withContext failure(gate.reason)
                 if(currentUrl()!=expected||generation!=channel.connectionGeneration)return@withContext failure("NAVIGATION")
                 if(reply==null)return@withContext failure(if(channel.isConnected)"PROTOCOL" else "PORT_LOST")

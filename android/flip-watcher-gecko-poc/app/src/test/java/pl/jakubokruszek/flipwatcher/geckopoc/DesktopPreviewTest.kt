@@ -73,4 +73,10 @@ class DesktopPreviewTest {
         for(key in DesktopProtocol.statKeys.drop(34))old.getJSONObject("stats").remove(key)
         val raw=old.toString();assertEquals(0,DesktopSummary.decode(raw)!!.stats.getValue("scrollTailAttempts"));assertEquals(raw,old.toString())
     }
+    @Test fun documentProofRequiresExactNonceUuidAndFiniteOriginWithoutRawExtras(){
+        val j=JSONObject().put("type","desktopDocumentProof").put("nonce",nonce).put("documentId","11111111-1111-4111-8111-111111111111").put("timeOrigin",1000.0)
+        val p=DesktopProtocol.documentProof(j,nonce)!!;assertEquals(1000.0,p.timeOrigin,0.0);assertFalse(p.toString().contains(p.documentId))
+        assertNull(DesktopProtocol.documentProof(j,"wrong"))
+        for((key,value) in listOf("documentId" to "not-a-uuid","timeOrigin" to "1000","timeOrigin" to -1,"raw" to "PRIVATE"))assertNull(DesktopProtocol.documentProof(JSONObject(j.toString()).put(key,value),nonce))
+    }
 }

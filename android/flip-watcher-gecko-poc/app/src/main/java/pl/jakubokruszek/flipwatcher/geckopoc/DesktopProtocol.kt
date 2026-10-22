@@ -5,7 +5,18 @@ import org.json.JSONObject
 /** Transient selected fields only. Never persisted, logged or copied with the count-only report. */
 data class DesktopRow(val postId:String,val permalink:String,val layer:String,val price:Double?,val priceSource:String,val area:Double?,val rooms:Int?,val district:String?,val neighborhood:String?,val street:String?,val intent:String,val usable:Boolean,val photos:Int,val qualification:String="CLASSIFIER")
 data class DesktopReply(val status:String,val reason:String,val rows:List<DesktopRow>,val stats:Map<String,Int>)
+data class DesktopDocumentProof(val documentId:String,val timeOrigin:Double) {
+    override fun toString()="DesktopDocumentProof(redacted)"
+}
 object DesktopProtocol {
+    fun documentProof(message:Any?,nonce:String):DesktopDocumentProof?=runCatching {
+        val j=ScanProtocol.asJson(message)?:return null
+        if(j.keys().asSequence().toSet()!=setOf("type","nonce","documentId","timeOrigin")||j.opt("type")!="desktopDocumentProof"||j.opt("nonce")!=nonce)return null
+        val id=j.getString("documentId");if(java.util.UUID.fromString(id).toString()!=id)return null
+        val time=j.opt("timeOrigin");if(time !is Number||!time.toDouble().isFinite()||time.toDouble()<=0)return null
+        DesktopDocumentProof(id,time.toDouble())
+    }.getOrNull()
+
     val statKeys=listOf("candidates","dom","hydration","network","duplicates","rejected","ambiguous","scripts","scrollSteps","scrollMoves","requests","bytes","verified","desktop","filtered","completed","streamErrors","decodeErrors","oversize","limitSkipped","articles","mobile","scrollSeen","scrollNoRange","scrollHidden","scrollOffscreen","scrollUnbound","scrollRoot","scrollInner","scrollHit","scrollElapsedMs","scrollStalls","scrollAtEnd","scrollNoTarget","scrollTailAttempts","scrollTailMoves","pageFocused","pageVisible")
     private val rowKeys=setOf("postId","permalink","layer","price","priceSource","area","rooms","district","neighborhood","street","intent","usable","photos","qualification")
     val qualifications=setOf("CANDIDATE","NO_TEXT","FOREIGN_CITY","NOT_PROPERTY","INTENT","MISSING_FIELDS","CONFLICT","CLASSIFIER")

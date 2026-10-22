@@ -7,6 +7,11 @@
   // user already sees. Input values are never read; only element counts.
   const adapter = scope.FlipGeckoPocAdapter;
   const core = scope.FlipFacebookCollectorCore;
+  // Isolated-world identity persists across reconnect/reinjection of this document.
+  const priorIdentity=scope.FlipDesktopDocumentIdentity;
+  const desktopIdentity=priorIdentity?.document===scope.document?priorIdentity:{document:scope.document,id:scope.crypto?.randomUUID?.()||null};
+  scope.FlipDesktopDocumentIdentity=desktopIdentity;
+
   let port;
   try {
     port = browser.runtime.connectNative("flipPoc");
@@ -435,10 +440,14 @@
       const ack=message.consent===true&&message.desktopConsent===true&&responsePageSafe(message)?await browser.runtime.sendMessage({type:'armDesktop',nonce:message.nonce,consent:true,desktopConsent:true,groupId:message.groupId,fixture:message.allowLoopback===true,windowMs:message.windowMs}):{status:'STOP'};
       port.postMessage({type:'desktopArmed',nonce:message.nonce,status:ack?.status||'STOP'});return;
     }
+    if(message.type==='desktopDocumentProofRequest'){
+      const safe=message.consent===true&&responsePageSafe(message);
+      port.postMessage({type:'desktopDocumentProof',nonce:message.nonce,documentId:safe?desktopIdentity.id:null,timeOrigin:safe?scope.performance.timeOrigin:null});return;
+    }
     if(message.type==='desktopPreview'){
       if(desktopRunning){port.postMessage({type:'desktopPreviewResult',nonce:message.nonce,status:'STOP',reason:'BUSY',rows:[],stats:scope.FlipDesktopPreview.zero()});return;}
       desktopRunning=true;
-      try{const result=await scope.FlipDesktopPreview.run(scope,message,core,scope.FlipDesktopFields,responsePageSafe,m=>browser.runtime.sendMessage(m),f=>{activeDesktopAbort=f;},m=>{try{port.postMessage(m);}catch{}});
+      try{const result=await scope.FlipDesktopPreview.run(scope,message,core,scope.FlipDesktopFields,responsePageSafe,m=>browser.runtime.sendMessage(m),f=>{activeDesktopAbort=f;},m=>{try{port.postMessage(m);}catch{}},desktopIdentity.id);
         port.postMessage({type:'desktopPreviewResult',nonce:message.nonce,...result});
       }finally{desktopRunning=false;activeDesktopAbort=null;}return;
     }

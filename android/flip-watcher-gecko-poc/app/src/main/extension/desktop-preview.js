@@ -179,10 +179,15 @@ function readDOM(w,model,core,group){
   model.add({postId:ids[0],permalink:own[0].permalink,text,media:domPhotos(card,ids[0],group,core)},'DOM');
  }
 }
-async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{}){
+async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=null){
  const empty=reason=>({status:'STOP',reason,rows:[],stats:zero()});
  if(m.consent!==true||!safe(m))return empty('CONTEXT');
- if(!Number.isSafeInteger(m.documentAfter)||!Number.isFinite(w.performance.timeOrigin)||w.performance.timeOrigin<=m.documentAfter)return {status:'WAIT_FRESH',reason:'FRESHNESS',rows:[],stats:zero()};
+ const uuid=/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
+ const origin=w.performance.timeOrigin;
+ const fresh=m.previousDocumentId!==undefined||m.previousTimeOrigin!==undefined?
+  uuid.test(m.previousDocumentId||'')&&uuid.test(documentId||'')&&documentId!==m.previousDocumentId&&Number.isFinite(m.previousTimeOrigin)&&m.previousTimeOrigin>0&&Number.isFinite(origin)&&origin>=m.previousTimeOrigin:
+  Number.isSafeInteger(m.documentAfter)&&Number.isFinite(origin)&&origin>m.documentAfter;
+ if(!fresh)return {status:'WAIT_FRESH',reason:'FRESHNESS',rows:[],stats:zero()};
  const model=createModel(core,fields,m.groupId);let invalid=false,dispose=null;const end=w.performance.now()+Math.min(60000,Math.max(0,Number(m.remainingMs)||0));
  let wake;const cancelled=new Promise(r=>{wake=r;});
  const abort=()=>{if(invalid)return;invalid=true;model.clear();wake();notify({type:'desktopPreviewStop',nonce:m.nonce});void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});};
