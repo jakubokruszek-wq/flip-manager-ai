@@ -61,4 +61,16 @@ class DesktopPreviewTest {
         val raw=old.toString();val restored=DesktopSummary.decode(raw)!!
         assertEquals(0,restored.stats.getValue("scrollElapsedMs"));assertEquals(raw,old.toString())
     }
+    @Test fun tailRecoveryAndFocusCountersAreStrictlyBounded(){
+        val ok=message();ok.getJSONObject("stats").put("scrollSteps",4).put("scrollMoves",3).put("scrollTailAttempts",2).put("scrollTailMoves",1).put("pageFocused",1).put("pageVisible",1)
+        assertNotNull(DesktopProtocol.parse(ok,nonce))
+        for((key,value) in listOf("scrollTailAttempts" to 3,"scrollTailMoves" to 3,"pageFocused" to 2,"pageVisible" to 2)){
+            val bad=JSONObject(ok.toString());bad.getJSONObject("stats").put(key,value);assertNull(DesktopProtocol.parse(bad,nonce))
+        }
+    }
+    @Test fun priorThirtyFourStatHistoryRemainsReadableWithoutWriteback(){
+        val old=JSONObject(DesktopSummary.create("DONE",1,DesktopProtocol.parse(message(),nonce)!!).encode())
+        for(key in DesktopProtocol.statKeys.drop(34))old.getJSONObject("stats").remove(key)
+        val raw=old.toString();assertEquals(0,DesktopSummary.decode(raw)!!.stats.getValue("scrollTailAttempts"));assertEquals(raw,old.toString())
+    }
 }

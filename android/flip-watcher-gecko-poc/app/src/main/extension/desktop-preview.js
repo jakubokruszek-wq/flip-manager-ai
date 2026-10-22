@@ -1,7 +1,7 @@
 /* Isolated/native-consented local projection. No storage, upload or public page bridge. */
 (function(root){
 'use strict';
-const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget'];
+const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible'];
 const zero=()=>Object.fromEntries(statKeys.map(k=>[k,0]));
 function groupURL(raw,group,fixture){try{const u=new URL(raw);return /^[A-Za-z0-9._-]{1,100}$/.test(group)&&!u.username&&!u.password&&!u.hash&&(fixture||!u.search)&&u.pathname.replace(/\/$/,'')==='/groups/'+group&&((u.protocol==='https:'&&!u.port&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))||(fixture===true&&u.protocol==='http:'&&u.hostname==='127.0.0.1'));}catch{return false;}}
 function exact(raw,group){try{const u=new URL(raw);const p=u.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d{5,30})\/?$/);return u.protocol==='https:'&&!u.port&&!u.username&&!u.password&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&p?.[1]===group?p[2]:null;}catch{return null;}}
@@ -106,6 +106,25 @@ function scrollContainer(w,stats=null){
  if(stats)for(const k of Object.keys(evidence))stats[k]=Math.max(stats[k]||0,evidence[k]);
  return selected;
 }
+// A bound post below the actual viewport may sit behind a clipped ancestor even
+// when the chosen inner feed has reached its end. Use only ordinary DOM scrolling.
+function tailTarget(w,core,group){
+ const doc=w.document;
+ const cards=Array.from(doc.querySelectorAll('[role="article"],article')).filter(c=>!c.parentElement?.closest('[role="article"],article')).slice(0,100);
+ const card=cards.at(-1);
+ if(!card||card.isConnected===false||card.ownerDocument!==doc||typeof card.scrollIntoView!=='function'||card.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]'))return null;
+ const links=Array.from(card.querySelectorAll('a[href]')).filter(a=>a.closest('[role="article"],article')===card).slice(0,100).map(a=>core.parsePostLink(a.href)).filter(Boolean);
+ if(!links.length||links.some(l=>l.sourceType!=='GROUP'||l.sourceId!==group)||new Set(links.map(l=>l.postId)).size!==1)return null;
+ const rect=card.getBoundingClientRect();
+ const vp=w.visualViewport,top=Number(vp?.offsetTop)||0,height=Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight);
+ if(rect.width<250||rect.height<1||rect.bottom<=top+height-16||rect.left>=w.innerWidth||rect.right<=0)return null;
+ return card;
+}
+function scrollTrace(w,card){
+ const nodes=[];for(let n=card.parentElement,depth=0;n&&depth<32;depth++,n=n.parentElement)nodes.push([n,Number(n.scrollTop)||0]);
+ const before=Number(w.scrollY)||0;
+ return ()=>Number(w.scrollY)>before+1||nodes.some(([n,y])=>n.isConnected!==false&&(Number(n.scrollTop)||0)>y+1);
+}
 function ownMessageText(card){
  const selector='[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="message"]';
  const texts=new Set(Array.from(card.querySelectorAll(selector)).filter(n=>n.closest('[role="article"],article')===card&&!n.closest('[role="comment"],[data-testid*="comment"],[data-ad-rendering-role*="comment"]'))
@@ -143,11 +162,29 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{}){
   const active=async()=>{if(invalid||!safe(m)||w.performance.now()>=end)return false;const c=await send({type:'desktopContext',nonce:m.nonce});return !invalid&&safe(m)&&c?.active===true&&c.nonce===m.nonce;};
   // Reserve time for final extraction and native delivery within the original deadline.
   const scrollStart=w.performance.now(),scrollEnd=Math.min(scrollStart+30000,end-1500);
+  let noTargetStreak=0,lastTailAt=-Infinity;
   for(let step=0;step<=30;step++){
-   if(!await active())return empty('CONTEXT');readDOM(w,model,core,m.groupId);if(step===30||w.performance.now()>=scrollEnd)break;
+   if(!await active())return empty('CONTEXT');
+   model.stats.pageFocused=Math.max(model.stats.pageFocused,Number(w.document.hasFocus?.()===true));
+   model.stats.pageVisible=Math.max(model.stats.pageVisible,Number(w.document.visibilityState==='visible'&&w.document.hidden!==true));
+   readDOM(w,model,core,m.groupId);if(step===30||w.performance.now()>=scrollEnd)break;
    let container=scrollContainer(w,model.stats);
    // Retry a not-yet-scrollable feed within the same bounded window.
-   if(!container){model.stats.scrollNoTarget++;await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));continue;}
+   if(!container){
+    noTargetStreak++;
+    const tail=noTargetStreak>=2&&model.stats.scrollTailAttempts<2&&w.performance.now()-lastTailAt>=5000?tailTarget(w,core,m.groupId):null;
+    if(tail){
+     if(!await active()||w.performance.now()>=scrollEnd||tailTarget(w,core,m.groupId)!==tail)return empty('CONTEXT');
+     const moved=scrollTrace(w,tail);lastTailAt=w.performance.now();
+     tail.scrollIntoView({block:'end',inline:'nearest',behavior:'instant'});
+     model.stats.scrollTailAttempts++;model.stats.scrollSteps++;
+     await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));
+     if(invalid||!safe(m))return empty('CONTEXT');
+     if(moved()){model.stats.scrollMoves++;model.stats.scrollTailMoves++;}else model.stats.scrollStalls++;
+    }else{model.stats.scrollNoTarget++;await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));}
+    continue;
+   }
+   noTargetStreak=0;
    const root=container===w.document.scrollingElement;
    const before=root?w.scrollY:container.scrollTop;
    const top=Math.max(400,Math.min(900,Math.round((root?w.innerHeight:container.clientHeight)*.85)));
@@ -167,5 +204,5 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{}){
  }catch{return empty('ERROR');}
  finally{setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
-const api={scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
+const api={tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);

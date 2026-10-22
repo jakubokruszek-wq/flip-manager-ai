@@ -1,0 +1,20 @@
+<!doctype html><html><head><title>Local clipped desktop feed</title><meta name="viewport" content="width=device-width">
+<script>fetch('/api/graphql/').then(r=>r.text());</script></head>
+<body style="margin:0;height:100vh;overflow:hidden">
+<main style="height:calc(100vh + 1000px);overflow-y:auto">
+<article role="article" style="height:200px"><a href="https://www.facebook.com/groups/1234567890123/posts/550000000000091/">Post</a><div data-ad-preview="message">Sprzedam mieszkanie na Retkini. 42,42 m2. 2 pokoje. Cena 319000 zł.</div></article>
+<div style="height:calc(100vh + 1600px)"></div>
+<article role="article" style="height:200px"><a href="https://www.facebook.com/groups/1234567890123/posts/550000000000092/">Post</a><div data-ad-preview="message">Sprzedam mieszkanie 53m2. Cena 425000 zł.</div></article>
+</main>
+<script>
+// An inner scroll reaches its finite bottom while the actual last card remains
+// below the real viewport, behind the overflow-hidden root. Only exposing that
+// card permits this fixture's loader to append more feed content.
+const feed=document.querySelector('main'),last=feed.lastElementChild;let queued=false;
+function observe(){if(queued||last.getBoundingClientRect().bottom>innerHeight+2)return;queued=true;setTimeout(()=>{
+const more=document.createElement('article');more.setAttribute('role','article');
+more.innerHTML='<a href="https://www.facebook.com/groups/1234567890123/posts/550000000000094/">Post</a><div data-ad-preview="message">Sprzedam mieszkanie 77m2. Cena 950000 zł.</div>';
+feed.append(more);const spacer=document.createElement('div');spacer.style.height='20000px';feed.append(spacer);
+},500);}
+addEventListener('scroll',observe,true);setTimeout(observe,500);
+</script></body></html>

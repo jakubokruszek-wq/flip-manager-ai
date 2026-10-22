@@ -23,6 +23,7 @@ object DesktopSessionPreview {
             if(!live())return@withContext failure(gate.reason)
             if(armed!="ARMED")return@withContext failure("ARM_${armed.takeIf{it in setOf("STOP","BUSY","UNSUPPORTED")}?:"STOP"}")
             if(!gate.armed())return@withContext failure(gate.reason)
+            session.setActive(true);session.setFocused(true)
             session.settings.userAgentMode=GeckoSessionSettings.USER_AGENT_MODE_DESKTOP
             session.settings.viewportMode=GeckoSessionSettings.VIEWPORT_MODE_DESKTOP
             val resolvedUa=withTimeoutOrNull(remaining().coerceAtMost(5_000)){session.userAgent.await()}
@@ -39,6 +40,7 @@ object DesktopSessionPreview {
                 if(!channel.isConnected||channel.connectionGeneration<=portAfter||channel.connectedUrl!=expected){gate.waitFor(DesktopTrial.Phase.PORT);delay(100);continue}
                 gate.waitFor(DesktopTrial.Phase.READING)
                 val generation=channel.connectionGeneration
+                session.setFocused(true)
                 val reply=channel.desktopPreview(nonce,documentAfter,remaining().toInt(),group)
                 if(!live())return@withContext failure(gate.reason)
                 if(currentUrl()!=expected||generation!=channel.connectionGeneration)return@withContext failure("NAVIGATION")

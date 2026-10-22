@@ -24,14 +24,14 @@ class DesktopPreviewInstrumentedTest {
     @Test fun desktopModeCapturesInitialNetworkDomAndHydrationWithSameRunner(){
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use {scenario->
             var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it}
-            runBlocking{withTimeout(90_000){withContext(Dispatchers.Main){
+            runBlocking{withTimeout(120_000){withContext(Dispatchers.Main){
                 val groupPath="/groups/$FIXTURE_GROUP_ID/"
-                val desktop=AtomicBoolean(false);val challenge=AtomicBoolean(false);val rootScroll=AtomicBoolean(false)
+                val desktop=AtomicBoolean(false);val challenge=AtomicBoolean(false);val rootScroll=AtomicBoolean(false);val clipped=AtomicBoolean(false)
                 val agents=CopyOnWriteArrayList<String>()
                 val server=LoopbackFixtureServer(pages=mapOf("/api/graphql/" to "desktop-network"),onRequest={path,ua->
                     if(path==groupPath){agents.add(ua.orEmpty());desktop.set(ua!=null&&!ua.contains("Mobile",true)&&!ua.contains("Android",true))}
                 }){name->
-                    val selected=if(name=="fixtures/desktop-start.html"&&!desktop.get())"fixtures/other.html" else name
+                    val selected=if(name=="fixtures/desktop-start.html"&&!desktop.get())"fixtures/other.html" else if(name=="fixtures/desktop-start.html"&&clipped.get())"fixtures/desktop-tail.html" else name
                     runCatching{context.assets.open(selected).bufferedReader().use{it.readText()}}.getOrNull()?.let{body->
                         val page=if(selected=="fixtures/desktop-start.html"&&rootScroll.get())body.replace("<html>","<html style=\"overflow-y:auto\">").replace("margin:0;height:100vh;overflow:hidden","margin:0;min-height:9000px;overflow:hidden").replace("height:100vh;overflow-y:auto","height:auto;overflow:visible") else body
                         if(selected=="fixtures/desktop-start.html"&&challenge.get())page+"<script>setTimeout(function(){document.title='Checkpoint';document.body.insertAdjacentHTML('beforeend','<input type=password>');},1500);</script>" else page
@@ -76,6 +76,16 @@ class DesktopPreviewInstrumentedTest {
                     val summary=DesktopSummary.create("DONE",trial.requests,reply);assertEquals("CONDITIONAL_GO",summary.verdict);assertEquals(2,summary.offers)
                     assertFalse(summary.encode().contains("550000000000091"));assertFalse(summary.encode().contains("PRIVATE"))
                     android.util.Log.i("GeckoPocTest","DESKTOP_ACCEPTANCE ${summary.report()}")
+                    // A clipped ancestor prevents pagination until the actual bound tail is exposed.
+                    clipped.set(true);val tailTrial=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=tailTrial;assertTrue(tailTrial.begin(true))
+                    val tailResult=DesktopSessionPreview.run(session,channel,tailTrial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=15_000)
+                    assertEquals("DONE",tailResult.reason);val tailReply=tailResult.reply!!
+                    assertTrue("clipped tail alignment absent",tailReply.stats.getValue("scrollTailAttempts") in 1..2)
+                    assertTrue("ancestor did not move",tailReply.stats.getValue("scrollTailMoves")>0)
+                    assertTrue("inner feed did not resume",tailReply.stats.getValue("scrollMoves")>tailReply.stats.getValue("scrollTailMoves")+2)
+                    assertEquals(1,tailReply.stats.getValue("pageFocused"));assertEquals(1,tailReply.stats.getValue("pageVisible"))
+                    val resumed=tailReply.rows.single{it.postId=="550000000000094"};assertEquals(950000.0,resumed.price!!,0.01);assertEquals(77.0,resumed.area!!,0.01)
+                    clipped.set(false)
                     // HTML owns viewport overflow: hidden BODY must not suppress root scrolling.
                     rootScroll.set(true);val rootTrial=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=rootTrial;assertTrue(rootTrial.begin(true))
                     val rootResult=DesktopSessionPreview.run(session,channel,rootTrial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=15_000)
