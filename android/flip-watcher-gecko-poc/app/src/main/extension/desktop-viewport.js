@@ -60,7 +60,7 @@ function point(w,core,group,lastMoved=null){
  probes.push([.5,.6],[.5,.4],[.35,.6],[.65,.6]);
  for(const [x,y] of probes){
   const px=left+width*x,py=top+height*y,n=w.document.elementFromPoint?.(px,py);
-  if(!n||n.ownerDocument!==w.document||/^(IFRAME|FRAME|INPUT|TEXTAREA|SELECT)$/.test(n.tagName||'')||n.closest('[role="dialog"],[role="comment"],[data-testid*="comment"],aside,nav,header'))continue;
+  if(!n||n.ownerDocument!==w.document||/^(IFRAME|FRAME|INPUT|TEXTAREA|SELECT)$/.test(n.tagName||'')||n.closest('[role="dialog"],[role="comment"],[data-testid*="comment"],[role="menu"],[role="listbox"],[role="complementary"],aside,nav,header'))continue;
   // Hit must belong to a rendered group card or semantic feed/main; never an arbitrary sidebar widget.
   if(inputCards.some(p=>p.card.contains(n))||recentHit(n,px,py)||n.closest('[role="feed"],[data-pagelet*="Feed"],main,[role="main"]'))return {x,y};
  }
