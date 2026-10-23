@@ -57,6 +57,18 @@ function point(w,core,group,lastMoved=null,audit=null){
  for(const r of sampleRegions)for(const x of [.1,.5,.9])for(const y of [.1,.5,.9])probes.push([(r.left+(r.right-r.left)*x-left)/width,(r.top+(r.bottom-r.top)*y-top)/height]);
  for(const y of [.12,.3,.5,.7,.88])for(const x of [.12,.3,.5,.7,.88])probes.push([x,y]);
  const nestedWidget=(n,region)=>{let p=n,depth=0;while(p&&p!==region&&depth++<64){const style=w.getComputedStyle?.(p);if(style&&/^(auto|scroll|overlay)$/.test(style.overflowY)&&p.scrollHeight-p.clientHeight>32&&!all.some(c=>p.contains(c)))return true;p=p.parentElement;}return false;};
+ // A native hit can be an ordinary parent of pointer-events:none post content.
+ // Bind that TOP hit by real ancestry and a visible card rectangle, never by
+ // coordinates alone, an underlying layer or a guessed post identity.
+ const ancestorCard=(hit,px,py)=>bound.find(({card})=>{
+  if(hit.isConnected===false||typeof hit.contains!=='function'||!hit.contains(card)||card.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})===false)return false;
+  const style=w.getComputedStyle?.(card),r=card.getBoundingClientRect?.();
+  if(style&&(style.display==='none'||/hidden|collapse/.test(style.visibility)||Number(style.opacity??1)<=0))return false;
+  if(!r||r.width<20||r.height<20||px<r.left||px>r.right||py<r.top||py>r.bottom)return false;
+  let p=card,depth=0;while(p&&p!==hit&&depth++<64)p=p.parentElement;
+  // Do not use a shared parent containing a known foreign-group post.
+  return p===hit&&!all.some(c=>hit.contains(c)&&!bound.some(b=>b.card===c));
+ })?.card;
  const recentHit=(n,px,py)=>{
   if(!recent.length||!feedRect||!lastMoved.contains(n)||px<feedRect.left||px>feedRect.right||py<feedRect.top||py>feedRect.bottom)return false;
   let p=n,depth=0;while(p&&p!==lastMoved&&depth++<64)p=p.parentElement;return p===lastMoved;
@@ -74,7 +86,7 @@ function point(w,core,group,lastMoved=null,audit=null){
   if(comment){diag.pointComment++;if(/commentable/i.test(comment.getAttribute?.('data-testid')||''))diag.pointCommentable++;continue;}
   if(n.closest('[role="menu"],[role="listbox"],[role="complementary"],aside,nav,header')){diag.pointChrome++;continue;}
   const card=inputCards.find(p=>p.card.contains(n))?.card;
-  const region=card||(recentHit(n,px,py)?lastMoved:null)||n.closest('[role="feed"],[data-pagelet*="Feed"],main,[role="main"]');
+  const region=card||(recentHit(n,px,py)?lastMoved:null)||n.closest('[role="feed"],[data-pagelet*="Feed"],main,[role="main"]')||(ancestorCard(n,px,py)?n:null);
   if(!region){diag.pointUnbound++;continue;}
   if(nestedWidget(n,region)){diag.pointWidget++;continue;}
   return finish({x,y});
@@ -130,7 +142,15 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[]){
    if(right-x<60||bottom-y<60||(right-x)*(bottom-y)<r.width*r.height*.6)continue;
    // Occluding headers/dialogs must never become a thumbnail of a post image.
    const points=[[.5,.5],[.1,.1],[.9,.1],[.1,.9],[.9,.9]].map(([px,py])=>[left+x+(right-x)*px,top+y+(bottom-y)*py]);
-   const uncovered=()=>points.every(([px,py])=>{const hit=w.document.elementFromPoint?.(px,py);return hit===node||node.contains?.(hit)});
+   const uncovered=()=>points.every(([px,py])=>{
+    const hit=w.document.elementFromPoint?.(px,py);
+    if(hit===node||node.contains?.(hit))return true;
+    // Rendered images may deliberately delegate input to their real parent.
+    // Accept only the actual top hit, not a sibling overlay or another document.
+    if(!hit||hit.ownerDocument!==w.document||hit.isConnected===false||!hit.contains?.(node)||w.getComputedStyle?.(node)?.pointerEvents!=='none'||node.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})===false)return false;
+    if(hit.closest?.('[role="dialog"],[role="comment"],[data-testid*="comment"],[role="menu"],[role="listbox"],[role="complementary"],aside,nav,header'))return false;
+    let p=node,depth=0;while(p&&p!==hit&&depth++<64)p=p.parentElement;return p===hit;
+   });
    if(!uncovered())continue;
    // Offscreen/occluded images must not consume the three visible-preview slots.
    if(!media.has(key)){if(media.size===3)continue;media.set(key,{slot:media.size,done:false});}const mark=media.get(key);
