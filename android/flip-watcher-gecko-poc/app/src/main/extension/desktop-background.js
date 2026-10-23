@@ -22,7 +22,11 @@ function create(api,core,fields,factory,timers=root){
   return {status:'ARMED'};
  }
  function context(m,sender){const s=state,info=net.loadContext(sender);return {active:!!(s&&s.nonce===m.nonce&&info.active&&now()<s.deadline),nonce:s?.nonce===m.nonce?m.nonce:'',remainingMs:s?.nonce===m.nonce?Math.max(0,s.deadline-now()):0};}
- function confirm(m,sender){if(!context(m,sender).active||m.safe!==true)return {confirmed:false};return {confirmed:net.confirmLoad(m,sender)};}
+ function confirm(m,sender){if(!context(m,sender).active||m.safe!==true)return {confirmed:false};const confirmed=net.confirmLoad(m,sender);if(confirmed)state.confirmed=true;return {confirmed};}
+ function snapshot(m,sender){
+  if(!context(m,sender).active||state.confirmed!==true)return {status:'STOP',rows:[],media:[]};
+  return {status:'OK',rows:state.model.rows(),media:state.model.mediaBindings()};
+ }
  function read(m,sender){
   if(!context(m,sender).active)return empty();const s=state,rows=s.model.rows(),stats={...s.model.stats};
   const result=net.readLoad(m);timers.clearTimeout(s.timer);s.model.clear();state=null;
@@ -30,7 +34,7 @@ function create(api,core,fields,factory,timers=root){
   Object.assign(stats,{network:result.counts.responseExactIds,requests:result.counts.responseRequestsSeen,bytes:result.counts.responseBytes,verified:result.counts.responseLoadVerified,filtered:result.counts.responseFiltered,completed:result.counts.responseCompleted,streamErrors:result.counts.responseStreamErrors,decodeErrors:result.counts.responseDecodeErrors,oversize:result.counts.responseOversize,limitSkipped:result.counts.responseLimitSkipped});
   return {status:'OK',rows,stats};
  }
- return {arm,context,confirm,read,abort,abortAll,stop(m,sender){if(state&&state.nonce===m?.nonce&&state.tab===sender?.tab?.id&&sender.frameId===0)abort(m);}};
+ return {arm,context,confirm,snapshot,read,abort,abortAll,stop(m,sender){if(state&&state.nonce===m?.nonce&&state.tab===sender?.tab?.id&&sender.frameId===0)abort(m);}};
 }
 const out={create};if(typeof module!=='undefined')module.exports=out;
 if(root.browser){const d=create(browser,root.FlipFacebookCollectorCore,root.FlipDesktopFields,root.FlipResponseFactory);root.FlipDesktopBackground=d;
@@ -38,6 +42,7 @@ if(root.browser){const d=create(browser,root.FlipFacebookCollectorCore,root.Flip
   if(m?.type==='armDesktop')return Promise.resolve(d.arm(m,sender));
   if(m?.type==='desktopContext')return Promise.resolve(d.context(m,sender));
   if(m?.type==='confirmDesktop')return Promise.resolve(d.confirm(m,sender));
+  if(m?.type==='desktopSnapshot')return Promise.resolve(d.snapshot(m,sender));
   if(m?.type==='readDesktop')return Promise.resolve(d.read(m,sender));
   if(m?.type==='stopDesktop'){d.stop(m,sender);return Promise.resolve({stopped:true});}
   return undefined;

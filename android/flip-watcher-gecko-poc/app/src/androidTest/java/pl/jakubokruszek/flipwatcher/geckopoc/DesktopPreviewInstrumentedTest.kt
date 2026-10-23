@@ -115,13 +115,17 @@ class DesktopPreviewInstrumentedTest {
 
     @Test fun nativeWheelUnblocksFiniteFeedAndRenderedThumbnailsStayOnlyInRam()=checkNativeViewport(false)
     @Test fun nativeWheelMovesDeepAnonymousScrollerAndRenderedThumbnailsStayOnlyInRam()=checkNativeViewport(true)
-    private fun checkNativeViewport(deep:Boolean){
+    @Test fun nativeWheelAndRealThumbnailsWorkWithOnlyNetworkPostIdentity()=checkNativeViewport(true,true)
+    private fun checkNativeViewport(deep:Boolean,networkOnly:Boolean=false){
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use {scenario->
             var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it}
             runBlocking{withTimeout(70_000){withContext(Dispatchers.Main){
-                val server=LoopbackFixtureServer{asset->
+                val server=LoopbackFixtureServer(pages=if(networkOnly)mapOf("/api/graphql/" to "network-media")else emptyMap()){asset->
+                    if(networkOnly&&asset=="fixtures/network-media.html")"""{"post_id":"550000000000091","url":"https://www.facebook.com/groups/1234567890123/posts/550000000000091/","message":{"text":"Sprzedam mieszkanie 42m2. Cena 319000 zł."},"attachments":[{"media":{"__typename":"Photo","photo_id":"880000000000001","image":{"uri":"https://scontent.fbcdn.net/red.jpg"}}},{"media":{"__typename":"Photo","photo_id":"880000000000002","image":{"uri":"https://scontent.fbcdn.net/green.jpg"}}}]}"""
+                    else {
                     val selected=if(asset=="fixtures/desktop-start.html")(if(deep)"fixtures/desktop-viewport-deep.html" else "fixtures/desktop-viewport.html") else asset
-                    runCatching{context.assets.open(selected).bufferedReader().use{it.readText()}}.getOrNull()
+                    runCatching{context.assets.open(selected).bufferedReader().use{it.readText()}}.getOrNull()?.let{html->if(networkOnly)html.replace("<a href=\"https://www.facebook.com/groups/1234567890123/posts/550000000000091/\">Post</a>","<span>Post without DOM identity</span>").replace("<head>","<head><script>fetch('/api/graphql/').then(r=>r.text());</script>")else html}
+                    }
                 }
                 val target=server.url("/groups/$FIXTURE_GROUP_ID/","desktop-start")
                 val session=GeckoSession(GeckoSessionSettings.Builder().build());val images=DesktopThumbnails()
@@ -145,12 +149,13 @@ class DesktopPreviewInstrumentedTest {
                     val result=DesktopSessionPreview.run(session,channel,trial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=40_000,view=host!!.geckoView,images=images)
                     assertEquals("DONE",result.reason);val reply=result.reply!!
                     android.util.Log.i("GeckoPocTest","NATIVE_CAPTURE_COUNTS ${channel.lastViewportCaptureCounts.joinToString(",")}")
-                    android.util.Log.i("GeckoPocTest","VIEWPORT_BEFORE_ASSERT deep=$deep pictures=${images.count} newOffer=${reply.rows.any{it.postId=="550000000000096"}} ${DesktopSummary.create("DONE",trial.requests,reply).report()}")
+                    android.util.Log.i("GeckoPocTest","VIEWPORT_BEFORE_ASSERT deep=$deep networkOnly=$networkOnly pictures=${images.count} newOffer=${reply.rows.any{it.postId=="550000000000096"}} ${DesktopSummary.create("DONE",trial.requests,reply).report()}")
                     assertTrue("official wheel request absent",reply.stats.getValue("scrollNativeSteps")>0)
                     if(deep)assertTrue("native request ACK is not motion proof",reply.stats.getValue("scrollNativeMoves")>0)
                     else assertTrue("wheel must unlock actual further progress beyond finite initial range",reply.stats.getValue("scrollMoves")>4)
                     assertTrue("wheel must load a NEW exact offer",reply.rows.any{it.postId=="550000000000096"&&it.price==680000.0&&it.area==68.0})
                     val thumbs=images.rows("550000000000091")
+                    if(networkOnly){assertTrue("network identity required",reply.stats.getValue("network")>0);assertEquals("initial post must not be invented from DOM", "NETWORK",reply.rows.single{it.postId=="550000000000091"}.layer)}
                     assertEquals("actual rendered image crops missing",2,thumbs.size)
                     assertTrue(thumbs.all{it.width<=192&&it.height<=144})
                     val colors=thumbs.map{it.getPixel(it.width/2,it.height/2)}

@@ -95,7 +95,12 @@ function createModel(core,fields,group){
    for(const r of found.slice(0,100))if(ids.has(r.postId)&&r.sourceId===group)add(r,'HYDRATION');
   }
  }
- return {add,merge,hydration,stats,rows:()=>[...rows.values()].map(r=>({...r})),clear(){rows.clear();blocked.clear();photoEvidence.clear();Object.assign(stats,zero());}};
+ function mediaBindings(){
+  const result=[];
+  for(const [postId,e] of photoEvidence)if(rows.has(postId))result.push({postId,ids:[...e.ids],urls:[...e.urls.keys()]});
+  return result;
+ }
+ return {add,merge,hydration,mediaBindings,stats,rows:()=>[...rows.values()].map(r=>({...r})),clear(){rows.clear();blocked.clear();photoEvidence.clear();Object.assign(stats,zero());}};
 }
 // Same semantic feed candidates as the desktop extension, plus their bounded ancestors.
 // Never scroll dialogs, comments or an arbitrary overflow widget.
@@ -226,7 +231,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   const active=async()=>{if(invalid||!safe(m)||w.performance.now()>=end)return false;const c=await send({type:'desktopContext',nonce:m.nonce});return !invalid&&safe(m)&&c?.active===true&&c.nonce===m.nonce;};
   // Reserve time for final extraction and native delivery within the original deadline.
   const scrollStart=w.performance.now(),scrollEnd=Math.min(scrollStart+30000,end-1500);
-  let noTargetStreak=0,lastTailAt=-Infinity,nativeFailures=0;const photoSlots=new Map(),viewport=w.FlipDesktopViewport;
+  let noTargetStreak=0,lastTailAt=-Infinity,nativeFailures=0;const photoSlots=new Map(),viewport=w.FlipDesktopViewport;let mediaBindings=[];const snapshots=new Map();
   for(let step=0;step<=30;step++){
    if(!await active())return empty('CONTEXT');
    model.stats.pageFocused=Math.max(model.stats.pageFocused,Number(w.document.hasFocus?.()===true));
@@ -235,14 +240,22 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
    model.stats.viewportHeight=Math.min(10000,Math.round(w.innerHeight));model.stats.visualViewportHeight=Math.min(10000,Math.round(w.visualViewport?.height||w.innerHeight));
    model.stats.rootRemaining=Math.max(0,Math.min(10000,Math.round((w.document.scrollingElement?.scrollHeight||0)-(w.document.scrollingElement?.clientHeight||0)-(w.scrollY||0))));
    if(viewport&&m.photosConsent===true){
+    // Private extension snapshot, never sent to Android or persisted. Does not finish transport.
+    const snapshot=await send({type:'desktopSnapshot',nonce:m.nonce});
+    if(invalid||!safe(m))return empty('CONTEXT');
+    mediaBindings=snapshot?.status==='OK'&&Array.isArray(snapshot.media)?snapshot.media:[];
+    for(const row of snapshot?.status==='OK'?snapshot.rows||[]:[]){const signature=JSON.stringify(row);if(snapshots.get(row.postId)!==signature){model.merge(row);snapshots.set(row.postId,signature);}}
+
     // A cold or still-changing first frame must not be lost by scrolling away.
     // One bounded retry, still inside the original capture/time budgets.
     for(let attempt=0;attempt<2&&model.stats.photoPreviewFrames<20&&w.performance.now()<scrollEnd-5000;attempt++){
-     const shot=viewport.photos(w,core,m.groupId,photoNodes,photoSlots,new Set(model.rows().map(r=>r.postId)));if(!shot)break;
+     const shot=viewport.photos(w,core,m.groupId,photoNodes,photoSlots,new Set(model.rows().map(r=>r.postId)),mediaBindings);if(!shot)break;
      model.stats.photoPreviewFrames++;const ack=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:'photos',width:shot.width,height:shot.height,tiles:shot.tiles});
      if(invalid||!safe(m))return empty('CONTEXT');
      if(ack?.accepted===true&&ack.count===shot.tiles.length){
-      const commit=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:shot.valid()&&safe(m)?'commit':'drop',frameId:ack.requestId});
+      const latest=shot.network?await send({type:'desktopSnapshot',nonce:m.nonce}):null;
+      const valid=shot.network?latest?.status==='OK'&&shot.valid(latest.media):shot.valid();
+      const commit=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:valid&&safe(m)?'commit':'drop',frameId:ack.requestId});
       if(invalid||!safe(m))return empty('CONTEXT');
       if(commit?.accepted===true&&commit.count===shot.tiles.length){for(const key of shot.keys)key.done=true;model.stats.photoPreviews+=commit.count;break;}
      }
@@ -296,7 +309,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   model.stats.scrollElapsedMs=Math.min(30000,Math.max(0,Math.floor(w.performance.now()-scrollStart)));
   await pause(700);if(!await active())return empty('CONTEXT');readDOM(w,model,core,m.groupId);
   const result=await send({type:'readDesktop',nonce:m.nonce});if(invalid||!safe(m)||result?.status!=='OK')return empty('CONTEXT');
-  for(const row of result.rows||[])model.merge(row);
+  for(const row of result.rows||[])if(snapshots.get(row.postId)!==JSON.stringify(row))model.merge(row);
   for(const k of ['network','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped'])model.stats[k]=result.stats?.[k]||0;
   model.stats.desktop=w.innerWidth>=900?1:0;
   for(const k of statKeys)model.stats[k]=Math.max(0,Math.min(k==='bytes'?4194304:k==='scrollElapsedMs'?30000:10000,Math.floor(model.stats[k])));

@@ -7,7 +7,7 @@ function env(action){let clock=0,watch,abort,disposed=false,paused=false;const s
   document:{scrollingElement:{scrollHeight:50000,clientHeight:800},querySelectorAll(){return[]}},
   FlipVisiblePosts:{watch(_w,_m,f){watch=f;return()=>{disposed=true}}},
   scrollBy(o){this.scrollY=Math.min(this.document.scrollingElement.scrollHeight-this.document.scrollingElement.clientHeight,this.scrollY+o.top)},setTimeout(fn,ms){queueMicrotask(()=>{clock+=ms;if((action==='unsafe'||action==='lateUnsafe'&&clock>=12000)&&!paused){paused=true;w.location.href=url.replace(group,'other');watch?.()}fn()});return 1}};
- const send=async m=>{sent.push(m.type);if(m.type==='stopDesktop')return{};if(m.type==='desktopContext')return{active:true,nonce,remainingMs:60000};if(m.type==='confirmDesktop')return{confirmed:true};if(m.type==='readDesktop')return{status:'OK',rows:[],stats:{...preview.zero(),verified:1}};throw Error('unexpected')};
+ const send=async m=>{sent.push(m.type);if(m.type==='stopDesktop')return{};if(m.type==='desktopContext')return{active:true,nonce,remainingMs:60000};if(m.type==='confirmDesktop')return{confirmed:true};if(m.type==='desktopSnapshot')return{status:'OK',rows:[],media:[]};if(m.type==='readDesktop')return{status:'OK',rows:[],stats:{...preview.zero(),verified:1}};throw Error('unexpected')};
  return {w,sent,notices,send,safe:()=>w.location.href===url,setAbort:f=>{abort=f},disposed:()=>disposed,notify:m=>notices.push(m)};
 }
 const m={consent:true,nonce,groupId:group,documentAfter:500,remainingMs:60000};

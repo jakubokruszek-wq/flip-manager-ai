@@ -22,8 +22,14 @@ function cards(w,core,group){
   return [{card,id:links[0].postId}];
  });
 }
+function scrollCards(w,core,group){
+ const all=Array.from(w.document.querySelectorAll('[role="article"],article'));if(all.length>100)return[];
+ return all.filter(card=>card.isConnected!==false&&card.ownerDocument===w.document&&!card.parentElement?.closest('[role="article"],article')&&!card.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]')).filter(card=>
+  !Array.from(card.querySelectorAll('a[href]')).slice(0,100).some(a=>{const p=core.parsePostLink(a.href);return p&&(p.sourceType!=='GROUP'||p.sourceId!==group);})).map(card=>({card}));
+}
 function point(w,core,group){
- const bound=cards(w,core,group);if(!bound.length)return null;
+ // Wheel is navigation input, not post identity evidence. Exact anchors are not required.
+ const bound=scrollCards(w,core,group);
  const vp=w.visualViewport,width=Number(vp?.width)||w.innerWidth,height=Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight),left=Number(vp?.offsetLeft)||0,top=Number(vp?.offsetTop)||0;
  const probes=[];
  for(const {card} of bound.slice().reverse()){
@@ -35,8 +41,8 @@ function point(w,core,group){
  for(const [x,y] of probes){
   const px=left+width*x,py=top+height*y,n=w.document.elementFromPoint?.(px,py);
   if(!n||n.ownerDocument!==w.document||/^(IFRAME|FRAME|INPUT|TEXTAREA|SELECT)$/.test(n.tagName||'')||n.closest('[role="dialog"],[role="comment"],[data-testid*="comment"],aside,nav,header'))continue;
-  // Hit must belong to a bound card or a semantic feed/main containing one; no arbitrary sidebar widget.
-  if(bound.some(p=>p.card.contains(n))||bound.some(p=>n.closest('[role="feed"],[data-pagelet*="Feed"],main,[role="main"]')?.contains(p.card)))return {x,y};
+  // Hit must belong to a rendered group card or semantic feed/main; never an arbitrary sidebar widget.
+  if(bound.some(p=>p.card.contains(n))||n.closest('[role="feed"],[data-pagelet*="Feed"],main,[role="main"]'))return {x,y};
  }
  return null;
 }
@@ -46,16 +52,42 @@ function trace(w){
  const sy=Number(w.scrollY)||0,vy=Number(vp?.offsetTop)||0;
  return ()=>Number(w.scrollY)>sy+1||Number(w.visualViewport?.offsetTop)>vy+1||positions.some(([c,y])=>c.isConnected!==false&&c.getBoundingClientRect().top<y-1);
 }
-function photos(w,core,group,photoNodes,slots,allowedIds){
+function mediaOwners(bindings,allowedIds){
+ const ids=new Map(),urls=new Map();
+ if(!Array.isArray(bindings)||bindings.length>20)return {ids,urls};
+ const add=(map,key,post)=>{if(map.has(key)&&map.get(key)!==post)map.set(key,null);else if(!map.has(key))map.set(key,post);};
+ for(const b of bindings){if(!/^\d{5,30}$/.test(b?.postId||''))continue;
+  for(const id of Array.isArray(b.ids)?b.ids.slice(0,20):[])if(typeof id==='string'&&/^\d{5,30}$/.test(id))add(ids,id,b.postId);
+  for(const url of Array.isArray(b.urls)?b.urls.slice(0,20):[])if(typeof url==='string'&&url.length<=2100)add(urls,url,b.postId);
+ }
+ return {ids,urls};
+}
+function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[]){
  if(!allowedIds||typeof allowedIds.has!=='function')return null;
  const vp=w.visualViewport,width=Number(vp?.width)||w.innerWidth,height=Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight),left=Number(vp?.offsetLeft)||0,top=Number(vp?.offsetTop)||0;
  if(!Number.isFinite(width)||!Number.isFinite(height)||width<100||height<100||width>10000||height>10000)return null;
- const tiles=[],keys=[],checks=[];
- const result=()=>({width,height,tiles,keys,valid:()=>Math.abs((Number(w.visualViewport?.width)||w.innerWidth)-width)<1&&Math.abs(Math.min(w.innerHeight,Number(w.visualViewport?.height)||w.innerHeight)-height)<1&&Math.abs((Number(w.visualViewport?.offsetLeft)||0)-left)<1&&Math.abs((Number(w.visualViewport?.offsetTop)||0)-top)<1&&checks.every(check=>check())});
- for(const {card,id} of cards(w,core,group)){
+ const tiles=[],keys=[],checks=[];let network=false;
+ const owners=mediaOwners(bindings,allowedIds);
+ const identity=(item,lookup)=>{
+  const byId=item.mediaId&&lookup.ids.has(item.mediaId)?lookup.ids.get(item.mediaId):undefined;
+  const byUrl=item.url&&lookup.urls.has(item.url)?lookup.urls.get(item.url):undefined;
+  if(byId===null||byUrl===null||(byId&&byUrl&&byId!==byUrl))return null;
+  return byId||byUrl||null;
+ };
+ const exactCards=cards(w,core,group),targets=exactCards.map(p=>({...p,network:false}));
+ for(const {card} of scrollCards(w,core,group)){
+  if(exactCards.some(p=>p.card===card))continue;
+  // Media identity comes from an exact parsed network record, never text, order or an image ID guessed as a post ID.
+  const sources=photoNodes(card,'00000',group,core),ids=new Set(sources.map(p=>identity(p.item,owners)).filter(Boolean));
+  if(ids.size!==1)continue;const id=[...ids][0];targets.push({card,id,network:true});
+ }
+
+ const result=()=>({width,height,tiles,keys,network,valid:(currentBindings=bindings)=>Math.abs((Number(w.visualViewport?.width)||w.innerWidth)-width)<1&&Math.abs(Math.min(w.innerHeight,Number(w.visualViewport?.height)||w.innerHeight)-height)<1&&Math.abs((Number(w.visualViewport?.offsetLeft)||0)-left)<1&&Math.abs((Number(w.visualViewport?.offsetTop)||0)-top)<1&&checks.every(check=>check(mediaOwners(currentBindings,allowedIds)))});
+ for(const {card,id,network:fromNetwork} of targets){
   if(!allowedIds.has(id))continue;
   if(!slots.has(id)){if(slots.size===20)continue;slots.set(id,new Map());}const media=slots.get(id);
   for(const {node,item} of photoNodes(card,id,group,core)){
+   if(fromNetwork&&identity(item,owners)!==id)continue;
    if(node.tagName==='IMG'&&(node.complete!==true||node.naturalWidth<1))continue;
    const key=item.mediaId||item.url;if(!key)continue;
    if(!media.has(key)){if(media.size===3)continue;media.set(key,{slot:media.size,done:false});}const mark=media.get(key);if(mark.done)continue;
@@ -66,8 +98,8 @@ function photos(w,core,group,photoNodes,slots,allowedIds){
    const uncovered=()=>points.every(([px,py])=>{const hit=w.document.elementFromPoint?.(px,py);return hit===node||node.contains?.(hit)});
    if(!uncovered())continue;
    const source=node.currentSrc||node.getAttribute?.('href')||node.getAttribute?.('src');
-   checks.push(()=>{const after=node.getBoundingClientRect();return node.isConnected!==false&&node.ownerDocument===w.document&&cards(w,core,group).some(p=>p.card===card&&p.id===id)&&["left","top","right","bottom"].every(k=>Math.abs(after[k]-r[k])<1)&&source===(node.currentSrc||node.getAttribute?.('href')||node.getAttribute?.('src'))&&uncovered();});
-   tiles.push({postId:id,slot:mark.slot,x,y,width:right-x,height:bottom-y});keys.push(mark);
+   checks.push(lookup=>{const after=node.getBoundingClientRect();return node.isConnected!==false&&node.ownerDocument===w.document&&(fromNetwork?scrollCards(w,core,group).some(p=>p.card===card)&&identity(photoNodes(card,id,group,core).find(p=>p.node===node)?.item||{},lookup)===id:cards(w,core,group).some(p=>p.card===card&&p.id===id))&&["left","top","right","bottom"].every(k=>Math.abs(after[k]-r[k])<1)&&source===(node.currentSrc||node.getAttribute?.('href')||node.getAttribute?.('src'))&&uncovered();});
+   network=network||fromNetwork;tiles.push({postId:id,slot:mark.slot,x,y,width:right-x,height:bottom-y});keys.push(mark);
    if(tiles.length===3)return result();
   }
  }
