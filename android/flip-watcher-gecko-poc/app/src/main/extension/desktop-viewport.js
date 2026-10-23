@@ -27,44 +27,59 @@ function scrollCards(w,core,group){
  return all.filter(card=>card.isConnected!==false&&card.ownerDocument===w.document&&!card.parentElement?.closest('[role="article"],article')&&!card.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]')).filter(card=>
   !Array.from(card.querySelectorAll('a[href]')).slice(0,100).some(a=>{const p=core.parsePostLink(a.href);return p&&(p.sourceType!=='GROUP'||p.sourceId!==group);})).map(card=>({card}));
 }
-function point(w,core,group,lastMoved=null){
- // Wheel is navigation input, not post identity evidence. Exact anchors are not required.
- const bound=scrollCards(w,core,group);
- // Input can return to the same feed that demonstrably moved in THIS trial,
- // even when outbound/cross-post links exclude its cards from identity matching.
- const recent=lastMoved&&lastMoved.isConnected!==false&&lastMoved.ownerDocument===w.document&&!lastMoved.closest?.('[role="dialog"],[role="comment"],[data-testid*="comment"]')?
-  Array.from(w.document.querySelectorAll('[role="article"],article')).slice(0,100).filter(card=>card.ownerDocument===w.document&&card.isConnected!==false&&!card.parentElement?.closest('[role="article"],article')&&!card.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]')&&lastMoved.contains(card)).map(card=>({card})):[];
- const inputCards=[...bound,...recent];
+function point(w,core,group,lastMoved=null,audit=null){
+ const diag={pointProbes:0,pointEmpty:0,pointFrame:0,pointForeign:0,pointForm:0,pointDialog:0,pointComment:0,pointCommentable:0,pointChrome:0,pointUnbound:0,pointWidget:0,pointCache:Number(!!lastMoved),pointCacheCards:0,pointRects:0,viewportWidth:0,visualWidth:0,visualOffsetX:0,visualOffsetY:0,visualScale100:0};
+ const finish=result=>{if(audit)Object.assign(audit,diag);return result;};
  const vp=w.visualViewport,width=Number(vp?.width)||w.innerWidth,height=Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight),left=Number(vp?.offsetLeft)||0,top=Number(vp?.offsetTop)||0;
- const probes=[];
+ const metric=n=>Number.isFinite(n)?Math.max(0,Math.min(10000,Math.round(n))):0;
+ Object.assign(diag,{viewportWidth:metric(w.innerWidth),visualWidth:metric(width),visualOffsetX:metric(left),visualOffsetY:metric(top),visualScale100:metric((Number(vp?.scale)||1)*100)});
+ if(!Number.isFinite(width)||!Number.isFinite(height)||width<100||height<100)return finish(null);
+ // A wider grid must never reach behind an active modal.
+ for(const modal of Array.from(w.document.querySelectorAll('[role="dialog"][aria-modal="true"],dialog[open]')).slice(0,20)){
+  if(modal.matches?.('[role="dialog"][aria-modal="true"],dialog[open]')!==true||modal.isConnected===false||modal.ownerDocument!==w.document)continue;
+  const r=modal.getBoundingClientRect?.(),style=w.getComputedStyle?.(modal);
+  if(r&&r.width>0&&r.height>0&&r.right>left&&r.bottom>top&&r.left<left+width&&r.top<top+height&&style?.display!=='none'&&style?.visibility!=='hidden'){diag.pointDialog++;return finish(null);}
+ }
+ const all=Array.from(w.document.querySelectorAll('[role="article"],article')).slice(0,100);
+ const bound=scrollCards(w,core,group);
+ const recent=lastMoved&&lastMoved.isConnected!==false&&lastMoved.ownerDocument===w.document&&!lastMoved.closest?.('[role="dialog"],[role="comment"],[data-testid*="comment"]')?
+  all.filter(card=>card.ownerDocument===w.document&&card.isConnected!==false&&!card.parentElement?.closest('[role="article"],article')&&!card.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]')&&lastMoved.contains(card)).map(card=>({card})):[];
+ diag.pointCacheCards=recent.length;
+ const inputCards=[...bound,...recent],regions=[],probes=[];
+ const clipped=r=>{if(!r)return null;const l=Math.max(left+width*.1,r.left),right=Math.min(left+width*.9,r.right),t=Math.max(top+height*.1,r.top),bottom=Math.min(top+height*.9,r.bottom);return right-l>=20&&bottom-t>=20?{left:l,right,top:t,bottom}:null;};
  const feedRect=recent.length?(lastMoved===w.document.scrollingElement?{left,top,right:left+width,bottom:top+height}:lastMoved.getBoundingClientRect?.()):null;
- if(feedRect){const l=Math.max(left+width*.1,feedRect.left),r=Math.min(left+width*.9,feedRect.right),t=Math.max(top+height*.1,feedRect.top),b=Math.min(top+height*.9,feedRect.bottom);
-  if(r-l>=100&&b-t>=100)probes.push([((l+r)/2-left)/width,((t+b)/2-top)/height]);}
+ if(feedRect){const r=clipped(feedRect);if(r)regions.push(r);}
+ for(const {card} of inputCards.slice().reverse()){const r=clipped(card.getBoundingClientRect?.());if(r)regions.push(r);}
+ // At most four visible regions plus a viewport grid: bounded, including safe margins.
+ const sampleRegions=regions.slice(0,4);diag.pointRects=sampleRegions.length;
+ for(const r of sampleRegions)probes.push([((r.left+r.right)/2-left)/width,((r.top+r.bottom)/2-top)/height]);
+ probes.push([.5,.6],[.5,.4],[.35,.6],[.65,.6]);
+ for(const r of sampleRegions)for(const x of [.1,.5,.9])for(const y of [.1,.5,.9])probes.push([(r.left+(r.right-r.left)*x-left)/width,(r.top+(r.bottom-r.top)*y-top)/height]);
+ for(const y of [.12,.3,.5,.7,.88])for(const x of [.12,.3,.5,.7,.88])probes.push([x,y]);
+ const nestedWidget=(n,region)=>{let p=n,depth=0;while(p&&p!==region&&depth++<64){const style=w.getComputedStyle?.(p);if(style&&/^(auto|scroll|overlay)$/.test(style.overflowY)&&p.scrollHeight-p.clientHeight>32&&!all.some(c=>p.contains(c)))return true;p=p.parentElement;}return false;};
  const recentHit=(n,px,py)=>{
   if(!recent.length||!feedRect||!lastMoved.contains(n)||px<feedRect.left||px>feedRect.right||py<feedRect.top||py>feedRect.bottom)return false;
-  // Do not retarget a nested menu/dropdown/overflow widget inside the feed.
-  let p=n,depth=0;
-  while(p&&p!==lastMoved&&depth++<64){
-   if(p.closest?.('[role="menu"],[role="listbox"],[role="complementary"]'))return false;
-   const style=w.getComputedStyle?.(p);
-   if(style&&/^(auto|scroll|overlay)$/.test(style.overflowY)&&p.scrollHeight-p.clientHeight>32&&!recent.some(c=>p.contains(c.card)))return false;
-   p=p.parentElement;
-  }
-  return p===lastMoved;
+  let p=n,depth=0;while(p&&p!==lastMoved&&depth++<64)p=p.parentElement;return p===lastMoved;
  };
- for(const {card} of inputCards.slice().reverse()){
-  const r=card.getBoundingClientRect?.();if(!r)continue;
-  const l=Math.max(left+width*.1,r.left),right=Math.min(left+width*.9,r.right),t=Math.max(top+height*.1,r.top),bottom=Math.min(top+height*.9,r.bottom);
-  if(right-l>=20&&bottom-t>=20)probes.push([((l+right)/2-left)/width,((t+bottom)/2-top)/height]);
- }
- probes.push([.5,.6],[.5,.4],[.35,.6],[.65,.6]);
+ const visited=new Set();
  for(const [x,y] of probes){
+  const key=Math.round(x*10000)+':'+Math.round(y*10000);if(visited.has(key))continue;if(visited.size>=64)break;visited.add(key);diag.pointProbes++;
   const px=left+width*x,py=top+height*y,n=w.document.elementFromPoint?.(px,py);
-  if(!n||n.ownerDocument!==w.document||/^(IFRAME|FRAME|INPUT|TEXTAREA|SELECT)$/.test(n.tagName||'')||n.closest('[role="dialog"],[role="comment"],[data-testid*="comment"],[role="menu"],[role="listbox"],[role="complementary"],aside,nav,header'))continue;
-  // Hit must belong to a rendered group card or semantic feed/main; never an arbitrary sidebar widget.
-  if(inputCards.some(p=>p.card.contains(n))||recentHit(n,px,py)||n.closest('[role="feed"],[data-pagelet*="Feed"],main,[role="main"]'))return {x,y};
+  if(!n){diag.pointEmpty++;continue;}
+  if(n.ownerDocument!==w.document){diag.pointForeign++;continue;}
+  if(/^(IFRAME|FRAME)$/.test(n.tagName||'')){diag.pointFrame++;continue;}
+  if(/^(INPUT|TEXTAREA|SELECT)$/.test(n.tagName||'')){diag.pointForm++;continue;}
+  if(n.closest('[role="dialog"]')){diag.pointDialog++;continue;}
+  const comment=n.closest('[role="comment"],[data-testid*="comment"]');
+  if(comment){diag.pointComment++;if(/commentable/i.test(comment.getAttribute?.('data-testid')||''))diag.pointCommentable++;continue;}
+  if(n.closest('[role="menu"],[role="listbox"],[role="complementary"],aside,nav,header')){diag.pointChrome++;continue;}
+  const card=inputCards.find(p=>p.card.contains(n))?.card;
+  const region=card||(recentHit(n,px,py)?lastMoved:null)||n.closest('[role="feed"],[data-pagelet*="Feed"],main,[role="main"]');
+  if(!region){diag.pointUnbound++;continue;}
+  if(nestedWidget(n,region)){diag.pointWidget++;continue;}
+  return finish({x,y});
  }
- return null;
+ return finish(null);
 }
 function trace(w){
  const vp=w.visualViewport,positions=[];

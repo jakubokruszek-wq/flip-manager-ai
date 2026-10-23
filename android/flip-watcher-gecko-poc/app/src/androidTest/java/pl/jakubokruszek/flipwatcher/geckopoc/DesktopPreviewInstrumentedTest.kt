@@ -117,7 +117,8 @@ class DesktopPreviewInstrumentedTest {
     @Test fun nativeWheelMovesDeepAnonymousScrollerAndRenderedThumbnailsStayOnlyInRam()=checkNativeViewport(true)
     @Test fun nativeWheelAndRealThumbnailsWorkWithOnlyNetworkPostIdentity()=checkNativeViewport(true,true)
     @Test fun nativeWheelReturnsToRecentlyMovedFeedWithoutSemanticOrPostIdentity()=checkNativeViewport(false,false,true)
-    private fun checkNativeViewport(deep:Boolean,networkOnly:Boolean=false,cachedFeed:Boolean=false){
+    @Test fun nativeWheelUsesSafeMarginWhenCentralIframeBlocksOldProbes()=checkNativeViewport(true,false,false,true)
+    private fun checkNativeViewport(deep:Boolean,networkOnly:Boolean=false,cachedFeed:Boolean=false,marginOnly:Boolean=false){
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use {scenario->
             var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it}
             runBlocking{withTimeout(70_000){withContext(Dispatchers.Main){
@@ -125,7 +126,7 @@ class DesktopPreviewInstrumentedTest {
                     if(networkOnly&&asset=="fixtures/network-media.html")"""{"post_id":"550000000000091","url":"https://www.facebook.com/groups/1234567890123/posts/550000000000091/","message":{"text":"Sprzedam mieszkanie 42m2. Cena 319000 zł."},"attachments":[{"media":{"__typename":"Photo","photo_id":"880000000000001","image":{"uri":"https://scontent.fbcdn.net/red.jpg"}}},{"media":{"__typename":"Photo","photo_id":"880000000000002","image":{"uri":"https://scontent.fbcdn.net/green.jpg"}}}]}"""
                     else {
                     val selected=if(asset=="fixtures/desktop-start.html")(if(deep)"fixtures/desktop-viewport-deep.html" else "fixtures/desktop-viewport.html") else asset
-                    runCatching{context.assets.open(selected).bufferedReader().use{it.readText()}}.getOrNull()?.let{html->if(networkOnly)html.replace("<a href=\"https://www.facebook.com/groups/1234567890123/posts/550000000000091/\">Post</a>","<span>Post without DOM identity</span>").replace("<head>","<head><script>fetch('/api/graphql/').then(r=>r.text());</script>")else if(cachedFeed)html.replace("</main>","<div style=\"height:6000px\" id=\"blank-tail\"></div></main>").replace("<main role=\"feed\"", "<div id=\"feed\"").replace("</main>","</div>").replace("document.querySelector('main')","document.querySelector('#feed')").replace("groups/1234567890123/posts/550000000000091/","groups/other/posts/550000000000091/").replace("groups/1234567890123/posts/550000000000092/","groups/other/posts/550000000000092/").replace("<div role=\"article\" style=\"height:20px\">","<div style=\"height:20px\">")else html}
+                    runCatching{context.assets.open(selected).bufferedReader().use{it.readText()}}.getOrNull()?.let{html->if(networkOnly)html.replace("<a href=\"https://www.facebook.com/groups/1234567890123/posts/550000000000091/\">Post</a>","<span>Post without DOM identity</span>").replace("<head>","<head><script>fetch('/api/graphql/').then(r=>r.text());</script>")else if(cachedFeed)html.replace("</main>","<div style=\"height:6000px\" id=\"blank-tail\"></div></main>").replace("<main role=\"feed\"", "<div id=\"feed\"").replace("</main>","</div>").replace("document.querySelector('main')","document.querySelector('#feed')").replace("groups/1234567890123/posts/550000000000091/","groups/other/posts/550000000000091/").replace("groups/1234567890123/posts/550000000000092/","groups/other/posts/550000000000092/").replace("<div role=\"article\" style=\"height:20px\">","<div style=\"height:20px\">")else if(marginOnly)html.replace("height:9000px","height:50000px").replace("</body>","<iframe sandbox=\"\" style=\"position:fixed;left:20vw;top:20vh;width:60vw;height:60vh;z-index:10000\"></iframe></body>")else html}
                     }
                 }
                 val target=server.url("/groups/$FIXTURE_GROUP_ID/","desktop-start")
@@ -156,6 +157,7 @@ class DesktopPreviewInstrumentedTest {
                     if(deep)assertTrue("native request ACK is not motion proof",reply.stats.getValue("scrollNativeMoves")>0)
                     else assertTrue("wheel must unlock actual further progress beyond finite initial range",reply.stats.getValue("scrollMoves")>4)
                     assertTrue("wheel must load a NEW exact offer",reply.rows.any{it.postId=="550000000000096"&&it.price==680000.0&&it.area==68.0})
+                    if(marginOnly){assertTrue("central frame must be detected and excluded",reply.stats.getValue("pointFrame")>0);assertTrue("safe margin must produce real movement",reply.stats.getValue("scrollNativeMoves")>0);return@withContext}
                     if(cachedFeed){assertEquals("cross-post cards cannot become own group offers",false,reply.rows.any{it.postId in setOf("550000000000091","550000000000092")});assertEquals(0,images.count);return@withContext}
                     val thumbs=images.rows("550000000000091")
                     if(networkOnly){assertTrue("network identity required",reply.stats.getValue("network")>0);assertEquals("initial post must not be invented from DOM", "NETWORK",reply.rows.single{it.postId=="550000000000091"}.layer)}

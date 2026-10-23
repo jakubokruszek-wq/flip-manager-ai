@@ -48,4 +48,15 @@ class DesktopViewportTest {
         val raw=JSONObject().put("verdict","NO_GO").put("reason","EMPTY").put("offers",0).put("navigations",1).put("stats",JSONObject(stats)).toString()
         val result=DesktopSummary.decode(raw)!!;assertEquals(0,result.stats.getValue("viewportReady"));assertEquals(0,result.stats.getValue("nativeRequests"))
     }
+    @Test fun pointAuditIsBoundedAndDoesNotAcceptRawDomOrNonNumericFields(){
+        val stats=DesktopProtocol.emptyStats().toMutableMap().apply{put("pointProbes",64);put("pointFrame",64);put("pointCache",1);put("pointCacheCards",100);put("pointRects",4)}
+        assertNotNull(DesktopProtocol.parseStats(JSONObject(stats)))
+        for((key,value) in listOf("pointProbes" to 65,"pointFrame" to 65,"pointCache" to 2,"pointCacheCards" to 101,"pointRects" to 5)){val bad=stats.toMutableMap();bad[key]=value;assertNull(DesktopProtocol.parseStats(JSONObject(bad)))}
+        assertNull(DesktopProtocol.parseStats(JSONObject(stats).put("pointReason","PRIVATE_DOM")))
+    }
+    @Test fun fiftyFourCounterHistoryIsReadWithoutPretendingThatHitTestingWasMeasured(){
+        val stats=DesktopProtocol.emptyStats().filterKeys{it in DesktopProtocol.statKeys.take(54)}
+        val raw=JSONObject().put("verdict","NO_GO").put("reason","EMPTY").put("offers",0).put("navigations",1).put("stats",JSONObject(stats)).toString()
+        val result=DesktopSummary.decode(raw)!!;assertEquals(0,result.stats.getValue("pointProbes"));assertEquals(0,result.stats.getValue("pointFrame"))
+    }
 }

@@ -6,7 +6,7 @@ import org.json.JSONObject
 class DesktopSummary private constructor(val verdict:String,val reason:String,val offers:Int,val navigations:Int,val stats:Map<String,Int>){
     fun encode():String=JSONObject().put("verdict",verdict).put("reason",reason).put("offers",offers).put("navigations",navigations).put("stats",JSONObject(stats)).toString()
     fun report():String=buildString {
-        appendLine("KOMPUTER 0.5.13 • tylko lokalnie • $verdict")
+        appendLine("KOMPUTER 0.5.14 • tylko lokalnie • $verdict")
         appendLine("Powód: $reason • tryb komputerowy: ${stats.getValue("desktop")} • nawigacje: $navigations/4")
         appendLine("Dokładne ID/permalinki: ${stats.getValue("candidates")} • kandydaci ofert po filtrach: $offers")
         appendLine("Odczyty rekordów DOM (powtórzenia): ${stats.getValue("dom")} • dane strony: ${stats.getValue("hydration")} • sieć: ${stats.getValue("network")}")
@@ -25,6 +25,9 @@ class DesktopSummary private constructor(val verdict:String,val reason:String,va
         appendLine("Kanał viewport: moduł ${stats.getValue("viewportModule")} • zgoda ${stats.getValue("viewportGranted")} • gotowy ${stats.getValue("viewportReady")} • kod ${stats.getValue("viewportProbeCode")} (0 OK, 1 gate, 2 widok, 3 fokus okna, 4 brak ACK)")
         appendLine("Żądania wheel: ${stats.getValue("nativeRequests")} • odmowy ${stats.getValue("nativeRejected")} • brak ACK ${stats.getValue("nativeTimeout")} • brak punktu ${stats.getValue("pointMisses")} • posty z dowodem mediów ${stats.getValue("mediaBindingPosts")}")
         if(stats.getValue("viewportGranted")==1&&stats.getValue("viewportReady")==0)appendLine("UWAGA: kanał viewport nie potwierdził gotowości. Podgląd ofert nie potwierdza działania przewijania ani miniatur.")
+        appendLine("Ostatni wybór punktu: próbki ${stats.getValue("pointProbes")} • puste ${stats.getValue("pointEmpty")} • ramka ${stats.getValue("pointFrame")} • obcy dokument ${stats.getValue("pointForeign")} • formularz ${stats.getValue("pointForm")}")
+        appendLine("Odrzucenia punktów: dialog ${stats.getValue("pointDialog")} • komentarz ${stats.getValue("pointComment")} (commentable ${stats.getValue("pointCommentable")}) • menu/sidebar/header ${stats.getValue("pointChrome")} • widget ${stats.getValue("pointWidget")} • brak regionu ${stats.getValue("pointUnbound")}")
+        appendLine("Cel z ruchu: ${stats.getValue("pointCache")} • bezpieczne karty ${stats.getValue("pointCacheCards")} • prostokąty ${stats.getValue("pointRects")} • szerokość ${stats.getValue("viewportWidth")}/${stats.getValue("visualWidth")} • offset ${stats.getValue("visualOffsetX")}/${stats.getValue("visualOffsetY")} • skala×100 ${stats.getValue("visualScale100")}")
         appendLine("Geometria (px): viewport ${stats.getValue("viewportHeight")} • widoczny ${stats.getValue("visualViewportHeight")} • pozostały zakres dokumentu ${stats.getValue("rootRemaining")}")
         appendLine("Przewijanie: do 30 s / 30 kroków; wspólne 60 s z ładowaniem może skrócić próbę. Przechowywane maksymalnie 20 ID.")
         if(stats.getValue("scrollAtEnd")>0||stats.getValue("scrollStalls")>0)appendLine("UWAGA: osiągnięto koniec zakresu lub próba nie przesunęła strony; czekano na doładowanie. Brak nowych postów nie potwierdza kompletności.")
@@ -49,7 +52,7 @@ class DesktopSummary private constructor(val verdict:String,val reason:String,va
             if(verdict !in setOf("CONDITIONAL_GO","NO_GO")||reason !in DesktopTrial.reasons||j.opt("offers") !is Int||j.opt("navigations") !is Int)return null
             val offers=j.getInt("offers");val nav=j.getInt("navigations");val stored=j.getJSONObject("stats")
             // Read old count-only history without changing/deleting it; fresh protocol stays strict.
-            for(size in listOf(22,30,34,38,45))if(stored.keys().asSequence().toSet()==DesktopProtocol.statKeys.take(size).toSet())for(key in DesktopProtocol.statKeys.drop(size))stored.put(key,0)
+            for(size in listOf(22,30,34,38,45,54))if(stored.keys().asSequence().toSet()==DesktopProtocol.statKeys.take(size).toSet())for(key in DesktopProtocol.statKeys.drop(size))stored.put(key,0)
             val stats=DesktopProtocol.parseStats(stored)?:return null
             if(verdict=="NO_GO"&&offers!=0)return null
             if(offers !in 0..20||nav !in 0..4||offers>stats.getValue("candidates")||(verdict=="CONDITIONAL_GO")!=(reason=="DONE"&&offers>0))return null
