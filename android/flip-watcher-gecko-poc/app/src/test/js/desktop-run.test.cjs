@@ -122,9 +122,9 @@ test('a trailing placeholder cannot disable exact ancestor recovery',()=>{
 test('official native viewport fallback requires consent and counts only observed movement',async()=>{
  for(const consent of [false,true]){const h=env();h.w.document.scrollingElement.scrollHeight=800;let shifts=0,calls=0;
  h.w.FlipDesktopViewport={point:()=>({x:.5,y:.6}),trace:()=>{const before=shifts;return()=>shifts>before},photos:()=>null};
- h.notify=async msg=>{if(msg.type==='desktopViewportRequest'){calls++;shifts++;return{accepted:true,count:0}}};
+ h.notify=async msg=>{if(msg.type==='desktopViewportRequest'){calls++;if(msg.action==='probe')return{accepted:true,count:0};shifts++;return{accepted:true,count:0}}};
  const r=await preview.run(h.w,{...m,viewportConsent:consent},core,fields,h.safe,h.send,h.setAbort,h.notify);
- assert.equal(r.status,'OK');if(consent){assert.equal(r.stats.scrollNativeMoves,29);assert.equal(calls,29);}else{assert.equal(calls,0);assert.equal(r.stats.scrollNativeMoves,0);}}
+ assert.equal(r.status,'OK');if(consent){assert.equal(r.stats.scrollNativeMoves,29);assert.equal(calls,30);}else{assert.equal(calls,0);assert.equal(r.stats.scrollNativeMoves,0);}}
 });
 test('accepted but unmoved native requests stop after three failures',async()=>{
  const h=env();h.w.document.scrollingElement.scrollHeight=800;
@@ -135,7 +135,7 @@ test('accepted but unmoved native requests stop after three failures',async()=>{
 test('native preview pixels require a second stable-frame confirmation and separate photo consent',async()=>{
  for(const [consent,stable] of [[false,true],[true,false],[true,true]]){const h=env();const requests=[];
  h.w.FlipDesktopViewport={photos:()=>({width:980,height:800,tiles:[{postId:'550000000000091',slot:0,x:0,y:0,width:100,height:100}],keys:[{}],valid:()=>stable})};
- h.notify=async msg=>{requests.push(msg);return{requestId:newDoc,accepted:true,count:msg.action==='drop'?0:1}};
+ h.notify=async msg=>{if(msg.action==='probe')return{accepted:true,count:0};requests.push(msg);return{requestId:newDoc,accepted:true,count:msg.action==='drop'?0:1}};
  const r=await preview.run(h.w,{...m,photosConsent:consent},core,fields,h.safe,h.send,h.setAbort,h.notify);
  assert.equal(r.status,'OK');if(!consent)assert.equal(requests.length,0);else if(!stable){assert.equal(r.stats.photoPreviews,0);assert(requests.some(m=>m.action==='drop'));}else assert(r.stats.photoPreviews>0);}
 });
@@ -143,7 +143,16 @@ test('failed first image frame retries before any scroll moves the images offscr
  const h=env();let attempts=0;const key={done:false};const events=[];
  h.w.FlipDesktopViewport={photos:()=>key.done||h.w.scrollY>0?null:{width:980,height:800,tiles:[{postId:'550000000000091',slot:0,x:0,y:0,width:100,height:100}],keys:[key],valid:()=>true}};
  const scroll=h.w.scrollBy.bind(h.w);h.w.scrollBy=o=>{events.push('scroll');scroll(o)};
- h.notify=async msg=>{events.push(msg.action);if(msg.action==='photos'&&++attempts===1)return{accepted:false,count:0};return{requestId:newDoc,accepted:true,count:1}};
+ h.notify=async msg=>{if(msg.action==='probe')return{accepted:true,count:0};events.push(msg.action);if(msg.action==='photos'&&++attempts===1)return{accepted:false,count:0};return{requestId:newDoc,accepted:true,count:1}};
  const r=await preview.run(h.w,{...m,photosConsent:true},core,fields,h.safe,h.send,h.setAbort,h.notify);
  assert.equal(r.status,'OK');assert.equal(r.stats.photoPreviews,1);assert.equal(r.stats.photoPreviewFrames,2);assert.deepEqual(events.slice(0,4),['photos','photos','commit','scroll']);assert.equal(r.stats.scrollElapsedMs,30000);
+});
+
+test('viewport telemetry separates missing point, explicit rejection and absent ACK without inventing movement',async()=>{
+ for(const reason of ['point','reject','timeout']){const h=env();h.w.document.scrollingElement.scrollHeight=800;h.w.FlipDesktopViewport={point:()=>reason==='point'?null:{x:.5,y:.6},trace:()=>()=>false,photos:()=>null};h.notify=async msg=>msg.action==='probe'?{accepted:true,count:0}:reason==='reject'?{accepted:false,count:0}:null;
+ const r=await preview.run(h.w,{...m,viewportConsent:true},core,fields,h.safe,h.send,h.setAbort,h.notify);assert.equal(r.stats.viewportReady,1);assert.equal(r.stats.scrollNativeSteps,0);assert.equal(r.stats.scrollMoves,0);assert.equal(r.stats.nativeRequests,reason==='point'?0:3);assert.equal(r.stats.nativeRejected,reason==='reject'?3:0);assert.equal(r.stats.nativeTimeout,reason==='timeout'?3:0);assert.equal(r.stats.pointMisses>0,reason==='point');}
+});
+test('probe reports missing native window focus and missing module, and never bypasses consent',async()=>{
+ const h=env();h.w.document.scrollingElement.scrollHeight=800;h.w.FlipDesktopViewport={point:()=>null,photos:()=>null};h.notify=async()=>({accepted:false,count:3});let r=await preview.run(h.w,{...m,viewportConsent:true},core,fields,h.safe,h.send,h.setAbort,h.notify);assert.equal(r.stats.viewportReady,0);assert.equal(r.stats.viewportProbeCode,3);
+ const missing=env();r=await preview.run(missing.w,{...m,viewportConsent:true},core,fields,missing.safe,missing.send,missing.setAbort,missing.notify);assert.equal(r.stats.viewportModule,0);assert.equal(r.stats.viewportGranted,1);
 });

@@ -116,7 +116,8 @@ class DesktopPreviewInstrumentedTest {
     @Test fun nativeWheelUnblocksFiniteFeedAndRenderedThumbnailsStayOnlyInRam()=checkNativeViewport(false)
     @Test fun nativeWheelMovesDeepAnonymousScrollerAndRenderedThumbnailsStayOnlyInRam()=checkNativeViewport(true)
     @Test fun nativeWheelAndRealThumbnailsWorkWithOnlyNetworkPostIdentity()=checkNativeViewport(true,true)
-    private fun checkNativeViewport(deep:Boolean,networkOnly:Boolean=false){
+    @Test fun nativeWheelReturnsToRecentlyMovedFeedWithoutSemanticOrPostIdentity()=checkNativeViewport(false,false,true)
+    private fun checkNativeViewport(deep:Boolean,networkOnly:Boolean=false,cachedFeed:Boolean=false){
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use {scenario->
             var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it}
             runBlocking{withTimeout(70_000){withContext(Dispatchers.Main){
@@ -124,7 +125,7 @@ class DesktopPreviewInstrumentedTest {
                     if(networkOnly&&asset=="fixtures/network-media.html")"""{"post_id":"550000000000091","url":"https://www.facebook.com/groups/1234567890123/posts/550000000000091/","message":{"text":"Sprzedam mieszkanie 42m2. Cena 319000 zł."},"attachments":[{"media":{"__typename":"Photo","photo_id":"880000000000001","image":{"uri":"https://scontent.fbcdn.net/red.jpg"}}},{"media":{"__typename":"Photo","photo_id":"880000000000002","image":{"uri":"https://scontent.fbcdn.net/green.jpg"}}}]}"""
                     else {
                     val selected=if(asset=="fixtures/desktop-start.html")(if(deep)"fixtures/desktop-viewport-deep.html" else "fixtures/desktop-viewport.html") else asset
-                    runCatching{context.assets.open(selected).bufferedReader().use{it.readText()}}.getOrNull()?.let{html->if(networkOnly)html.replace("<a href=\"https://www.facebook.com/groups/1234567890123/posts/550000000000091/\">Post</a>","<span>Post without DOM identity</span>").replace("<head>","<head><script>fetch('/api/graphql/').then(r=>r.text());</script>")else html}
+                    runCatching{context.assets.open(selected).bufferedReader().use{it.readText()}}.getOrNull()?.let{html->if(networkOnly)html.replace("<a href=\"https://www.facebook.com/groups/1234567890123/posts/550000000000091/\">Post</a>","<span>Post without DOM identity</span>").replace("<head>","<head><script>fetch('/api/graphql/').then(r=>r.text());</script>")else if(cachedFeed)html.replace("<main role=\"feed\"", "<div id=\"feed\"").replace("</main>","</div>").replace("document.querySelector('main')","document.querySelector('#feed')").replace("groups/1234567890123/posts/550000000000091/","groups/other/posts/550000000000091/").replace("groups/1234567890123/posts/550000000000092/","groups/other/posts/550000000000092/").replace("<div role=\"article\" style=\"height:20px\">","<div style=\"height:20px\">")else html}
                     }
                 }
                 val target=server.url("/groups/$FIXTURE_GROUP_ID/","desktop-start")
@@ -150,10 +151,12 @@ class DesktopPreviewInstrumentedTest {
                     assertEquals("DONE",result.reason);val reply=result.reply!!
                     android.util.Log.i("GeckoPocTest","NATIVE_CAPTURE_COUNTS ${channel.lastViewportCaptureCounts.joinToString(",")}")
                     android.util.Log.i("GeckoPocTest","VIEWPORT_BEFORE_ASSERT deep=$deep networkOnly=$networkOnly pictures=${images.count} newOffer=${reply.rows.any{it.postId=="550000000000096"}} ${DesktopSummary.create("DONE",trial.requests,reply).report()}")
+                    assertEquals("viewport handshake must complete",1,reply.stats.getValue("viewportReady"))
                     assertTrue("official wheel request absent",reply.stats.getValue("scrollNativeSteps")>0)
                     if(deep)assertTrue("native request ACK is not motion proof",reply.stats.getValue("scrollNativeMoves")>0)
                     else assertTrue("wheel must unlock actual further progress beyond finite initial range",reply.stats.getValue("scrollMoves")>4)
                     assertTrue("wheel must load a NEW exact offer",reply.rows.any{it.postId=="550000000000096"&&it.price==680000.0&&it.area==68.0})
+                    if(cachedFeed){assertEquals("cross-post cards cannot become own group offers",false,reply.rows.any{it.postId in setOf("550000000000091","550000000000092")});assertEquals(0,images.count);return@withContext}
                     val thumbs=images.rows("550000000000091")
                     if(networkOnly){assertTrue("network identity required",reply.stats.getValue("network")>0);assertEquals("initial post must not be invented from DOM", "NETWORK",reply.rows.single{it.postId=="550000000000091"}.layer)}
                     assertEquals("actual rendered image crops missing",2,thumbs.size)
@@ -183,6 +186,26 @@ class DesktopPreviewInstrumentedTest {
             assertFalse(ack!!.getBoolean("accepted"));assertEquals(0,images.count)
             bridge.close();ack=null;bridge.handle(request.put("requestId",UUID.randomUUID().toString())){ack=it};assertNull(ack)
         }}
+    }
+
+    @Test fun nativeProbeDistinguishesDialogFocusAndRecoversWithoutInputOrCapture(){
+        ActivityScenario.launch(GeckoTestHostActivity::class.java).use{scenario->
+            var host:GeckoTestHostActivity?=null;var dialog:android.app.AlertDialog?=null
+            var bridge:DesktopViewportBridge?=null;val nonce=UUID.randomUUID().toString();val images=DesktopThumbnails()
+            scenario.onActivity{host=it;bridge=DesktopViewportBridge(it.geckoView,nonce,images,{true});dialog=android.app.AlertDialog.Builder(it).setMessage("Local consent fixture").create();dialog!!.show()}
+            try{
+                runBlocking{withTimeout(3000){while(true){var focused=true;scenario.onActivity{focused=it.geckoView.hasWindowFocus()};if(!focused)break;delay(50)}}}
+                scenario.onActivity{
+                    var ack:org.json.JSONObject?=null;bridge!!.handle(org.json.JSONObject().put("type","desktopViewportRequest").put("nonce",nonce).put("requestId",UUID.randomUUID().toString()).put("action","probe")){ack=it}
+                    assertFalse(ack!!.getBoolean("accepted"));assertEquals(3,ack!!.getInt("count"));assertEquals(0,images.count);dialog!!.dismiss()
+                }
+                runBlocking{withTimeout(3000){while(true){var focused=false;scenario.onActivity{focused=it.geckoView.hasWindowFocus()};if(focused)break;delay(50)}}}
+                scenario.onActivity{
+                    var ack:org.json.JSONObject?=null;bridge!!.handle(org.json.JSONObject().put("type","desktopViewportRequest").put("nonce",nonce).put("requestId",UUID.randomUUID().toString()).put("action","probe")){ack=it}
+                    assertTrue(ack!!.getBoolean("accepted"));assertEquals(0,ack!!.getInt("count"));assertEquals(0,images.count)
+                }
+            }finally{scenario.onActivity{dialog?.dismiss();bridge?.close();images.clear()}}
+        }
     }
 
     private fun texts(view:android.view.View):String=when(view){

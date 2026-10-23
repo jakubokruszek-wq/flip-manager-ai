@@ -37,4 +37,15 @@ class DesktopViewportTest {
         stats["scrollSteps"]=1;stats["scrollMoves"]=1;assertNotNull(DesktopProtocol.parseStats(JSONObject(stats)))
         stats["photoPreviews"]=61;assertNull(DesktopProtocol.parseStats(JSONObject(stats)))
     }
+    @Test fun probeHasOnlyFreshMetadataAndNewTelemetryRemainsBounded(){
+        assertEquals("probe",DesktopViewportProtocol.parse(base("probe"),nonce)!!.action)
+        assertNull(DesktopViewportProtocol.parse(base("probe").put("url","SECRET"),nonce))
+        val stats=DesktopProtocol.emptyStats().toMutableMap().apply{put("viewportProbeCode",3);put("viewportGranted",1)}
+        assertNotNull(DesktopProtocol.parseStats(JSONObject(stats)));stats["viewportReady"]=2;assertNull(DesktopProtocol.parseStats(JSONObject(stats)))
+    }
+    @Test fun fortyFiveCounterHistoryIsPreservedWithoutInventingProbeSuccess(){
+        val stats=DesktopProtocol.emptyStats().filterKeys{it in DesktopProtocol.statKeys.take(45)}
+        val raw=JSONObject().put("verdict","NO_GO").put("reason","EMPTY").put("offers",0).put("navigations",1).put("stats",JSONObject(stats)).toString()
+        val result=DesktopSummary.decode(raw)!!;assertEquals(0,result.stats.getValue("viewportReady"));assertEquals(0,result.stats.getValue("nativeRequests"))
+    }
 }

@@ -1,7 +1,7 @@
 /* Isolated/native-consented local projection. No storage, upload or public page bridge. */
 (function(root){
 'use strict';
-const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible','scrollNativeSteps','scrollNativeMoves','photoPreviewFrames','photoPreviews','viewportHeight','visualViewportHeight','rootRemaining'];
+const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible','scrollNativeSteps','scrollNativeMoves','photoPreviewFrames','photoPreviews','viewportHeight','visualViewportHeight','rootRemaining','viewportModule','viewportGranted','viewportReady','viewportProbeCode','nativeRequests','nativeRejected','nativeTimeout','pointMisses','mediaBindingPosts'];
 const zero=()=>Object.fromEntries(statKeys.map(k=>[k,0]));
 function groupURL(raw,group,fixture){try{const u=new URL(raw);return /^[A-Za-z0-9._-]{1,100}$/.test(group)&&!u.username&&!u.password&&!u.hash&&(fixture||!u.search)&&u.pathname.replace(/\/$/,'')==='/groups/'+group&&((u.protocol==='https:'&&!u.port&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))||(fixture===true&&u.protocol==='http:'&&u.hostname==='127.0.0.1'));}catch{return false;}}
 function exact(raw,group){try{const u=new URL(raw);const p=u.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d{5,30})\/?$/);return u.protocol==='https:'&&!u.port&&!u.username&&!u.password&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&p?.[1]===group?p[2]:null;}catch{return null;}}
@@ -231,7 +231,20 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   const active=async()=>{if(invalid||!safe(m)||w.performance.now()>=end)return false;const c=await send({type:'desktopContext',nonce:m.nonce});return !invalid&&safe(m)&&c?.active===true&&c.nonce===m.nonce;};
   // Reserve time for final extraction and native delivery within the original deadline.
   const scrollStart=w.performance.now(),scrollEnd=Math.min(scrollStart+30000,end-1500);
-  let noTargetStreak=0,lastTailAt=-Infinity,nativeFailures=0;const photoSlots=new Map(),viewport=w.FlipDesktopViewport;let mediaBindings=[];const snapshots=new Map();
+  let noTargetStreak=0,lastTailAt=-Infinity,nativeFailures=0,lastMoved=null;const photoSlots=new Map(),viewport=w.FlipDesktopViewport;let mediaBindings=[];const snapshots=new Map();
+  model.stats.viewportModule=Number(!!viewport);
+  model.stats.viewportGranted=Number(m.viewportConsent===true||m.photosConsent===true);
+  if(viewport&&model.stats.viewportGranted){
+   for(let attempt=0;attempt<3&&w.performance.now()<scrollEnd;attempt++){
+    if(!await active())return empty('CONTEXT');
+    const probe=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:'probe'});
+    if(invalid||!safe(m))return empty('CONTEXT');
+    model.stats.viewportReady=Number(probe?.accepted===true&&probe.count===0);
+    model.stats.viewportProbeCode=model.stats.viewportReady?0:probe?Math.min(3,Math.max(1,probe.count||1)):4;
+    if(model.stats.viewportReady)break;
+    await pause(200);
+   }
+  }
   for(let step=0;step<=30;step++){
    if(!await active())return empty('CONTEXT');
    model.stats.pageFocused=Math.max(model.stats.pageFocused,Number(w.document.hasFocus?.()===true));
@@ -243,7 +256,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
     // Private extension snapshot, never sent to Android or persisted. Does not finish transport.
     const snapshot=await send({type:'desktopSnapshot',nonce:m.nonce});
     if(invalid||!safe(m))return empty('CONTEXT');
-    mediaBindings=snapshot?.status==='OK'&&Array.isArray(snapshot.media)?snapshot.media:[];
+    mediaBindings=snapshot?.status==='OK'&&Array.isArray(snapshot.media)?snapshot.media:[];model.stats.mediaBindingPosts=Math.max(model.stats.mediaBindingPosts,mediaBindings.filter(b=>b.ids?.length||b.urls?.length).length);
     for(const row of snapshot?.status==='OK'?snapshot.rows||[]:[]){const signature=JSON.stringify(row);if(snapshots.get(row.postId)!==signature){model.merge(row);snapshots.set(row.postId,signature);}}
 
     // A cold or still-changing first frame must not be lost by scrolling away.
@@ -252,7 +265,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
      const shot=viewport.photos(w,core,m.groupId,photoNodes,photoSlots,new Set(model.rows().map(r=>r.postId)),mediaBindings);if(!shot)break;
      model.stats.photoPreviewFrames++;const ack=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:'photos',width:shot.width,height:shot.height,tiles:shot.tiles});
      if(invalid||!safe(m))return empty('CONTEXT');
-     if(ack?.accepted===true&&ack.count===shot.tiles.length){
+     if(ack?.accepted===true&&ack.count===shot.tiles.length){model.stats.viewportReady=1;model.stats.viewportProbeCode=0;
       const latest=shot.network?await send({type:'desktopSnapshot',nonce:m.nonce}):null;
       const valid=shot.network?latest?.status==='OK'&&shot.valid(latest.media):shot.valid();
       const commit=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:valid&&safe(m)?'commit':'drop',frameId:ack.requestId});
@@ -281,15 +294,16 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
     }
     container=noTargetStreak>=2?recoveryContainer(w,core,m.groupId):null;
     if(!container){
-     let point=viewport&&m.viewportConsent===true&&noTargetStreak>=2&&nativeFailures<3?viewport.point(w,core,m.groupId):null;
+     let point=viewport&&m.viewportConsent===true&&noTargetStreak>=2&&nativeFailures<3?viewport.point(w,core,m.groupId,lastMoved):null;
+     if(!point&&viewport&&m.viewportConsent===true&&noTargetStreak>=2&&nativeFailures<3)model.stats.pointMisses++;
      if(point){
-      if(!await active())return empty('CONTEXT');point=viewport.point(w,core,m.groupId);if(!point){model.stats.scrollNoTarget++;await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));continue;}if(w.performance.now()>=scrollEnd)break;
-      const moved=viewport.trace(w),ack=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:'scroll',...point});
+      if(!await active())return empty('CONTEXT');point=viewport.point(w,core,m.groupId,lastMoved);if(!point){model.stats.scrollNoTarget++;await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));continue;}if(w.performance.now()>=scrollEnd)break;
+      model.stats.nativeRequests++;const moved=viewport.trace(w),ack=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:'scroll',...point});
       if(invalid||!safe(m))return empty('CONTEXT');
-      if(ack?.accepted===true){model.stats.scrollSteps++;model.stats.scrollNativeSteps++;await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));
+      if(ack?.accepted===true){model.stats.viewportReady=1;model.stats.viewportProbeCode=0;model.stats.scrollSteps++;model.stats.scrollNativeSteps++;await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));
        if(invalid||!safe(m))return empty('CONTEXT');
        if(moved()){model.stats.scrollMoves++;model.stats.scrollNativeMoves++;nativeFailures=0;}else{model.stats.scrollStalls++;nativeFailures++;}continue;
-      }nativeFailures++;
+      }if(ack)model.stats.nativeRejected++;else model.stats.nativeTimeout++;nativeFailures++;
      }
      model.stats.scrollNoTarget++;await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));continue;
     }
@@ -304,7 +318,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
    if(root)w.scrollBy({left:0,top,behavior:'instant'});else container.scrollBy({left:0,top,behavior:'instant'});
    model.stats.scrollSteps++;
    await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now()))); // measure rendered movement, at most one attempt per second
-   if((root?w.scrollY:container.scrollTop)>before)model.stats.scrollMoves++;else model.stats.scrollStalls++;
+   if((root?w.scrollY:container.scrollTop)>before){model.stats.scrollMoves++;lastMoved=container;}else model.stats.scrollStalls++;
   }
   model.stats.scrollElapsedMs=Math.min(30000,Math.max(0,Math.floor(w.performance.now()-scrollStart)));
   await pause(700);if(!await active())return empty('CONTEXT');readDOM(w,model,core,m.groupId);

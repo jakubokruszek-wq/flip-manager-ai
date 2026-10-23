@@ -17,6 +17,7 @@ object DesktopViewportProtocol {
         val id=j.getString("requestId");if(java.util.UUID.fromString(id).toString()!=id)return null
         fun num(o:JSONObject,k:String,min:Double,max:Double):Double {val v=o.get(k);require(v is Number);val n=v.toDouble();require(n.isFinite()&&n in min..max);return n}
         when(j.getString("action")){
+            "probe"->{if(j.keys().asSequence().toSet()!=base)return null;Request(id,"probe")}
             "commit","drop"->{if(j.keys().asSequence().toSet()!=base+"frameId")return null
                 val frame=j.getString("frameId");if(java.util.UUID.fromString(frame).toString()!=frame)return null
                 Request(id,j.getString("action"),frameId=frame)}
@@ -66,6 +67,12 @@ class DesktopViewportBridge(private val view:GeckoView,private val nonce:String,
     fun handle(j:JSONObject,reply:(JSONObject)->Unit){
         val r=DesktopViewportProtocol.parse(j,nonce)?:return
         fun ack(ok:Boolean,count:Int=0){if(!closed)reply(JSONObject().put("type","desktopViewportAck").put("nonce",nonce).put("requestId",r.requestId).put("accepted",ok).put("count",count))}
+        if(r.action=="probe"){
+            if(closed)return
+            if(requests.size>=90||!requests.add(r.requestId)){ack(false,1);return}
+            val code=when{!live()->1;!view.isShown||view.width<100||view.height<100->2;!view.hasWindowFocus()->3;else->0}
+            ack(code==0,code);return
+        }
         if(!active()||busy||requests.size>=90||!requests.add(r.requestId)){if(r.action=="photos")captureCounts[1]++;ack(false);return}
         if(pendingFrame!=null&&now()-pendingAt>1000)discard()
         if(r.action in setOf("commit","drop")){

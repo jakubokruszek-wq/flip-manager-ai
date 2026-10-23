@@ -27,12 +27,17 @@ function scrollCards(w,core,group){
  return all.filter(card=>card.isConnected!==false&&card.ownerDocument===w.document&&!card.parentElement?.closest('[role="article"],article')&&!card.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]')).filter(card=>
   !Array.from(card.querySelectorAll('a[href]')).slice(0,100).some(a=>{const p=core.parsePostLink(a.href);return p&&(p.sourceType!=='GROUP'||p.sourceId!==group);})).map(card=>({card}));
 }
-function point(w,core,group){
+function point(w,core,group,lastMoved=null){
  // Wheel is navigation input, not post identity evidence. Exact anchors are not required.
  const bound=scrollCards(w,core,group);
+ // Input can return to the same feed that demonstrably moved in THIS trial,
+ // even when outbound/cross-post links exclude its cards from identity matching.
+ const recent=lastMoved&&lastMoved.isConnected!==false&&lastMoved.ownerDocument===w.document&&!lastMoved.closest?.('[role="dialog"],[role="comment"],[data-testid*="comment"]')?
+  Array.from(w.document.querySelectorAll('[role="article"],article')).slice(0,100).filter(card=>card.ownerDocument===w.document&&card.isConnected!==false&&!card.parentElement?.closest('[role="article"],article')&&!card.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]')&&lastMoved.contains(card)).map(card=>({card})):[];
+ const inputCards=[...bound,...recent];
  const vp=w.visualViewport,width=Number(vp?.width)||w.innerWidth,height=Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight),left=Number(vp?.offsetLeft)||0,top=Number(vp?.offsetTop)||0;
  const probes=[];
- for(const {card} of bound.slice().reverse()){
+ for(const {card} of inputCards.slice().reverse()){
   const r=card.getBoundingClientRect?.();if(!r)continue;
   const l=Math.max(left+width*.1,r.left),right=Math.min(left+width*.9,r.right),t=Math.max(top+height*.1,r.top),bottom=Math.min(top+height*.9,r.bottom);
   if(right-l>=20&&bottom-t>=20)probes.push([((l+right)/2-left)/width,((t+bottom)/2-top)/height]);
@@ -42,7 +47,7 @@ function point(w,core,group){
   const px=left+width*x,py=top+height*y,n=w.document.elementFromPoint?.(px,py);
   if(!n||n.ownerDocument!==w.document||/^(IFRAME|FRAME|INPUT|TEXTAREA|SELECT)$/.test(n.tagName||'')||n.closest('[role="dialog"],[role="comment"],[data-testid*="comment"],aside,nav,header'))continue;
   // Hit must belong to a rendered group card or semantic feed/main; never an arbitrary sidebar widget.
-  if(bound.some(p=>p.card.contains(n))||n.closest('[role="feed"],[data-pagelet*="Feed"],main,[role="main"]'))return {x,y};
+  if(inputCards.some(p=>p.card.contains(n))||n.closest('[role="feed"],[data-pagelet*="Feed"],main,[role="main"]'))return {x,y};
  }
  return null;
 }
