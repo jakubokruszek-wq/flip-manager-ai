@@ -37,6 +37,21 @@ function point(w,core,group,lastMoved=null){
  const inputCards=[...bound,...recent];
  const vp=w.visualViewport,width=Number(vp?.width)||w.innerWidth,height=Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight),left=Number(vp?.offsetLeft)||0,top=Number(vp?.offsetTop)||0;
  const probes=[];
+ const feedRect=recent.length?(lastMoved===w.document.scrollingElement?{left,top,right:left+width,bottom:top+height}:lastMoved.getBoundingClientRect?.()):null;
+ if(feedRect){const l=Math.max(left+width*.1,feedRect.left),r=Math.min(left+width*.9,feedRect.right),t=Math.max(top+height*.1,feedRect.top),b=Math.min(top+height*.9,feedRect.bottom);
+  if(r-l>=100&&b-t>=100)probes.push([((l+r)/2-left)/width,((t+b)/2-top)/height]);}
+ const recentHit=(n,px,py)=>{
+  if(!recent.length||!feedRect||!lastMoved.contains(n)||px<feedRect.left||px>feedRect.right||py<feedRect.top||py>feedRect.bottom)return false;
+  // Do not retarget a nested menu/dropdown/overflow widget inside the feed.
+  let p=n,depth=0;
+  while(p&&p!==lastMoved&&depth++<64){
+   if(p.closest?.('[role="menu"],[role="listbox"],[role="complementary"]'))return false;
+   const style=w.getComputedStyle?.(p);
+   if(style&&/^(auto|scroll|overlay)$/.test(style.overflowY)&&p.scrollHeight-p.clientHeight>32&&!recent.some(c=>p.contains(c.card)))return false;
+   p=p.parentElement;
+  }
+  return p===lastMoved;
+ };
  for(const {card} of inputCards.slice().reverse()){
   const r=card.getBoundingClientRect?.();if(!r)continue;
   const l=Math.max(left+width*.1,r.left),right=Math.min(left+width*.9,r.right),t=Math.max(top+height*.1,r.top),bottom=Math.min(top+height*.9,r.bottom);
@@ -47,7 +62,7 @@ function point(w,core,group,lastMoved=null){
   const px=left+width*x,py=top+height*y,n=w.document.elementFromPoint?.(px,py);
   if(!n||n.ownerDocument!==w.document||/^(IFRAME|FRAME|INPUT|TEXTAREA|SELECT)$/.test(n.tagName||'')||n.closest('[role="dialog"],[role="comment"],[data-testid*="comment"],aside,nav,header'))continue;
   // Hit must belong to a rendered group card or semantic feed/main; never an arbitrary sidebar widget.
-  if(inputCards.some(p=>p.card.contains(n))||n.closest('[role="feed"],[data-pagelet*="Feed"],main,[role="main"]'))return {x,y};
+  if(inputCards.some(p=>p.card.contains(n))||recentHit(n,px,py)||n.closest('[role="feed"],[data-pagelet*="Feed"],main,[role="main"]'))return {x,y};
  }
  return null;
 }
@@ -95,13 +110,15 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[]){
    if(fromNetwork&&identity(item,owners)!==id)continue;
    if(node.tagName==='IMG'&&(node.complete!==true||node.naturalWidth<1))continue;
    const key=item.mediaId||item.url;if(!key)continue;
-   if(!media.has(key)){if(media.size===3)continue;media.set(key,{slot:media.size,done:false});}const mark=media.get(key);if(mark.done)continue;
+   if(media.get(key)?.done)continue;
    const r=node.getBoundingClientRect(),x=Math.max(0,r.left-left),y=Math.max(0,r.top-top),right=Math.min(width,r.right-left),bottom=Math.min(height,r.bottom-top);
    if(right-x<60||bottom-y<60||(right-x)*(bottom-y)<r.width*r.height*.6)continue;
    // Occluding headers/dialogs must never become a thumbnail of a post image.
    const points=[[.5,.5],[.1,.1],[.9,.1],[.1,.9],[.9,.9]].map(([px,py])=>[left+x+(right-x)*px,top+y+(bottom-y)*py]);
    const uncovered=()=>points.every(([px,py])=>{const hit=w.document.elementFromPoint?.(px,py);return hit===node||node.contains?.(hit)});
    if(!uncovered())continue;
+   // Offscreen/occluded images must not consume the three visible-preview slots.
+   if(!media.has(key)){if(media.size===3)continue;media.set(key,{slot:media.size,done:false});}const mark=media.get(key);
    const source=node.currentSrc||node.getAttribute?.('href')||node.getAttribute?.('src');
    checks.push(lookup=>{const after=node.getBoundingClientRect();return node.isConnected!==false&&node.ownerDocument===w.document&&(fromNetwork?scrollCards(w,core,group).some(p=>p.card===card)&&identity(photoNodes(card,id,group,core).find(p=>p.node===node)?.item||{},lookup)===id:cards(w,core,group).some(p=>p.card===card&&p.id===id))&&["left","top","right","bottom"].every(k=>Math.abs(after[k]-r[k])<1)&&source===(node.currentSrc||node.getAttribute?.('href')||node.getAttribute?.('src'))&&uncovered();});
    network=network||fromNetwork;tiles.push({postId:id,slot:mark.slot,x,y,width:right-x,height:bottom-y});keys.push(mark);
