@@ -27,6 +27,19 @@ function scrollCards(w,core,group){
  return all.filter(card=>card.isConnected!==false&&card.ownerDocument===w.document&&!card.parentElement?.closest('[role="article"],article')&&!card.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]')).filter(card=>
   !Array.from(card.querySelectorAll('a[href]')).slice(0,100).some(a=>{const p=core.parsePostLink(a.href);return p&&(p.sourceType!=='GROUP'||p.sourceId!==group);})).map(card=>({card}));
 }
+// A top ancestor hit proves delegated input only along the actual, unclipped
+// parent path. Rectangles alone do not prove visibility through overflow clips.
+function delegatedHit(w,node,hit,px,py){
+ if(!hit||hit.ownerDocument!==w.document||hit.isConnected===false||!hit.contains?.(node)||w.getComputedStyle?.(node)?.pointerEvents!=='none'||node.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})===false)return false;
+ let p=node,depth=0;
+ while(p&&p!==hit&&depth++<64){
+  const style=w.getComputedStyle?.(p),r=p.getBoundingClientRect?.();
+  if(style&&(style.display==='none'||/hidden|collapse/.test(style.visibility)||Number(style.opacity??1)<=0))return false;
+  if(style&&r){if(/^(auto|scroll|hidden|clip|overlay)$/.test(style.overflowX)&&!(px>r.left&&px<r.right))return false;if(/^(auto|scroll|hidden|clip|overlay)$/.test(style.overflowY)&&!(py>r.top&&py<r.bottom))return false;}
+  p=p.parentElement;
+ }
+ return p===hit;
+}
 function point(w,core,group,lastMoved=null,audit=null){
  const diag={pointProbes:0,pointEmpty:0,pointFrame:0,pointForeign:0,pointForm:0,pointDialog:0,pointComment:0,pointCommentable:0,pointChrome:0,pointUnbound:0,pointWidget:0,pointCache:Number(!!lastMoved),pointCacheCards:0,pointRects:0,viewportWidth:0,visualWidth:0,visualOffsetX:0,visualOffsetY:0,visualScale100:0};
  const finish=result=>{if(audit)Object.assign(audit,diag);return result;};
@@ -65,9 +78,8 @@ function point(w,core,group,lastMoved=null,audit=null){
   const style=w.getComputedStyle?.(card),r=card.getBoundingClientRect?.();
   if(style&&(style.display==='none'||/hidden|collapse/.test(style.visibility)||Number(style.opacity??1)<=0))return false;
   if(!r||r.width<20||r.height<20||px<r.left||px>r.right||py<r.top||py>r.bottom)return false;
-  let p=card,depth=0;while(p&&p!==hit&&depth++<64)p=p.parentElement;
   // Do not use a shared parent containing a known foreign-group post.
-  return p===hit&&!all.some(c=>hit.contains(c)&&!bound.some(b=>b.card===c));
+  return delegatedHit(w,card,hit,px,py)&&!all.some(c=>hit.contains(c)&&!bound.some(b=>b.card===c));
  })?.card;
  const recentHit=(n,px,py)=>{
   if(!recent.length||!feedRect||!lastMoved.contains(n)||px<feedRect.left||px>feedRect.right||py<feedRect.top||py>feedRect.bottom)return false;
@@ -147,9 +159,9 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[]){
     if(hit===node||node.contains?.(hit))return true;
     // Rendered images may deliberately delegate input to their real parent.
     // Accept only the actual top hit, not a sibling overlay or another document.
-    if(!hit||hit.ownerDocument!==w.document||hit.isConnected===false||!hit.contains?.(node)||w.getComputedStyle?.(node)?.pointerEvents!=='none'||node.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})===false)return false;
+    if(!delegatedHit(w,node,hit,px,py))return false;
     if(hit.closest?.('[role="dialog"],[role="comment"],[data-testid*="comment"],[role="menu"],[role="listbox"],[role="complementary"],aside,nav,header'))return false;
-    let p=node,depth=0;while(p&&p!==hit&&depth++<64)p=p.parentElement;return p===hit;
+    return true;
    });
    if(!uncovered())continue;
    // Offscreen/occluded images must not consume the three visible-preview slots.
