@@ -38,7 +38,7 @@ function point(w,core,group,lastMoved=null,audit=null){
  for(const modal of Array.from(w.document.querySelectorAll('[role="dialog"][aria-modal="true"],dialog[open]')).slice(0,20)){
   if(modal.matches?.('[role="dialog"][aria-modal="true"],dialog[open]')!==true||modal.isConnected===false||modal.ownerDocument!==w.document)continue;
   const r=modal.getBoundingClientRect?.(),style=w.getComputedStyle?.(modal);
-  if(r&&r.width>0&&r.height>0&&r.right>left&&r.bottom>top&&r.left<left+width&&r.top<top+height&&style?.display!=='none'&&style?.visibility!=='hidden'){diag.pointDialog++;return finish(null);}
+  if(r&&r.width>0&&r.height>0&&r.right>left&&r.bottom>top&&r.left<left+width&&r.top<top+height&&style?.display!=='none'&&style?.visibility!=='hidden'&&style?.visibility!=='collapse'&&Number(style?.opacity??1)>0&&modal.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})!==false){diag.pointDialog++;return finish(null);}
  }
  const all=Array.from(w.document.querySelectorAll('[role="article"],article')).slice(0,100);
  const bound=scrollCards(w,core,group);
