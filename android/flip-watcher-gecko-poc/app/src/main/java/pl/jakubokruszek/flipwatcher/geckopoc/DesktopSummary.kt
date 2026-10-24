@@ -6,7 +6,7 @@ import org.json.JSONObject
 class DesktopSummary private constructor(val verdict:String,val reason:String,val offers:Int,val navigations:Int,val stats:Map<String,Int>){
     fun encode():String=JSONObject().put("verdict",verdict).put("reason",reason).put("offers",offers).put("navigations",navigations).put("stats",JSONObject(stats)).toString()
     fun report():String=buildString {
-        appendLine("KOMPUTER 0.5.17 • tylko lokalnie • $verdict")
+        appendLine("KOMPUTER 0.5.18 • tylko lokalnie • $verdict")
         if(stats.getValue("viewportGranted")==0)appendLine("Tryb bez miniatur i wejścia GeckoView; DOM i pola ofert pozostają aktywne.")
         if(stats.getValue("gestureRequested")==1){
             appendLine("Cel wskazany gestem: ${stats.getValue("gestureAnchored")} • gesty ${stats.getValue("gestureTouches")} • odmowy ${stats.getValue("gestureRejected")} • oczekiwanie ${stats.getValue("gestureWaitMs")} ms / 15000")

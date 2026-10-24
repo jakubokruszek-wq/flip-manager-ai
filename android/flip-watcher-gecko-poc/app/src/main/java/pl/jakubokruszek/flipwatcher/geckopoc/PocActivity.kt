@@ -84,7 +84,7 @@ class PocActivity : ComponentActivity() {
     private var desktopGate:DesktopTrial?=null
     private var desktopNonce:String?=null
     private var desktopJob:Job?=null
-    private var desktopConsentDialog:AlertDialog?=null
+    private var desktopConsentDialog:android.app.Dialog?=null
     internal var desktopResultDialog:AlertDialog?=null; private set
     private var desktopRows:List<DesktopRow> = emptyList()
     private var desktopResultText:TextView?=null
@@ -192,27 +192,20 @@ class PocActivity : ComponentActivity() {
     private fun startDesktopPreview(){
         if(desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||kind!=PageKind.APPROVED_GROUP||progress!=100||channel?.isConnected!=true)return
         val currentSession=session?:return;val currentChannel=channel?:return;val target=url?:return
-        val extended=android.widget.CheckBox(this).apply{text="Eksperymentalne miniatury i przewijanie GeckoView";isChecked=false;tag="poc.desktop.extended"}
-        val gesture=android.widget.CheckBox(this).apply{text="Wskaż obszar jednym przesunięciem palca";isChecked=true;tag="poc.desktop.gesture"}
-        extended.isEnabled=false
-        gesture.setOnCheckedChangeListener{_,checked->extended.isEnabled=!checked;if(checked)extended.isChecked=false}
-        val options=android.widget.LinearLayout(this).apply{orientation=android.widget.LinearLayout.VERTICAL;addView(gesture);addView(extended)}
-        desktopConsentDialog=AlertDialog.Builder(this).setTitle("Jedna próba komputerowa — lokalnie").setView(options)
-            .setMessage("NOWA JEDNORAZOWA ZGODA: raz otworzyć zatwierdzoną grupę w standardowym trybie komputerowym GeckoView? Domyślnie po załadowaniu grupy masz do 15 s na jedno przesunięcie palcem w górę w treści grupy. Aplikacja rozpozna rzeczywiście przesunięty kontener i będzie go przewijać automatycznie do 30 s. Obserwuje tylko zaufany gest i liczby ruchu, dane gestu są chwilowo w RAM, raport nie zawiera współrzędnych ani treści. Bez wskazania nie rozpocznie automatycznego przewijania. Zdjęcia są wyłączone. Po odznaczeniu wskazania gestem pozostaje pętla z 0.5.7. Opcja poniżej osobno włącza eksperymentalne miniatury w RAM i oficjalne wejście kółka myszy przy zatrzymaniu DOM. Do 60 s łącznie, do 30 s / 30 kroków przewijania i maksymalnie 20 ID. Odczyt DOM, danych strony i odpowiedzi fetch/XHR/other tej grupy: do 64 odpowiedzi, 2 MiB każda, 4 MiB łącznie; nasłuch przed otwarciem. Bez odczytu Beacon, nagłówków, formularzy, cookies lub tokenów. Pola ofert są heurystyczne, ID/permalinki dokładne. Opcjonalne miniatury: do 3 widocznych zdjęć/post, przejściowy obraz widoku w RAM usuwany po wycięciu, bez dodatkowego pobierania mediów. Podgląd znika po pauzie lub zmianie kontekstu; lokalnie zapisuje się tylko raport liczbowy bez treści i ID. Bez uploadu i kolektora; stary limit skanu bez zmian. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu lub wygaszenie: STOP. Tryb komputerowy pozostaje do zamknięcia sesji. Zgoda i wybór opcji nie są zapamiętywane.")
-            .setNegativeButton("Anuluj",null).setPositiveButton("Zgadzam się — uruchom próbę"){_,_->
-                if(!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)||session!==currentSession||channel!==currentChannel||url!=target||kind!=PageKind.APPROVED_GROUP||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||progress!=100||!currentChannel.isConnected)return@setPositiveButton
+        desktopConsentDialog=DesktopConsentDialog(this,onAccept=accept@{ choice ->
+                if(!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)||session!==currentSession||channel!==currentChannel||url!=target||kind!=PageKind.APPROVED_GROUP||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||progress!=100||!currentChannel.isConnected)return@accept
                 stopVisiblePosts();finishShare("CANCELLED",clear=true);clearDesktopDetails()
                 val gate=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()})
-                if(!gate.begin(true)){publishDesktop(DesktopSummary.create("NO_CONSENT_OR_CONTEXT",0),emptyList());return@setPositiveButton}
-                val baseline=!extended.isChecked
-                val guided=gesture.isChecked
+                if(!gate.begin(true)){publishDesktop(DesktopSummary.create("NO_CONSENT_OR_CONTEXT",0),emptyList());return@accept}
+                val baseline=!choice.extended
+                val guided=choice.gesture
                 desktopGesture=guided;desktopGestureStage="LOADING"
                 clearDesktopDetails();geckoView.requestFocus();desktopGate=gate;desktopBusy=true;desktopRows=emptyList();desktopNonce=UUID.randomUUID().toString();render()
                 desktopJob=lifecycleScope.launch{
                     val result=DesktopSessionPreview.run(currentSession,currentChannel,gate,desktopNonce!!,target,{url},view=geckoView,images=desktopThumbnails,baseline=baseline,gesture=guided)
                     if(desktopGate===gate&&desktopBusy){userAgent=result.userAgent;finishDesktop(result.reason,result.reply)}
                 }
-            }.create()
+        })
         desktopConsentDialog?.setOnDismissListener{desktopConsentDialog=null}
         desktopConsentDialog?.show()
     }
