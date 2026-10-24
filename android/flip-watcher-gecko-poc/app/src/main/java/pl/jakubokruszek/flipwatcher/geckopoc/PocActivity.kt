@@ -954,7 +954,7 @@ class PocActivity : ComponentActivity() {
             stop != null -> stop
             !open -> "Sesja zamknięta. „Otwórz sesję” uruchamia przeglądarkę tylko dla grupy ${PocPolicy.APPROVED_GROUP_ID}."
             loginRequested && kind == PageKind.LOGIN -> "Logowanie ręczne na stronie Facebooka. Po zalogowaniu użyj „Wróć do grupy”."
-            desktopBusy -> if(desktopGesture)when(desktopGestureStage){"WAITING"->"TERAZ przesuń treść grupy palcem w górę (15 s).";"ANCHORED"->"Automatyczne przewijanie wskazanego obszaru • tylko lokalnie";else->"Ładowanie grupy — zaczekaj na komunikat o przesunięciu palcem."} else "Jedna próba komputerowa • ${desktopGate?.phase} • tylko lokalnie"
+            desktopBusy -> if(desktopGesture)when(desktopGestureStage){"NOTICE"->"Zamykam komunikat powiadomień Facebooka. Uprawnienia bez zmian.";"WAITING"->"TERAZ przesuń treść grupy palcem w górę (15 s).";"ANCHORED"->"Automatyczne przewijanie wskazanego obszaru • tylko lokalnie";else->"Ładowanie grupy — zaczekaj na komunikat o przesunięciu palcem."} else "Jedna próba komputerowa • ${desktopGate?.phase} • tylko lokalnie"
             shareBusy -> "Sprawdzanie jednego linku: do 20 s. Bez skanu."
             responseBusy -> if (responseReloadGate.active) "Trwa diagnostyka od otwarcia (25 s)." else "Trwa lokalna diagnostyka odpowiedzi (15 s)."
             shareResolver?.status == ShareLinkResolver.Status.CONFIRMED -> "Link zatwierdzonej grupy potwierdzony. Bez skanu."

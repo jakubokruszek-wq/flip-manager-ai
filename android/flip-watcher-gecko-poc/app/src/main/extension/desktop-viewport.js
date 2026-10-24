@@ -16,7 +16,7 @@ function transport(port,w){
 }
 function cards(w,core,group){
  const all=Array.from(w.document.querySelectorAll('[role="article"],article'));if(all.length>100)return[];
- return all.filter(c=>!c.parentElement?.closest('[role="article"],article')&&c.isConnected!==false&&c.ownerDocument===w.document&&!c.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]')).flatMap(card=>{
+ return all.filter(c=>!c.parentElement?.closest('[role="article"],article')&&c.isConnected!==false&&c.ownerDocument===w.document&&!c.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]')).flatMap(card=>{
   const links=Array.from(card.querySelectorAll('a[href]')).slice(0,100).filter(a=>a.closest('[role="article"],article')===card).map(a=>core.parsePostLink(a.href)).filter(Boolean);
   if(!links.length||links.some(p=>p.sourceType!=='GROUP'||p.sourceId!==group)||new Set(links.map(p=>p.postId)).size!==1)return[];
   return [{card,id:links[0].postId}];
@@ -24,7 +24,7 @@ function cards(w,core,group){
 }
 function scrollCards(w,core,group){
  const all=Array.from(w.document.querySelectorAll('[role="article"],article'));if(all.length>100)return[];
- return all.filter(card=>card.isConnected!==false&&card.ownerDocument===w.document&&!card.parentElement?.closest('[role="article"],article')&&!card.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]')).filter(card=>
+ return all.filter(card=>card.isConnected!==false&&card.ownerDocument===w.document&&!card.parentElement?.closest('[role="article"],article')&&!card.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]')).filter(card=>
   !Array.from(card.querySelectorAll('a[href]')).slice(0,100).some(a=>{const p=core.parsePostLink(a.href);return p&&(p.sourceType!=='GROUP'||p.sourceId!==group);})).map(card=>({card}));
 }
 // A top ancestor hit proves delegated input only along the actual, unclipped
@@ -48,15 +48,15 @@ function point(w,core,group,lastMoved=null,audit=null){
  Object.assign(diag,{viewportWidth:metric(w.innerWidth),visualWidth:metric(width),visualOffsetX:metric(left),visualOffsetY:metric(top),visualScale100:metric((Number(vp?.scale)||1)*100)});
  if(!Number.isFinite(width)||!Number.isFinite(height)||width<100||height<100)return finish(null);
  // A wider grid must never reach behind an active modal.
- for(const modal of Array.from(w.document.querySelectorAll('[role="dialog"][aria-modal="true"],dialog[open]')).slice(0,20)){
-  if(modal.matches?.('[role="dialog"][aria-modal="true"],dialog[open]')!==true||modal.isConnected===false||modal.ownerDocument!==w.document)continue;
+ for(const modal of Array.from(w.document.querySelectorAll('[role="dialog"][aria-modal="true"],[role="alertdialog"][aria-modal="true"],dialog[open]')).slice(0,20)){
+  if(modal.matches?.('[role="dialog"][aria-modal="true"],[role="alertdialog"][aria-modal="true"],dialog[open]')!==true||modal.isConnected===false||modal.ownerDocument!==w.document)continue;
   const r=modal.getBoundingClientRect?.(),style=w.getComputedStyle?.(modal);
   if(r&&r.width>0&&r.height>0&&r.right>left&&r.bottom>top&&r.left<left+width&&r.top<top+height&&style?.display!=='none'&&style?.visibility!=='hidden'&&style?.visibility!=='collapse'&&Number(style?.opacity??1)>0&&modal.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})!==false){diag.pointDialog++;return finish(null);}
  }
  const all=Array.from(w.document.querySelectorAll('[role="article"],article')).slice(0,100);
  const bound=scrollCards(w,core,group);
- const recent=lastMoved&&lastMoved.isConnected!==false&&lastMoved.ownerDocument===w.document&&!lastMoved.closest?.('[role="dialog"],[role="comment"],[data-testid*="comment"]')?
-  all.filter(card=>card.ownerDocument===w.document&&card.isConnected!==false&&!card.parentElement?.closest('[role="article"],article')&&!card.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]')&&lastMoved.contains(card)).map(card=>({card})):[];
+ const recent=lastMoved&&lastMoved.isConnected!==false&&lastMoved.ownerDocument===w.document&&!lastMoved.closest?.('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]')?
+  all.filter(card=>card.ownerDocument===w.document&&card.isConnected!==false&&!card.parentElement?.closest('[role="article"],article')&&!card.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]')&&lastMoved.contains(card)).map(card=>({card})):[];
  diag.pointCacheCards=recent.length;
  const inputCards=[...bound,...recent],regions=[],probes=[];
  const clipped=r=>{if(!r)return null;const l=Math.max(left+width*.1,r.left),right=Math.min(left+width*.9,r.right),t=Math.max(top+height*.1,r.top),bottom=Math.min(top+height*.9,r.bottom);return right-l>=20&&bottom-t>=20?{left:l,right,top:t,bottom}:null;};
@@ -93,7 +93,7 @@ function point(w,core,group,lastMoved=null,audit=null){
   if(n.ownerDocument!==w.document){diag.pointForeign++;continue;}
   if(/^(IFRAME|FRAME)$/.test(n.tagName||'')){diag.pointFrame++;continue;}
   if(/^(INPUT|TEXTAREA|SELECT)$/.test(n.tagName||'')){diag.pointForm++;continue;}
-  if(n.closest('[role="dialog"]')){diag.pointDialog++;continue;}
+  if(n.closest('[role="dialog"],[role="alertdialog"]')){diag.pointDialog++;continue;}
   const comment=n.closest('[role="comment"],[data-testid*="comment"]');
   if(comment){diag.pointComment++;if(/commentable/i.test(comment.getAttribute?.('data-testid')||''))diag.pointCommentable++;continue;}
   if(n.closest('[role="menu"],[role="listbox"],[role="complementary"],aside,nav,header')){diag.pointChrome++;continue;}
@@ -160,7 +160,7 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[]){
     // Rendered images may deliberately delegate input to their real parent.
     // Accept only the actual top hit, not a sibling overlay or another document.
     if(!delegatedHit(w,node,hit,px,py))return false;
-    if(hit.closest?.('[role="dialog"],[role="comment"],[data-testid*="comment"],[role="menu"],[role="listbox"],[role="complementary"],aside,nav,header'))return false;
+    if(hit.closest?.('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"],[role="menu"],[role="listbox"],[role="complementary"],aside,nav,header'))return false;
     return true;
    });
    if(!uncovered())continue;

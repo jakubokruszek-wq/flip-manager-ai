@@ -1,7 +1,7 @@
 /* Isolated/native-consented local projection. No storage, upload or public page bridge. */
 (function(root){
 'use strict';
-const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible','scrollNativeSteps','scrollNativeMoves','photoPreviewFrames','photoPreviews','viewportHeight','visualViewportHeight','rootRemaining','viewportModule','viewportGranted','viewportReady','viewportProbeCode','nativeRequests','nativeRejected','nativeTimeout','pointMisses','mediaBindingPosts','pointProbes','pointEmpty','pointFrame','pointForeign','pointForm','pointDialog','pointComment','pointCommentable','pointChrome','pointUnbound','pointWidget','pointCache','pointCacheCards','pointRects','viewportWidth','visualWidth','visualOffsetX','visualOffsetY','visualScale100','gestureRequested','gestureTouches','gestureAnchored','gestureRejected','gestureWaitMs','gestureScrollSteps','gestureScrollMoves'];
+const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible','scrollNativeSteps','scrollNativeMoves','photoPreviewFrames','photoPreviews','viewportHeight','visualViewportHeight','rootRemaining','viewportModule','viewportGranted','viewportReady','viewportProbeCode','nativeRequests','nativeRejected','nativeTimeout','pointMisses','mediaBindingPosts','pointProbes','pointEmpty','pointFrame','pointForeign','pointForm','pointDialog','pointComment','pointCommentable','pointChrome','pointUnbound','pointWidget','pointCache','pointCacheCards','pointRects','viewportWidth','visualWidth','visualOffsetX','visualOffsetY','visualScale100','gestureRequested','gestureTouches','gestureAnchored','gestureRejected','gestureWaitMs','gestureScrollSteps','gestureScrollMoves','noticeDetected','noticeClosed'];
 const zero=()=>Object.fromEntries(statKeys.map(k=>[k,0]));
 function groupURL(raw,group,fixture){try{const u=new URL(raw);return /^[A-Za-z0-9._-]{1,100}$/.test(group)&&!u.username&&!u.password&&!u.hash&&(fixture||!u.search)&&u.pathname.replace(/\/$/,'')==='/groups/'+group&&((u.protocol==='https:'&&!u.port&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))||(fixture===true&&u.protocol==='http:'&&u.hostname==='127.0.0.1'));}catch{return false;}}
 function exact(raw,group){try{const u=new URL(raw);const p=u.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d{5,30})\/?$/);return u.protocol==='https:'&&!u.port&&!u.username&&!u.password&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&p?.[1]===group?p[2]:null;}catch{return null;}}
@@ -128,7 +128,7 @@ function scrollContainer(w,stats=null){
   if(style&&/hidden|clip/.test(style.overflowY)){evidence.scrollHidden++;continue;}
   if(node===root&&(!style||style.overflowY==='visible')&&doc.body&&root!==doc.body&&/hidden|clip/.test(w.getComputedStyle?.(doc.body)?.overflowY||'')){evidence.scrollHidden++;continue;}
   if(node!==root){
-   if(!style||!['auto','scroll','overlay'].includes(style.overflowY)||node.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]')){evidence.scrollHidden++;continue;}
+   if(!style||!['auto','scroll','overlay'].includes(style.overflowY)||node.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]')){evidence.scrollHidden++;continue;}
    const rect=node.getBoundingClientRect();
    if(rect.width<250||rect.bottom<=0||rect.top>=w.innerHeight||rect.right<=0||rect.left>=w.innerWidth){evidence.scrollOffscreen++;continue;}
    if(!cards.some(c=>node.contains(c))){evidence.scrollUnbound++;continue;}
@@ -151,7 +151,7 @@ function boundTail(w,core,group){
  const cards=Array.from(doc.querySelectorAll('[role="article"],article')).filter(c=>!c.parentElement?.closest('[role="article"],article'));
  if(cards.length>100)return null;
  for(const card of cards.slice().reverse()){
- if(!card||card.isConnected===false||card.ownerDocument!==doc||typeof card.scrollIntoView!=='function'||card.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]'))continue;
+ if(!card||card.isConnected===false||card.ownerDocument!==doc||typeof card.scrollIntoView!=='function'||card.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]'))continue;
  const links=Array.from(card.querySelectorAll('a[href]')).filter(a=>a.closest('[role="article"],article')===card).slice(0,100).map(a=>core.parsePostLink(a.href)).filter(Boolean);
  if(!links.length||links.some(l=>l.sourceType!=='GROUP'||l.sourceId!==group)||new Set(links.map(l=>l.postId)).size!==1)continue;
  return card;
@@ -166,7 +166,7 @@ function recoveryContainer(w,core,group){
  for(let node=card.parentElement,depth=0;node&&depth<32;node=node.parentElement,depth++)ancestors.push(node);
  if(root?.contains?.(card)&&!ancestors.includes(root))ancestors.push(root);
  for(const node of ancestors){
-  if(node.isConnected===false||node.ownerDocument!==doc||node.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]'))continue;
+  if(node.isConnected===false||node.ownerDocument!==doc||node.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]'))continue;
   const style=w.getComputedStyle(node);
   const propagatedHidden=node===root&&style?.overflowY==='visible'&&doc.body&&w.getComputedStyle(doc.body)?.overflowY==='hidden';
   if(!style||!propagatedHidden&&!['hidden','auto','scroll','overlay'].includes(style.overflowY))continue;
@@ -184,7 +184,7 @@ function baselineTailTarget(w,core,group){
  const cards=Array.from(doc.querySelectorAll('[role="article"],article')).filter(c=>!c.parentElement?.closest('[role="article"],article'));
  if(cards.length>100)return null;
  const card=cards.at(-1);
- if(!card||card.isConnected===false||card.ownerDocument!==doc||typeof card.scrollIntoView!=='function'||card.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]'))return null;
+ if(!card||card.isConnected===false||card.ownerDocument!==doc||typeof card.scrollIntoView!=='function'||card.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]'))return null;
  const links=Array.from(card.querySelectorAll('a[href]')).filter(a=>a.closest('[role="article"],article')===card).slice(0,100).map(a=>core.parsePostLink(a.href)).filter(Boolean);
  if(!links.length||links.some(l=>l.sourceType!=='GROUP'||l.sourceId!==group)||new Set(links.map(l=>l.postId)).size!==1)return null;
  const rect=card.getBoundingClientRect();
@@ -238,7 +238,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   uuid.test(m.previousDocumentId||'')&&uuid.test(documentId||'')&&documentId!==m.previousDocumentId&&Number.isFinite(m.previousTimeOrigin)&&m.previousTimeOrigin>0&&Number.isFinite(origin)&&origin>=m.previousTimeOrigin:
   Number.isSafeInteger(m.documentAfter)&&Number.isFinite(origin)&&origin>m.documentAfter;
  if(!fresh)return {status:'WAIT_FRESH',reason:'FRESHNESS',rows:[],stats:zero()};
- const model=createModel(core,fields,m.groupId);let invalid=false,dispose=null,gestureWatch=null;const end=w.performance.now()+Math.min(60000,Math.max(0,Number(m.remainingMs)||0));
+ const model=createModel(core,fields,m.groupId);let invalid=false,dispose=null,noticeDispose=null,gestureWatch=null;const end=w.performance.now()+Math.min(60000,Math.max(0,Number(m.remainingMs)||0));
  let wake;const cancelled=new Promise(r=>{wake=r;});
  const abort=()=>{if(invalid)return;invalid=true;model.clear();wake();notify({type:'desktopPreviewStop',nonce:m.nonce});void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});};
  const pause=ms=>Promise.race([new Promise(r=>w.setTimeout(r,ms)),cancelled]);setAbort(abort);
@@ -246,7 +246,13 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   const info=await send({type:'desktopContext',nonce:m.nonce});if(!info?.active||info.nonce!==m.nonce||!safe(m))return empty('CONTEXT');
   dispose=w.FlipVisiblePosts.watch(w,m,abort);
   const ack=await send({type:'confirmDesktop',nonce:m.nonce,safe:true});if(!ack?.confirmed||invalid||!safe(m))return empty('CONTEXT');
-  const active=async()=>{if(invalid||!safe(m)||w.performance.now()>=end)return false;const c=await send({type:'desktopContext',nonce:m.nonce});return !invalid&&safe(m)&&c?.active===true&&c.nonce===m.nonce;};
+  const active=async()=>{if(invalid||!safe(m)||w.FlipDesktopNotice?.inspect(w).blocked||w.performance.now()>=end)return false;const c=await send({type:'desktopContext',nonce:m.nonce});return !invalid&&safe(m)&&c?.active===true&&c.nonce===m.nonce;};
+  if(!w.FlipDesktopNotice)return empty('ERROR');
+  const notice=await w.FlipDesktopNotice.dismiss(w,{safe:()=>!invalid&&safe(m),pause,deadline:end-1500,onKnown:()=>notify({type:'desktopGestureHint',nonce:m.nonce,stage:'NOTICE'})});
+  model.stats.noticeDetected=notice.detected;model.stats.noticeClosed=notice.closed;
+  if(notice.status==='CONTEXT')return empty('CONTEXT');
+  if(notice.status==='BLOCKED')return {status:'STOP',reason:'NOTICE_BLOCKED',rows:[],stats:{...zero(),noticeDetected:notice.detected}};
+  noticeDispose=w.FlipDesktopNotice.watch?.(w,abort);if(invalid)return empty('CONTEXT');
   let gestureTarget=null;
   model.stats.gestureRequested=Number(m.gestureScroll===true);
   if(m.gestureScroll===true){
@@ -365,7 +371,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   for(const k of statKeys)model.stats[k]=Math.max(0,Math.min(k==='bytes'?4194304:k==='scrollElapsedMs'?30000:k==='gestureWaitMs'?15000:10000,Math.floor(model.stats[k])));
   return {status:'OK',reason:'DONE',rows:model.rows(),stats:{...model.stats}};
  }catch{return empty('ERROR');}
- finally{gestureWatch?.stop();setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
+ finally{noticeDispose?.();gestureWatch?.stop();setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
 const api={imageURL,photoLinkId,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);

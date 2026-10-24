@@ -43,6 +43,6 @@ class DesktopTrial(private val target: String, private val now: () -> Long, priv
     fun complete():Boolean {if(!tick()||!armed||!located||requests==0||phase!=Phase.READING)return false;stop("DONE");return true}
     fun stop(value:String){if(!active)return;active=false;reason=if(value in reasons)value else "PROTOCOL";requested=null;located=false}
     companion object {
-        val reasons=setOf("DONE","EMPTY","PAUSED","NAVIGATION","LOAD_ERROR","PORT_LOST","PROTOCOL","DESKTOP_NOT_APPLIED","ARM_STOP","ARM_BUSY","ARM_UNSUPPORTED","NO_CONSENT_OR_CONTEXT","CONTEXT","ERROR","CANCELLED")+Phase.values().map{"DEADLINE_${it.name}"}
+        val reasons=setOf("NOTICE_BLOCKED","DONE","EMPTY","PAUSED","NAVIGATION","LOAD_ERROR","PORT_LOST","PROTOCOL","DESKTOP_NOT_APPLIED","ARM_STOP","ARM_BUSY","ARM_UNSUPPORTED","NO_CONSENT_OR_CONTEXT","CONTEXT","ERROR","CANCELLED")+Phase.values().map{"DEADLINE_${it.name}"}
     }
 }

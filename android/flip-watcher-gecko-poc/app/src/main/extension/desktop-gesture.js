@@ -1,8 +1,8 @@
 /* Private isolated-content helper. Observe one real operator swipe; never synthesize input. */
 (function(root){'use strict';
-const forbidden='[role="dialog"],[role="comment"],[data-testid*="comment"],[role="menu"],[role="listbox"],[role="complementary"],form,input,textarea,select,aside,nav,header';
+const forbidden='[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"],[role="menu"],[role="listbox"],[role="complementary"],form,input,textarea,select,aside,nav,header';
 function allowed(w,n){return !!n&&n.ownerDocument===w.document&&n.isConnected!==false&&!/^(IFRAME|FRAME|OBJECT|EMBED|INPUT|TEXTAREA|SELECT)$/.test(n.tagName||'')&&!n.closest?.(forbidden);}
-function modal(w){return Array.from(w.document.querySelectorAll('[role="dialog"][aria-modal="true"],dialog[open]')).slice(0,20).some(n=>{if(n.matches?.('[role="dialog"][aria-modal="true"],dialog[open]')!==true)return false;const r=n.getBoundingClientRect?.(),s=w.getComputedStyle?.(n);return n.isConnected!==false&&r&&r.width>0&&r.height>0&&r.bottom>0&&r.top<w.innerHeight&&r.right>0&&r.left<w.innerWidth&&s?.display!=='none'&&s?.visibility!=='hidden'&&Number(s?.opacity??1)>0&&n.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})!==false;});}
+function modal(w){return Array.from(w.document.querySelectorAll('[role="dialog"][aria-modal="true"],[role="alertdialog"][aria-modal="true"],dialog[open]')).slice(0,20).some(n=>{if(n.matches?.('[role="dialog"][aria-modal="true"],[role="alertdialog"][aria-modal="true"],dialog[open]')!==true)return false;const r=n.getBoundingClientRect?.(),s=w.getComputedStyle?.(n);return n.isConnected!==false&&r&&r.width>0&&r.height>0&&r.bottom>0&&r.top<w.innerHeight&&r.right>0&&r.left<w.innerWidth&&s?.display!=='none'&&s?.visibility!=='hidden'&&Number(s?.opacity??1)>0&&n.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})!==false;});}
 function valid(w,n){
  if(!allowed(w,n)||modal(w)||n.clientHeight<100||!Number.isFinite(n.scrollHeight))return false;
  const s=w.getComputedStyle?.(n);if(s&&(/^(hidden|clip)$/.test(s.overflowY)||s.display==='none'||s.visibility==='hidden'))return false;

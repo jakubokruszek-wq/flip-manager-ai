@@ -69,7 +69,7 @@ class DesktopViewportTest {
     }
     @Test fun gesturePhaseHintsRequireExactNonceAndOnlyFixedStage(){
         val hint=JSONObject().put("type","desktopGestureHint").put("nonce",nonce).put("stage","WAITING")
-        assertEquals("WAITING",DesktopProtocol.gestureHint(hint,nonce));assertNull(DesktopProtocol.gestureHint(hint,"stale"))
+        assertEquals("NOTICE",DesktopProtocol.gestureHint(JSONObject(hint.toString()).put("stage","NOTICE"),nonce));assertEquals("WAITING",DesktopProtocol.gestureHint(hint,nonce));assertNull(DesktopProtocol.gestureHint(hint,"stale"))
         assertNull(DesktopProtocol.gestureHint(JSONObject(hint.toString()).put("stage","SCRIPT"),nonce))
         assertNull(DesktopProtocol.gestureHint(JSONObject(hint.toString()).put("target","PRIVATE"),nonce))
     }

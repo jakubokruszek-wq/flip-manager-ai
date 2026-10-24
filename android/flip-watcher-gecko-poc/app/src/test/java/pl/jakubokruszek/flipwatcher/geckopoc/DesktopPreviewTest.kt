@@ -16,6 +16,21 @@ class DesktopPreviewTest {
         val stats=JSONObject(DesktopProtocol.emptyStats()).put("candidates",rows.length()).put("verified",1).put("desktop",1)
         return JSONObject().put("type","desktopPreviewResult").put("nonce",nonce).put("status","OK").put("reason","DONE").put("rows",rows).put("stats",stats)
     }
+    @Test fun notificationCountsAreBoundedAndCannotClaimCloseWithoutDetection(){
+        for((detected,closed) in listOf(0 to 1,2 to 0,1 to 2)){
+            val j=JSONObject(DesktopProtocol.emptyStats()).put("noticeDetected",detected).put("noticeClosed",closed);assertNull(DesktopProtocol.parseStats(j))
+        }
+    }
+    @Test fun priorEightyCounterHistoryRemainsReadableWithoutWriteback(){
+        val j=JSONObject(DesktopSummary.create("EMPTY",1).encode());for(key in DesktopProtocol.statKeys.drop(80))j.getJSONObject("stats").remove(key)
+        val raw=j.toString();val decoded=DesktopSummary.decode(raw)!!;assertEquals(0,decoded.stats.getValue("noticeDetected"));assertEquals(0,decoded.stats.getValue("noticeClosed"));assertEquals(raw,j.toString())
+    }
+    @Test fun blockedNoticeReturnsOnlyNoGoCountsAndNoRows(){
+        val j=message(JSONArray()).put("status","STOP").put("reason","NOTICE_BLOCKED");j.getJSONObject("stats").put("noticeDetected",1)
+        val reply=DesktopProtocol.parse(j,nonce)!!;assertTrue(reply.rows.isEmpty());val summary=DesktopSummary.create("NOTICE_BLOCKED",1,reply)
+        assertEquals("NO_GO",summary.verdict);assertEquals(1,summary.stats.getValue("noticeDetected"));assertFalse(summary.report().contains("/groups/"))
+        assertNull(DesktopProtocol.parse(message().put("status","STOP").put("reason","NOTICE_BLOCKED"),nonce))
+    }
     @Test fun freshConsentAndOneObjectPerAttempt(){val g=DesktopTrial(target,{0L});assertFalse(g.begin(false));assertFalse(g.begin(true));assertFalse(g.active)}
     @Test fun gateAllowsOnlyOneNativeLoadAndBoundedSameGroupHttpRedirects(){
         val g=DesktopTrial(target,{0L});assertTrue(g.begin(true));assertTrue(g.location(target));assertFalse(g.located);assertTrue(g.armed())

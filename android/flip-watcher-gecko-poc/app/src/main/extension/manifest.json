@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Flip Watcher Gecko POC collector",
-  "version": "0.5.19",
+  "version": "0.5.20",
   "description": "Built-in GeckoView extension: reads post ids of the one approved Facebook group with the unchanged collector-core.js.",
   "browser_specific_settings": {
     "gecko": {
@@ -38,6 +38,7 @@
         "share-context.js",
         "desktop-fields.js",
         "desktop-viewport.js",
+        "desktop-notice.js",
         "desktop-gesture.js",
         "desktop-preview.js",
         "poc-content.js"

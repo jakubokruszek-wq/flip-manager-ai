@@ -17,7 +17,7 @@ object DesktopSessionPreview {
         val start=android.os.SystemClock.elapsedRealtime()
         fun remaining()=minOf(gate.remainingMs,windowMs.toLong()-(android.os.SystemClock.elapsedRealtime()-start)).coerceAtLeast(0)
         fun live():Boolean {if(remaining()==0L&&gate.active)gate.stop("DEADLINE_${gate.phase.name}");return gate.tick()}
-        fun failure(reason:String):Outcome {if(gate.active)gate.stop(reason);return Outcome(gate.reason,null,ua)}
+        fun failure(reason:String,reply:DesktopReply?=null):Outcome {if(gate.active)gate.stop(reason);return Outcome(gate.reason,reply,ua)}
         try {
             if(gesture&&!baseline)return@withContext failure("PROTOCOL")
             val sourceGeneration=channel.connectionGeneration
@@ -66,7 +66,7 @@ object DesktopSessionPreview {
                 if(currentUrl()!=expected||generation!=channel.connectionGeneration)return@withContext failure("NAVIGATION")
                 if(reply==null)return@withContext failure(if(channel.isConnected)"PROTOCOL" else "PORT_LOST")
                 if(reply.status=="WAIT_FRESH"){gate.waitFor(DesktopTrial.Phase.FRESHNESS);delay(200);continue}
-                if(reply.status!="OK")return@withContext failure(reply.reason.takeIf{it in DesktopTrial.reasons}?:"PROTOCOL")
+                if(reply.status!="OK")return@withContext failure(reply.reason.takeIf{it in DesktopTrial.reasons}?:"PROTOCOL",reply.takeIf{it.reason=="NOTICE_BLOCKED"})
                 if(reply.stats.getValue("desktop")!=1)return@withContext failure("DESKTOP_NOT_APPLIED")
                 if(!gate.complete())return@withContext failure(gate.reason)
                 return@withContext Outcome("DONE",reply,ua)
