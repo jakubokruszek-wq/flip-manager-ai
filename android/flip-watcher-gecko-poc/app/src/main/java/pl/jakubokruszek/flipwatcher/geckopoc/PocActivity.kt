@@ -80,8 +80,6 @@ class PocActivity : ComponentActivity() {
     private var visibleBusy = false
     internal val desktopThumbnails=DesktopThumbnails()
     private var desktopBusy=false
-    private var desktopGesture=false
-    private var desktopGestureStage="LOADING"
     private var desktopGate:DesktopTrial?=null
     private var desktopNonce:String?=null
     private var desktopJob:Job?=null
@@ -193,17 +191,14 @@ class PocActivity : ComponentActivity() {
     private fun startDesktopPreview(){
         if(desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||kind!=PageKind.APPROVED_GROUP||progress!=100||channel?.isConnected!=true)return
         val currentSession=session?:return;val currentChannel=channel?:return;val target=url?:return
-        desktopConsentDialog=DesktopConsentDialog(this,onAccept=accept@{ choice ->
+        desktopConsentDialog=DesktopConsentDialog(this,onAccept=accept@{
                 if(!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)||session!==currentSession||channel!==currentChannel||url!=target||kind!=PageKind.APPROVED_GROUP||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||progress!=100||!currentChannel.isConnected)return@accept
                 stopVisiblePosts();finishShare("CANCELLED",clear=true);clearDesktopDetails()
                 val gate=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()})
                 if(!gate.begin(true)){publishDesktop(DesktopSummary.create("NO_CONSENT_OR_CONTEXT",0),emptyList());return@accept}
-                val baseline=!choice.extended
-                val guided=choice.gesture
-                desktopGesture=guided;desktopGestureStage="LOADING"
                 clearDesktopDetails();geckoView.requestFocus();desktopGate=gate;desktopBusy=true;desktopRows=emptyList();desktopNonce=UUID.randomUUID().toString();render()
                 desktopJob=lifecycleScope.launch{
-                    val result=DesktopSessionPreview.run(currentSession,currentChannel,gate,desktopNonce!!,target,{url},pageReady={pageLoaded&&progress==100},view=geckoView,images=desktopThumbnails,baseline=baseline,gesture=guided)
+                    val result=DesktopSessionPreview.run(currentSession,currentChannel,gate,desktopNonce!!,target,{url},pageReady={pageLoaded&&progress==100},view=geckoView,images=desktopThumbnails,baseline=false,gesture=false,fastScroll=true)
                     if(desktopGate===gate&&desktopBusy){userAgent=result.userAgent;finishDesktop(result.reason,result.reply)}
                 }
         })
@@ -213,7 +208,7 @@ class PocActivity : ComponentActivity() {
     private fun finishDesktop(reason:String,reply:DesktopReply?=null,show:Boolean=true){
         if(!desktopBusy)return
         val gate=desktopGate;gate?.stop(reason)
-        desktopBusy=false;desktopGesture=false;desktopJob?.cancel();desktopJob=null
+        desktopBusy=false;desktopJob?.cancel();desktopJob=null
         desktopNonce?.let{GeckoHost.background.abortDesktop(it)};desktopNonce=null;channel?.abortDesktop()
         if(reason!="DONE")session?.stop()
         val summary=DesktopSummary.create(reason,gate?.requests?:0,reply)
@@ -448,7 +443,7 @@ class PocActivity : ComponentActivity() {
         val ext = extension ?: run { output.text = "Rozszerzenie kolektora nie jest gotowe: ${extensionError ?: "instalacja w toku"}"; return }
         // Default settings: normal mobile Firefox user agent, JavaScript and cookies as in the browser. No override, no spoofing.
         val newSession = GeckoSession(GeckoSessionSettings.Builder().build())
-        val newChannel = CollectorChannel(newSession, fixtureMode = false, onVisibleStop = { stopVisiblePosts() }, onPageDisconnect = { if(!desktopBusy&&desktopRows.isNotEmpty())clearDesktopDetails(); if(desktopBusy&&desktopGate?.phase==DesktopTrial.Phase.READING)finishDesktop("PORT_LOST"); shareResolver?.disconnected(); if (!responseReloadGate.allowOldDisconnect()) stopVisiblePosts(); if (shareBusy && shareResolver?.active != true) finishShare() }, onPageConnected = { responseReloadGate.connected() }, onShareStop = { if (shareBusy) finishShare("UNSAFE_DOCUMENT") }, onDesktopStop={if(desktopBusy)finishDesktop("CONTEXT")},onDesktopGesture={stage->if(desktopBusy&&desktopGesture){desktopGestureStage=stage;render()}}) { value -> probe = value; render() }
+        val newChannel = CollectorChannel(newSession, fixtureMode = false, onVisibleStop = { stopVisiblePosts() }, onPageDisconnect = { if(!desktopBusy&&desktopRows.isNotEmpty())clearDesktopDetails(); if(desktopBusy&&desktopGate?.phase==DesktopTrial.Phase.READING)finishDesktop("PORT_LOST"); shareResolver?.disconnected(); if (!responseReloadGate.allowOldDisconnect()) stopVisiblePosts(); if (shareBusy && shareResolver?.active != true) finishShare() }, onPageConnected = { responseReloadGate.connected() }, onShareStop = { if (shareBusy) finishShare("UNSAFE_DOCUMENT") }, onDesktopStop={if(desktopBusy)finishDesktop("CONTEXT")}) { value -> probe = value; render() }
         newChannel.attach(ext)
         newSession.progressDelegate = progressDelegate
         newSession.contentDelegate = contentDelegate
@@ -954,7 +949,7 @@ class PocActivity : ComponentActivity() {
             stop != null -> stop
             !open -> "Sesja zamknięta. „Otwórz sesję” uruchamia przeglądarkę tylko dla grupy ${PocPolicy.APPROVED_GROUP_ID}."
             loginRequested && kind == PageKind.LOGIN -> "Logowanie ręczne na stronie Facebooka. Po zalogowaniu użyj „Wróć do grupy”."
-            desktopBusy -> if(desktopGesture)when(desktopGestureStage){"NOTICE"->"Zamykam komunikat powiadomień Facebooka. Uprawnienia bez zmian.";"WAITING"->"TERAZ przesuń treść grupy palcem w górę (15 s).";"ANCHORED"->"Automatyczne przewijanie wskazanego obszaru • tylko lokalnie";else->"Ładowanie grupy — zaczekaj na komunikat o przesunięciu palcem."} else "Jedna próba komputerowa • ${desktopGate?.phase} • tylko lokalnie"
+            desktopBusy -> if(desktopGate?.phase==DesktopTrial.Phase.READING)"Automatyczne przewijanie • do 30 s • tylko lokalnie" else "Ładowanie grupy • automatyczny podgląd • tylko lokalnie"
             shareBusy -> "Sprawdzanie jednego linku: do 20 s. Bez skanu."
             responseBusy -> if (responseReloadGate.active) "Trwa diagnostyka od otwarcia (25 s)." else "Trwa lokalna diagnostyka odpowiedzi (15 s)."
             shareResolver?.status == ShareLinkResolver.Status.CONFIRMED -> "Link zatwierdzonej grupy potwierdzony. Bez skanu."
@@ -1100,7 +1095,7 @@ class PocActivity : ComponentActivity() {
         toolPanel.visibility=View.GONE
         val mainTools=LinearLayout(this).apply{
             orientation=LinearLayout.VERTICAL
-            addView(row(button("desktopPreview","Próba komputerowa • podgląd"){startDesktopPreview()}))
+            addView(row(button("desktopPreview","Automatyczny podgląd • 30 s"){startDesktopPreview()}))
             addView(row(button("desktopResult","Oferty"){selectContentTab(true)}))
             addView(row(Button(this@PocActivity).apply{text="Archiwum narzędzi";setOnClickListener{toolPanel.visibility=if(toolPanel.visibility==View.VISIBLE)View.GONE else View.VISIBLE}}))
             addView(toolPanel)

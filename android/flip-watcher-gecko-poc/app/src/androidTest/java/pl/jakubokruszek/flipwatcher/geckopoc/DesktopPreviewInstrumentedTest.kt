@@ -152,7 +152,9 @@ class DesktopPreviewInstrumentedTest {
     @Test fun noOperatorGestureNeverStartsAutomaticScrollOrPixelReadback()=checkNativeViewport(false,baseline=true,gesture=true,noGesture=true)
     @Test fun alreadyDecodedCssPhotosCaptureRealColorsAndPreserveFurtherScroll()=checkNativeViewport(false,cssPhotos=true)
     @Test fun ordinaryPostContainerNamedCommentableDoesNotDiscardRealImgPhotos()=checkNativeViewport(false,postWrapper=true)
-    private fun checkNativeViewport(deep:Boolean,networkOnly:Boolean=false,cachedFeed:Boolean=false,marginOnly:Boolean=false,delegated:Boolean=false,baseline:Boolean=false,gesture:Boolean=false,noGesture:Boolean=false,consentWindow:Boolean=false,noticeWindow:Boolean=false,unknownNotice:Boolean=false,noticeVariant:Int=0,cssPhotos:Boolean=false,postWrapper:Boolean=false){
+    @Test fun fastAutomaticCadenceMovesMoreThanFortyTimesWithoutOperatorGesture()=checkNativeViewport(false,baseline=true,fastScroll=true)
+    @Test fun fastAutomaticCssPhotosShowEligibleOffersWithoutOperatorGesture()=checkNativeViewport(false,cssPhotos=true,fastScroll=true)
+    private fun checkNativeViewport(deep:Boolean,networkOnly:Boolean=false,cachedFeed:Boolean=false,marginOnly:Boolean=false,delegated:Boolean=false,baseline:Boolean=false,gesture:Boolean=false,noGesture:Boolean=false,consentWindow:Boolean=false,noticeWindow:Boolean=false,unknownNotice:Boolean=false,noticeVariant:Int=0,cssPhotos:Boolean=false,postWrapper:Boolean=false,fastScroll:Boolean=false){
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use {scenario->
             var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it
                 if(consentWindow){
@@ -174,7 +176,7 @@ class DesktopPreviewInstrumentedTest {
                         1->html.replace("role=\"alertdialog\"", "role=\"dialog\"").replace("aria-label=\"Push notifications request\"", "aria-labelledby=\"notice-name\"").replace("<span style=", "<span id=\"notice-name\">Push notifications request</span><span style=")
                         2->html.replace("role=\"alertdialog\"", "role=\"dialog\"").replace("aria-label=\"Push notifications request\"", "aria-label=\"Informacje\"")
                         else->html
-                    };if(baseline)described.replace("height:1800px","height:50000px").let{if(unknownNotice)it.replace("Push notifications request","Security verification")else it}else if(networkOnly)html.replace("<a href=\"https://www.facebook.com/groups/1234567890123/posts/550000000000091/\">Post</a>","<span>Post without DOM identity</span>").replace("<head>","<head><script>fetch('/api/graphql/').then(r=>r.text());</script>")else if(cachedFeed)html.replace("</main>","<div style=\"height:6000px\" id=\"blank-tail\"></div></main>").replace("<main role=\"feed\"", "<div id=\"feed\"").replace("</main>","</div>").replace("document.querySelector('main')","document.querySelector('#feed')").replace("groups/1234567890123/posts/550000000000091/","groups/other/posts/550000000000091/").replace("groups/1234567890123/posts/550000000000092/","groups/other/posts/550000000000092/").replace("<div role=\"article\" style=\"height:20px\">","<div style=\"height:20px\">")else if(delegated)html.replace("<main style=", "<div id=\"feed\" style=").replace("</main>","</div>").replace("document.querySelector('main')","document.querySelector('#feed')").replace("height:9000px", "height:50000px;pointer-events:none")else if(marginOnly)html.replace("height:9000px","height:50000px").replace("</body>","<iframe sandbox=\"\" style=\"position:fixed;left:20vw;top:20vh;width:60vw;height:60vh;z-index:10000\"></iframe></body>")else html}
+                    };if(baseline)described.replace("height:1800px",(if(fastScroll)"height:100000px" else "height:50000px")).let{if(unknownNotice)it.replace("Push notifications request","Security verification")else it}else if(networkOnly)html.replace("<a href=\"https://www.facebook.com/groups/1234567890123/posts/550000000000091/\">Post</a>","<span>Post without DOM identity</span>").replace("<head>","<head><script>fetch('/api/graphql/').then(r=>r.text());</script>")else if(cachedFeed)html.replace("</main>","<div style=\"height:6000px\" id=\"blank-tail\"></div></main>").replace("<main role=\"feed\"", "<div id=\"feed\"").replace("</main>","</div>").replace("document.querySelector('main')","document.querySelector('#feed')").replace("groups/1234567890123/posts/550000000000091/","groups/other/posts/550000000000091/").replace("groups/1234567890123/posts/550000000000092/","groups/other/posts/550000000000092/").replace("<div role=\"article\" style=\"height:20px\">","<div style=\"height:20px\">")else if(delegated)html.replace("<main style=", "<div id=\"feed\" style=").replace("</main>","</div>").replace("document.querySelector('main')","document.querySelector('#feed')").replace("height:9000px", "height:50000px;pointer-events:none")else if(marginOnly)html.replace("height:9000px","height:50000px").replace("</body>","<iframe sandbox=\"\" style=\"position:fixed;left:20vw;top:20vh;width:60vw;height:60vh;z-index:10000\"></iframe></body>")else html}
                     }
                 }
                 val target=server.url("/groups/$FIXTURE_GROUP_ID/","desktop-start")
@@ -210,7 +212,7 @@ class DesktopPreviewInstrumentedTest {
                     }
                     if(consentWindow){
                         var accepted=false
-                        val dialog=DesktopConsentDialog(host!!){choice->assertTrue(choice.gesture);assertFalse(choice.extended);host!!.geckoView.requestFocus();assertTrue(trial.begin(true));accepted=true}
+                        val dialog=DesktopConsentDialog(host!!){host!!.geckoView.requestFocus();assertTrue(trial.begin(true));accepted=true}
                         dialog.show()
                         delay(300)
                         val accept=dialog.window!!.decorView.findViewWithTag<android.widget.Button>("poc.desktop.consentAccept")
@@ -245,7 +247,7 @@ class DesktopPreviewInstrumentedTest {
                             delay(500)
                         }
                     }else null
-                    val result=DesktopSessionPreview.run(session,channel,trial,UUID.randomUUID().toString(),target,{current},pageReady={loaded&&allowPage},fixture=true,windowMs=40_000,view=host!!.geckoView,images=images,baseline=baseline,gesture=gesture)
+                    val result=DesktopSessionPreview.run(session,channel,trial,UUID.randomUUID().toString(),target,{current},pageReady={loaded&&allowPage},fixture=true,windowMs=40_000,view=host!!.geckoView,images=images,baseline=baseline,gesture=gesture,fastScroll=fastScroll)
                     readiness?.join();operator?.cancel()
                     if(unknownNotice){
                         assertEquals("NOTICE_BLOCKED",result.reason);assertNotNull(result.reply);assertTrue(result.reply!!.rows.isEmpty())
@@ -257,7 +259,8 @@ class DesktopPreviewInstrumentedTest {
                     assertEquals("DONE",result.reason);val reply=result.reply!!
                     if(noticeWindow){assertEquals(1,reply.stats.getValue("noticeDetected"));assertEquals(1,reply.stats.getValue("noticeClosed"));assertTrue(noticeDismissed.get());assertEquals(if(noticeVariant==1)2 else if(noticeVariant==2)3 else 1,reply.stats.getValue("noticeNameSource"))}
                     android.util.Log.i("GeckoPocTest","NATIVE_CAPTURE_COUNTS ${channel.lastViewportCaptureCounts.joinToString(",")}")
-                    android.util.Log.i("GeckoPocTest","VIEWPORT_BEFORE_ASSERT deep=$deep networkOnly=$networkOnly cssPhotos=$cssPhotos delegated=$delegated baseline=$baseline gesture=$gesture notice=$noticeWindow variant=$noticeVariant pictures=${images.count} newOffer=${reply.rows.any{it.postId=="550000000000096"}} ${DesktopSummary.create("DONE",trial.requests,reply).report()}")
+                    android.util.Log.i("GeckoPocTest","VIEWPORT_BEFORE_ASSERT deep=$deep networkOnly=$networkOnly cssPhotos=$cssPhotos fastScroll=$fastScroll delegated=$delegated baseline=$baseline gesture=$gesture notice=$noticeWindow variant=$noticeVariant pictures=${images.count} newOffer=${reply.rows.any{it.postId=="550000000000096"}} ${DesktopSummary.create("DONE",trial.requests,reply).report()}")
+                    if(fastScroll){assertEquals(1,reply.stats.getValue("scrollFast"));assertEquals(500,reply.stats.getValue("scrollCadenceMs"));assertEquals(0,reply.stats.getValue("gestureRequested"));assertEquals(0,reply.stats.getValue("gestureTouches"))}
                     if(noGesture){
                         assertEquals(0,reply.stats.getValue("gestureAnchored"));assertEquals(0,reply.stats.getValue("scrollSteps"))
                         assertTrue(reply.stats.getValue("gestureWaitMs") in 14000..15000)
@@ -271,7 +274,7 @@ class DesktopPreviewInstrumentedTest {
                         assertTrue("new exact offer must be extracted",reply.rows.any{it.postId=="550000000000096"&&it.area==68.0&&it.price==680000.0})
                     }
                     if(baseline){
-                        assertTrue("baseline must really scroll throughout the window",reply.stats.getValue("scrollMoves")>=25)
+                        assertTrue("baseline must really scroll throughout the window",reply.stats.getValue("scrollMoves")>=(if(fastScroll)45 else 25))
                         assertTrue(reply.stats.getValue("scrollElapsedMs") in 29000..30000)
                         assertTrue("offer extraction stays active",reply.rows.isNotEmpty())
                         for(key in listOf("viewportGranted","viewportReady","nativeRequests","scrollNativeSteps","photoPreviewFrames","photoPreviews"))assertEquals("baseline leaked $key",0,reply.stats.getValue(key))

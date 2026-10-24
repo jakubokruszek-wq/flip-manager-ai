@@ -79,4 +79,26 @@ class DesktopPresentationTest {
         assertTrue(DesktopSummary.create("DONE",1,DesktopReply("OK","DONE",emptyList(),values)).report().contains("właściciel 5"))
     }
 
+    @Test fun version0523HistoryDoesNotInventFastScrollingOrRewriteStoredData(){
+        val old=org.json.JSONObject(DesktopSummary.create("EMPTY",1).encode())
+        for(key in DesktopProtocol.statKeys.drop(104))old.getJSONObject("stats").remove(key)
+        val raw=old.toString();val restored=DesktopSummary.decode(raw)!!
+        assertEquals(0,restored.stats.getValue("scrollFast"));assertEquals(raw,old.toString())
+        assertTrue(restored.report().contains("rytm DOM niezapisany"))
+    }
+    @Test fun sixtyStepsRequireTheExplicit500msAutomaticProtocol(){
+        val stats=org.json.JSONObject(DesktopProtocol.emptyStats()).put("scrollSteps",60).put("scrollMoves",60)
+        assertNull(DesktopProtocol.parseStats(stats))
+        stats.put("scrollFast",1).put("scrollCadenceMs",500)
+        assertNotNull(DesktopProtocol.parseStats(stats))
+        stats.put("scrollSteps",61);assertNull(DesktopProtocol.parseStats(stats))
+        stats.put("scrollSteps",60).put("gestureRequested",1);assertNull(DesktopProtocol.parseStats(stats))
+        stats.put("gestureRequested",0).put("scrollCadenceMs",1000);assertNull(DesktopProtocol.parseStats(stats))
+    }
+    @Test fun fastReportShowsConfiguredCadenceAndPreservesNativeInputLimit(){
+        val stats=DesktopProtocol.emptyStats().toMutableMap().apply{put("scrollFast",1);put("scrollCadenceMs",500)}
+        assertTrue(DesktopSummary.create("EMPTY",1,DesktopReply("OK","DONE",emptyList(),stats)).report().contains("60 prób; rytm DOM 500 ms"))
+        assertNull(DesktopProtocol.parseStats(org.json.JSONObject(stats).put("nativeRequests",31)))
+    }
+
 }

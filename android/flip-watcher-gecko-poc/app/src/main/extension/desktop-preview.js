@@ -1,7 +1,7 @@
 /* Isolated/native-consented local projection. No storage, upload or public page bridge. */
 (function(root){
 'use strict';
-const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible','scrollNativeSteps','scrollNativeMoves','photoPreviewFrames','photoPreviews','viewportHeight','visualViewportHeight','rootRemaining','viewportModule','viewportGranted','viewportReady','viewportProbeCode','nativeRequests','nativeRejected','nativeTimeout','pointMisses','mediaBindingPosts','pointProbes','pointEmpty','pointFrame','pointForeign','pointForm','pointDialog','pointComment','pointCommentable','pointChrome','pointUnbound','pointWidget','pointCache','pointCacheCards','pointRects','viewportWidth','visualWidth','visualOffsetX','visualOffsetY','visualScale100','gestureRequested','gestureTouches','gestureAnchored','gestureRejected','gestureWaitMs','gestureScrollSteps','gestureScrollMoves','noticeDetected','noticeClosed','noticeReason','noticeModals','noticeVisible','noticeNameSource','photoExactCards','photoNetworkCards','photoSources','photoIdentityRejected','photoUnready','photoGeometryRejected','photoOccluded','photoAlreadyDone','photoSelected','photoRawImg','photoRawSvg','photoRawCss','photoOwnerRejected','photoScopeRejected','photoAnchorRejected','photoSizeRejected','photoSourceRejected','photoCssUnready'];
+const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible','scrollNativeSteps','scrollNativeMoves','photoPreviewFrames','photoPreviews','viewportHeight','visualViewportHeight','rootRemaining','viewportModule','viewportGranted','viewportReady','viewportProbeCode','nativeRequests','nativeRejected','nativeTimeout','pointMisses','mediaBindingPosts','pointProbes','pointEmpty','pointFrame','pointForeign','pointForm','pointDialog','pointComment','pointCommentable','pointChrome','pointUnbound','pointWidget','pointCache','pointCacheCards','pointRects','viewportWidth','visualWidth','visualOffsetX','visualOffsetY','visualScale100','gestureRequested','gestureTouches','gestureAnchored','gestureRejected','gestureWaitMs','gestureScrollSteps','gestureScrollMoves','noticeDetected','noticeClosed','noticeReason','noticeModals','noticeVisible','noticeNameSource','photoExactCards','photoNetworkCards','photoSources','photoIdentityRejected','photoUnready','photoGeometryRejected','photoOccluded','photoAlreadyDone','photoSelected','photoRawImg','photoRawSvg','photoRawCss','photoOwnerRejected','photoScopeRejected','photoAnchorRejected','photoSizeRejected','photoSourceRejected','photoCssUnready','scrollFast','scrollCadenceMs'];
 const zero=()=>Object.fromEntries(statKeys.map(k=>[k,0]));
 function groupURL(raw,group,fixture){try{const u=new URL(raw);return /^[A-Za-z0-9._-]{1,100}$/.test(group)&&!u.username&&!u.password&&!u.hash&&(fixture||!u.search)&&u.pathname.replace(/\/$/,'')==='/groups/'+group&&((u.protocol==='https:'&&!u.port&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))||(fixture===true&&u.protocol==='http:'&&u.hostname==='127.0.0.1'));}catch{return false;}}
 function exact(raw,group){try{const u=new URL(raw);const p=u.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d{5,30})\/?$/);return u.protocol==='https:'&&!u.port&&!u.username&&!u.password&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&p?.[1]===group?p[2]:null;}catch{return null;}}
@@ -258,6 +258,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
  const empty=reason=>({status:'STOP',reason,rows:[],stats:zero()});
  if(m.consent!==true||!safe(m))return empty('CONTEXT');
  const baseline=m.baselineScroll===true;
+ const fast=m.fastScroll===true&&m.gestureScroll!==true,maxSteps=fast?60:30,cadence=fast?500:1000;
  if((m.gestureScroll===true&&!baseline)||baseline&&(m.photosConsent===true||m.viewportConsent===true))return empty('CONTEXT');
  const selectTail=baseline?baselineTailTarget:tailTarget;
  const uuid=/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
@@ -309,7 +310,8 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
     await pause(200);
    }
   }
-  for(let step=0;step<=30;step++){
+  model.stats.scrollFast=Number(fast);model.stats.scrollCadenceMs=cadence;
+  for(let step=0;step<=maxSteps;step++){
    if(!await active())return empty('CONTEXT');
    model.stats.pageFocused=Math.max(model.stats.pageFocused,Number(w.document.hasFocus?.()===true));
    model.stats.pageVisible=Math.max(model.stats.pageVisible,Number(w.document.visibilityState==='visible'&&w.document.hidden!==true));
@@ -339,7 +341,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
      if(attempt===0){await pause(Math.min(150,Math.max(0,scrollEnd-w.performance.now())));if(invalid||!safe(m))return empty('CONTEXT');}
     }
    }
-   if(step===30||w.performance.now()>=scrollEnd)break;
+   if(step===maxSteps||w.performance.now()>=scrollEnd)break;
    let recovered=false,container;
    if(m.gestureScroll===true){
     if(!gestureWatch.valid(gestureTarget))return empty('CONTEXT');
@@ -388,7 +390,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
    const top=Math.max(400,Math.min(900,Math.round((root?w.innerHeight:container.clientHeight)*.85)));
    if(root)w.scrollBy({left:0,top,behavior:'instant'});else container.scrollBy({left:0,top,behavior:'instant'});
    model.stats.scrollSteps++;if(m.gestureScroll===true)model.stats.gestureScrollSteps++;
-   await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now()))); // measure rendered movement, at most one attempt per second
+   await pause(Math.min(cadence,Math.max(0,scrollEnd-w.performance.now()))); // measure actual movement before the next bounded attempt
    if(readPosition()>before){model.stats.scrollMoves++;if(m.gestureScroll===true)model.stats.gestureScrollMoves++;lastMoved=container;}else model.stats.scrollStalls++;
   }
   model.stats.scrollElapsedMs=Math.min(30000,Math.max(0,Math.floor(w.performance.now()-scrollStart)));

@@ -24,10 +24,10 @@ import java.util.concurrent.CopyOnWriteArrayList
 @RunWith(AndroidJUnit4::class)
 class DesktopConsentInstrumentedTest {
     private val instrumentation get()=InstrumentationRegistry.getInstrumentation()
-    private fun make(a:GeckoTestHostActivity,choices:MutableList<DesktopConsentDialog.Selection>):DesktopConsentDialog {
+    private fun make(a:GeckoTestHostActivity,choices:MutableList<Boolean>):DesktopConsentDialog {
         val c=android.content.res.Configuration(a.resources.configuration).apply{fontScale=2f}
         val themed=ContextThemeWrapper(a,android.R.style.Theme_Material_Light_Dialog_NoActionBar).apply{applyOverrideConfiguration(c)}
-        return DesktopConsentDialog(a,themed){choices.add(it)}.apply{
+        return DesktopConsentDialog(a,themed){choices.add(true)}.apply{
             show()
             val d=a.resources.displayMetrics.density
             // Smaller than the CI device: exercise a 320dp by 360dp dialog.
@@ -67,21 +67,21 @@ class DesktopConsentInstrumentedTest {
     }
     @Test fun compactLargeTextConsentActionsAreVisibleAndRealAcceptTapWorks(){
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use{scenario->
-            val choices=CopyOnWriteArrayList<DesktopConsentDialog.Selection>();lateinit var d:DesktopConsentDialog
+            val choices=CopyOnWriteArrayList<Boolean>();lateinit var d:DesktopConsentDialog
             scenario.onActivity{d=make(it,choices)};settle(scenario,d);lateinit var accept:Rect
             scenario.onActivity{
                 accept=reachable(d,"poc.desktop.consentAccept");reachable(d,"poc.desktop.consentCancel")
-                assertTrue(d.window!!.decorView.findViewWithTag<CheckBox>("poc.desktop.gesture").isChecked)
-                assertFalse(d.window!!.decorView.findViewWithTag<CheckBox>("poc.desktop.extended").isChecked)
+                assertNull(d.window!!.decorView.findViewWithTag<CheckBox>("poc.desktop.gesture"))
+                assertNull(d.window!!.decorView.findViewWithTag<CheckBox>("poc.desktop.extended"))
                 picture(d,"compact-large")
             }
-            tap(accept);assertEquals(listOf(DesktopConsentDialog.Selection(true,false)),choices.toList())
+            tap(accept);assertEquals(listOf(true),choices.toList())
             scenario.onActivity{assertFalse(d.isShowing)}
         }
     }
     @Test fun expandedScrollableDetailsNeverMoveFooterAndCancelDoesNotGrantConsent(){
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use{scenario->
-            val choices=CopyOnWriteArrayList<DesktopConsentDialog.Selection>();lateinit var d:DesktopConsentDialog;lateinit var before:Rect;lateinit var disclosure:Rect
+            val choices=CopyOnWriteArrayList<Boolean>();lateinit var d:DesktopConsentDialog;lateinit var before:Rect;lateinit var disclosure:Rect
             scenario.onActivity{d=make(it,choices)};settle(scenario,d)
             scenario.onActivity{
                 before=reachable(d,"poc.desktop.consentAccept")
@@ -96,7 +96,7 @@ class DesktopConsentInstrumentedTest {
                 picture(d,"compact-expanded")
             }
             tap(cancel);assertTrue(choices.isEmpty())
-            scenario.onActivity{assertFalse(d.isShowing);d=make(it,choices);assertTrue(d.window!!.decorView.findViewWithTag<CheckBox>("poc.desktop.gesture").isChecked);assertFalse(d.window!!.decorView.findViewWithTag<CheckBox>("poc.desktop.extended").isChecked);d.dismiss()}
+            scenario.onActivity{assertFalse(d.isShowing);d=make(it,choices);assertNull(d.window!!.decorView.findViewWithTag<CheckBox>("poc.desktop.gesture"));assertNull(d.window!!.decorView.findViewWithTag<CheckBox>("poc.desktop.extended"));d.dismiss()}
         }
     }
 }

@@ -11,7 +11,7 @@ import org.mozilla.geckoview.GeckoSessionSettings
 object DesktopSessionPreview {
     data class Outcome(val reason:String,val reply:DesktopReply?,val userAgent:String?)
     suspend fun run(session:GeckoSession,channel:CollectorChannel,gate:DesktopTrial,nonce:String,target:String,
-                    currentUrl:()->String?,pageReady:()->Boolean,fixture:Boolean=false,windowMs:Int=60_000,view:org.mozilla.geckoview.GeckoView?=null,images:DesktopThumbnails?=null,baseline:Boolean=false,gesture:Boolean=false):Outcome=withContext(Dispatchers.Main){
+                    currentUrl:()->String?,pageReady:()->Boolean,fixture:Boolean=false,windowMs:Int=60_000,view:org.mozilla.geckoview.GeckoView?=null,images:DesktopThumbnails?=null,baseline:Boolean=false,gesture:Boolean=false,fastScroll:Boolean=false):Outcome=withContext(Dispatchers.Main){
         val group=if(fixture)FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID
         var ua:String?=null
         val start=android.os.SystemClock.elapsedRealtime()
@@ -61,7 +61,7 @@ object DesktopSessionPreview {
                 if(!baseline&&view!=null&&images!=null&&channel.viewportBridge==null)channel.viewportBridge=DesktopViewportBridge(view,nonce,images,{
                     live()&&gate.phase==DesktopTrial.Phase.READING&&currentUrl()==expected&&channel.connectionGeneration==generation&&channel.connectedUrl==expected
                 })
-                val reply=channel.desktopPreview(nonce,documentAfter,remaining().toInt(),group,previousDocument,baseline,gesture)
+                val reply=channel.desktopPreview(nonce,documentAfter,remaining().toInt(),group,previousDocument,baseline,gesture,fastScroll)
                 if(!live())return@withContext failure(gate.reason)
                 if(currentUrl()!=expected||generation!=channel.connectionGeneration)return@withContext failure("NAVIGATION")
                 if(reply==null)return@withContext failure(if(channel.isConnected)"PROTOCOL" else "PORT_LOST")

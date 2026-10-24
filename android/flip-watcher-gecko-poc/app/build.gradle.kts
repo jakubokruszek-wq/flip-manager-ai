@@ -48,7 +48,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = providers.gradleProperty("GECKO_POC_VERSION_CODE").orElse("2700").get().toInt()
-        versionName = "0.5.23-gecko-poc"
+        versionName = "0.5.24-gecko-poc"
         buildConfigField("String", "COLLECTOR_CORE_SHA256", "\"$collectorCoreSha256\"")
         // No backend in this POC: there is no API URL, token or upload code at all.
         buildConfigField("boolean", "LIVE_UPLOAD_ENABLED", "false")
