@@ -30,6 +30,15 @@ class DesktopPreviewInstrumentedTest {
         try{delay(50);for(i in 1..12){send(android.view.MotionEvent.ACTION_MOVE,start-view.height*.5f*i/12);delay(40)}}
         finally{send(android.view.MotionEvent.ACTION_UP,start-view.height*.5f)}
     }
+    // InputManager dispatch through the actual foreground window, not view.onTouchEvent.
+    private suspend fun fixtureScreenTouch(x:Float,y:Float,swipe:Boolean,distance:Float=0f)=withContext(Dispatchers.IO){
+        val input=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+        val down=android.os.SystemClock.uptimeMillis()
+        fun send(action:Int,at:Float){val e=android.view.MotionEvent.obtain(down,android.os.SystemClock.uptimeMillis(),action,x,at,0);e.source=android.view.InputDevice.SOURCE_TOUCHSCREEN;try{input.sendPointerSync(e)}finally{e.recycle()}}
+        send(android.view.MotionEvent.ACTION_DOWN,y)
+        try{if(swipe){android.os.SystemClock.sleep(50);for(i in 1..12){send(android.view.MotionEvent.ACTION_MOVE,y-distance*i/12);android.os.SystemClock.sleep(40)}}}
+        finally{send(android.view.MotionEvent.ACTION_UP,if(swipe)y-distance else y)}
+    }
     @Test fun desktopModeCapturesInitialNetworkDomAndHydrationWithSameRunner(){
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use {scenario->
             var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it}
@@ -130,10 +139,20 @@ class DesktopPreviewInstrumentedTest {
     @Test fun anonymousAncestorHitScrollsAndCapturesDelegatedImages()=checkNativeViewport(true,false,false,false,true)
     @Test fun baselineScrollIgnoresAvailableNativeViewAndCapturesNoPixels()=checkNativeViewport(false,baseline=true)
     @Test fun trustedSwipeSelectsActualPaneAndAutomaticContinuationIgnoresFiniteDecoy()=checkNativeViewport(false,baseline=true,gesture=true)
+    @Test fun consentDismissalReturnsRealWindowTouchToDesktopPane()=checkNativeViewport(false,baseline=true,gesture=true,consentWindow=true)
     @Test fun noOperatorGestureNeverStartsAutomaticScrollOrPixelReadback()=checkNativeViewport(false,baseline=true,gesture=true,noGesture=true)
-    private fun checkNativeViewport(deep:Boolean,networkOnly:Boolean=false,cachedFeed:Boolean=false,marginOnly:Boolean=false,delegated:Boolean=false,baseline:Boolean=false,gesture:Boolean=false,noGesture:Boolean=false){
+    private fun checkNativeViewport(deep:Boolean,networkOnly:Boolean=false,cachedFeed:Boolean=false,marginOnly:Boolean=false,delegated:Boolean=false,baseline:Boolean=false,gesture:Boolean=false,noGesture:Boolean=false,consentWindow:Boolean=false){
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use {scenario->
-            var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it}
+            var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it
+                if(consentWindow){
+                    val view=it.geckoView;(view.parent as android.view.ViewGroup).removeView(view)
+                    val root=android.widget.LinearLayout(it).apply{orientation=android.widget.LinearLayout.VERTICAL}
+                    root.addView(android.widget.TextView(it).apply{text="Local trial: waiting for a real swipe"})
+                    root.addView(android.widget.Button(it).apply{text="Disabled tool";isEnabled=false})
+                    root.addView(android.widget.FrameLayout(it).apply{addView(view,android.widget.FrameLayout.LayoutParams(-1,-1))},android.widget.LinearLayout.LayoutParams(-1,0,1f))
+                    it.setContentView(root)
+                }
+            }
             runBlocking{withTimeout(70_000){withContext(Dispatchers.Main){
                 val gestureSeen=AtomicBoolean(false)
                 val server=LoopbackFixtureServer(pages=if(networkOnly)mapOf("/api/graphql/" to "network-media")else emptyMap(),onRequest={path,_->if(path=="/gesture-ready")gestureSeen.set(true)}){asset->
@@ -161,11 +180,29 @@ class DesktopPreviewInstrumentedTest {
                 try{
                     channel.attach(GeckoHost.collectorExtension(context));session.open(GeckoHost.runtime(context));host!!.geckoView.setSession(session);session.setActive(true)
                     session.loadUri(target);assertTrue(channel.awaitPort(15_000));withTimeout(15_000){while(!loaded||current!=target)delay(100)}
-                    val trial=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=trial;assertTrue(trial.begin(true))
+                    val trial=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=trial
+                    if(consentWindow){
+                        var accepted=false
+                        val dialog=DesktopConsentDialog(host!!){choice->assertTrue(choice.gesture);assertFalse(choice.extended);host!!.geckoView.requestFocus();assertTrue(trial.begin(true));accepted=true}
+                        dialog.show()
+                        delay(300)
+                        val accept=dialog.window!!.decorView.findViewWithTag<android.widget.Button>("poc.desktop.consentAccept")
+                        val location=IntArray(2);accept.getLocationOnScreen(location)
+                        fixtureScreenTouch(location[0]+accept.width*.5f,location[1]+accept.height*.5f,swipe=false)
+                        withTimeout(3000){while(!accepted)delay(20)}
+                        assertFalse(dialog.isShowing)
+                    }else assertTrue(trial.begin(true))
                     val operator=if(gesture&&!noGesture)launch{
                         while(trial.phase!=DesktopTrial.Phase.READING)delay(100)
                         delay(3000)
-                        repeat(3){if(gestureSeen.get())return@launch;fixtureSwipe(host!!.geckoView);delay(500)}
+                        repeat(3){if(gestureSeen.get())return@launch
+                            if(consentWindow){
+                                val v=host!!.geckoView;val p=IntArray(2);v.getLocationOnScreen(p)
+                                assertTrue("browser window must own real input after consent",v.hasWindowFocus())
+                                fixtureScreenTouch(p[0]+v.width*.75f,p[1]+v.height*.8f,swipe=true,distance=v.height*.5f)
+                            }else fixtureSwipe(host!!.geckoView)
+                            delay(500)
+                        }
                     }else null
                     val result=DesktopSessionPreview.run(session,channel,trial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=40_000,view=host!!.geckoView,images=images,baseline=baseline,gesture=gesture)
                     operator?.cancel()
