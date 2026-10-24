@@ -65,7 +65,7 @@ object DesktopProtocol {
         if(listOf("pointProbes","pointEmpty","pointFrame","pointForeign","pointForm","pointComment","pointCommentable","pointChrome","pointUnbound","pointWidget").any{result.getValue(it)>64}||result.getValue("pointDialog")>64||result.getValue("pointCache")>1||result.getValue("pointCacheCards")>100||result.getValue("pointRects")>4)return null
         if(result.getValue("gestureRequested")>1||result.getValue("gestureAnchored")>result.getValue("gestureRequested")||result.getValue("gestureAnchored")>result.getValue("gestureTouches")||result.getValue("gestureTouches")>20||result.getValue("gestureRejected")>20||result.getValue("gestureScrollSteps")>result.getValue("scrollSteps")||result.getValue("gestureScrollMoves")>result.getValue("gestureScrollSteps")||result.getValue("gestureScrollMoves")>result.getValue("scrollMoves"))return null
         if(result.getValue("noticeDetected")>1||result.getValue("noticeClosed")>result.getValue("noticeDetected"))return null
-        if(result.getValue("noticeReason")>12||result.getValue("noticeModals")>64||result.getValue("noticeVisible")>result.getValue("noticeModals")||result.getValue("noticeNameSource","photoExactCards","photoNetworkCards","photoSources","photoIdentityRejected","photoUnready","photoGeometryRejected","photoOccluded","photoAlreadyDone","photoSelected")>3)return null
+        if(result.getValue("noticeReason")>12||result.getValue("noticeModals")>64||result.getValue("noticeVisible")>result.getValue("noticeModals")||result.getValue("noticeNameSource")>3)return null
         return result
     }
     fun emptyStats()=statKeys.associateWith{0}
