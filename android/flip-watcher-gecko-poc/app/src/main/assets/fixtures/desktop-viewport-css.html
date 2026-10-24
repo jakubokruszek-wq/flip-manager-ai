@@ -23,4 +23,7 @@ for(const img of Array.from(document.querySelectorAll('a img'))){
  const cached=img.cloneNode();cached.style.cssText='position:absolute;left:0;top:-9000px';document.body.append(cached);
  const photo=document.createElement('div');photo.setAttribute('role','img');photo.style.cssText='display:inline-block;width:300px;height:160px;background-size:100% 100%';photo.style.backgroundImage='url("'+img.src+'")';img.replaceWith(photo);
 }
+</script><script>
+const story=document.createElement('div');story.setAttribute('data-testid','commentable_feed_story');
+const card=document.querySelector('article');while(card.firstChild)story.append(card.firstChild);card.append(story);
 </script></body></html>

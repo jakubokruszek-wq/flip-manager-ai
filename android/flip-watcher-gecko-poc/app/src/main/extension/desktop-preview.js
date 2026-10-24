@@ -37,7 +37,7 @@ function photoNodes(card,postId,group,core,audit=null){
  for(const n of [...native,...css]){
   const background=css.includes(n);count(background?'photoRawCss':n.tagName==='IMG'?'photoRawImg':'photoRawSvg');
   if(n.closest('[role="article"],article')!==card){count('photoOwnerRejected');continue;}
-  if(n.closest('[role="comment"],[data-testid*="comment"],[data-ad-rendering-role*="comment"],video')){count('photoScopeRejected');continue;}
+  if(n.closest('[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],video')){count('photoScopeRejected');continue;}
   const rect=n.getBoundingClientRect();const a=n.closest('a[href]');const mediaId=photoLinkId(a?.href);let linkedPostId=null;
   if(a&&!mediaId){const p=core.parsePostLink(a.href);if(p?.sourceType!=='GROUP'||p.sourceId!==group||(postId!==null&&p.postId!==postId)){count('photoAnchorRejected');continue;}linkedPostId=p.postId;}
   if(rect.width<80||rect.height<80){count('photoSizeRejected');continue;}
