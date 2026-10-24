@@ -178,6 +178,21 @@ function recoveryContainer(w,core,group){
  // Move the outermost eligible ancestor, rather than another exhausted inner feed.
  return usable.at(-1)||null;
 }
+// 0.5.7 (40a236f) tail alignment, with the later fail-closed 100-card cap.
+function baselineTailTarget(w,core,group){
+ const doc=w.document;
+ const cards=Array.from(doc.querySelectorAll('[role="article"],article')).filter(c=>!c.parentElement?.closest('[role="article"],article'));
+ if(cards.length>100)return null;
+ const card=cards.at(-1);
+ if(!card||card.isConnected===false||card.ownerDocument!==doc||typeof card.scrollIntoView!=='function'||card.closest('[role="dialog"],[role="comment"],[data-testid*="comment"]'))return null;
+ const links=Array.from(card.querySelectorAll('a[href]')).filter(a=>a.closest('[role="article"],article')===card).slice(0,100).map(a=>core.parsePostLink(a.href)).filter(Boolean);
+ if(!links.length||links.some(l=>l.sourceType!=='GROUP'||l.sourceId!==group)||new Set(links.map(l=>l.postId)).size!==1)return null;
+ const rect=card.getBoundingClientRect();
+ const vp=w.visualViewport,top=Number(vp?.offsetTop)||0,height=Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight);
+ if(rect.width<250||rect.height<1||rect.bottom<=top+height-16||rect.left>=w.innerWidth||rect.right<=0)return null;
+ return card;
+}
+
 function tailTarget(w,core,group){
  const card=boundTail(w,core,group);if(!card)return null;
  const rect=card.getBoundingClientRect();
@@ -214,6 +229,9 @@ function readDOM(w,model,core,group){
 async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=null){
  const empty=reason=>({status:'STOP',reason,rows:[],stats:zero()});
  if(m.consent!==true||!safe(m))return empty('CONTEXT');
+ const baseline=m.baselineScroll===true;
+ if(baseline&&(m.photosConsent===true||m.viewportConsent===true))return empty('CONTEXT');
+ const selectTail=baseline?baselineTailTarget:tailTarget;
  const uuid=/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
  const origin=w.performance.timeOrigin;
  const fresh=m.previousDocumentId!==undefined||m.previousTimeOrigin!==undefined?
@@ -231,7 +249,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   const active=async()=>{if(invalid||!safe(m)||w.performance.now()>=end)return false;const c=await send({type:'desktopContext',nonce:m.nonce});return !invalid&&safe(m)&&c?.active===true&&c.nonce===m.nonce;};
   // Reserve time for final extraction and native delivery within the original deadline.
   const scrollStart=w.performance.now(),scrollEnd=Math.min(scrollStart+30000,end-1500);
-  let noTargetStreak=0,lastTailAt=-Infinity,nativeFailures=0,lastMoved=null;const photoSlots=new Map(),viewport=w.FlipDesktopViewport;let mediaBindings=[];const snapshots=new Map();
+  let noTargetStreak=0,lastTailAt=-Infinity,nativeFailures=0,lastMoved=null;const photoSlots=new Map(),viewport=baseline?null:w.FlipDesktopViewport;let mediaBindings=[];const snapshots=new Map();
   model.stats.viewportModule=Number(!!viewport);
   model.stats.viewportGranted=Number(m.viewportConsent===true||m.photosConsent===true);
   if(viewport&&model.stats.viewportGranted){
@@ -280,9 +298,9 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
    // Retry a not-yet-scrollable feed within the same bounded window.
    if(!container){
     noTargetStreak++;
-    const tail=noTargetStreak>=2&&model.stats.scrollTailAttempts<2&&w.performance.now()-lastTailAt>=5000?tailTarget(w,core,m.groupId):null;
+    const tail=noTargetStreak>=2&&model.stats.scrollTailAttempts<2&&w.performance.now()-lastTailAt>=5000?selectTail(w,core,m.groupId):null;
     if(tail){
-     if(!await active()||tailTarget(w,core,m.groupId)!==tail)return empty('CONTEXT');
+     if(!await active()||selectTail(w,core,m.groupId)!==tail)return empty('CONTEXT');
      if(w.performance.now()>=scrollEnd)break;
      const moved=scrollTrace(w,tail);lastTailAt=w.performance.now();
      tail.scrollIntoView({block:'end',inline:'nearest',behavior:'instant'});
@@ -292,7 +310,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
      if(moved()){model.stats.scrollMoves++;model.stats.scrollTailMoves++;}else model.stats.scrollStalls++;
      continue;
     }
-    container=noTargetStreak>=2?recoveryContainer(w,core,m.groupId):null;
+    container=!baseline&&noTargetStreak>=2?recoveryContainer(w,core,m.groupId):null;
     if(!container){
      let point=viewport&&m.viewportConsent===true&&noTargetStreak>=2&&nativeFailures<3?viewport.point(w,core,m.groupId,lastMoved,model.stats):null;
      if(!point&&viewport&&m.viewportConsent===true&&noTargetStreak>=2&&nativeFailures<3)model.stats.pointMisses++;
@@ -331,5 +349,5 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
  }catch{return empty('ERROR');}
  finally{setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
-const api={imageURL,photoLinkId,photoNodes,domPhotos,recoveryContainer,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
+const api={imageURL,photoLinkId,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);

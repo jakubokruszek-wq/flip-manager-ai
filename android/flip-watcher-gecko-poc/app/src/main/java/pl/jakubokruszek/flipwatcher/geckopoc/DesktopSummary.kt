@@ -6,7 +6,8 @@ import org.json.JSONObject
 class DesktopSummary private constructor(val verdict:String,val reason:String,val offers:Int,val navigations:Int,val stats:Map<String,Int>){
     fun encode():String=JSONObject().put("verdict",verdict).put("reason",reason).put("offers",offers).put("navigations",navigations).put("stats",JSONObject(stats)).toString()
     fun report():String=buildString {
-        appendLine("KOMPUTER 0.5.15 • tylko lokalnie • $verdict")
+        appendLine("KOMPUTER 0.5.16 • tylko lokalnie • $verdict")
+        if(stats.getValue("viewportGranted")==0)appendLine("Tryb bez miniatur i wejścia GeckoView; DOM i pola ofert pozostają aktywne.")
         appendLine("Powód: $reason • tryb komputerowy: ${stats.getValue("desktop")} • nawigacje: $navigations/4")
         appendLine("Dokładne ID/permalinki: ${stats.getValue("candidates")} • kandydaci ofert po filtrach: $offers")
         appendLine("Odczyty rekordów DOM (powtórzenia): ${stats.getValue("dom")} • dane strony: ${stats.getValue("hydration")} • sieć: ${stats.getValue("network")}")
