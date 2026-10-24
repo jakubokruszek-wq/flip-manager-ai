@@ -1,7 +1,7 @@
 /* Isolated/native-consented local projection. No storage, upload or public page bridge. */
 (function(root){
 'use strict';
-const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible','scrollNativeSteps','scrollNativeMoves','photoPreviewFrames','photoPreviews','viewportHeight','visualViewportHeight','rootRemaining','viewportModule','viewportGranted','viewportReady','viewportProbeCode','nativeRequests','nativeRejected','nativeTimeout','pointMisses','mediaBindingPosts','pointProbes','pointEmpty','pointFrame','pointForeign','pointForm','pointDialog','pointComment','pointCommentable','pointChrome','pointUnbound','pointWidget','pointCache','pointCacheCards','pointRects','viewportWidth','visualWidth','visualOffsetX','visualOffsetY','visualScale100'];
+const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible','scrollNativeSteps','scrollNativeMoves','photoPreviewFrames','photoPreviews','viewportHeight','visualViewportHeight','rootRemaining','viewportModule','viewportGranted','viewportReady','viewportProbeCode','nativeRequests','nativeRejected','nativeTimeout','pointMisses','mediaBindingPosts','pointProbes','pointEmpty','pointFrame','pointForeign','pointForm','pointDialog','pointComment','pointCommentable','pointChrome','pointUnbound','pointWidget','pointCache','pointCacheCards','pointRects','viewportWidth','visualWidth','visualOffsetX','visualOffsetY','visualScale100','gestureRequested','gestureTouches','gestureAnchored','gestureRejected','gestureWaitMs','gestureScrollSteps','gestureScrollMoves'];
 const zero=()=>Object.fromEntries(statKeys.map(k=>[k,0]));
 function groupURL(raw,group,fixture){try{const u=new URL(raw);return /^[A-Za-z0-9._-]{1,100}$/.test(group)&&!u.username&&!u.password&&!u.hash&&(fixture||!u.search)&&u.pathname.replace(/\/$/,'')==='/groups/'+group&&((u.protocol==='https:'&&!u.port&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))||(fixture===true&&u.protocol==='http:'&&u.hostname==='127.0.0.1'));}catch{return false;}}
 function exact(raw,group){try{const u=new URL(raw);const p=u.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d{5,30})\/?$/);return u.protocol==='https:'&&!u.port&&!u.username&&!u.password&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&p?.[1]===group?p[2]:null;}catch{return null;}}
@@ -230,7 +230,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
  const empty=reason=>({status:'STOP',reason,rows:[],stats:zero()});
  if(m.consent!==true||!safe(m))return empty('CONTEXT');
  const baseline=m.baselineScroll===true;
- if(baseline&&(m.photosConsent===true||m.viewportConsent===true))return empty('CONTEXT');
+ if((m.gestureScroll===true&&!baseline)||baseline&&(m.photosConsent===true||m.viewportConsent===true))return empty('CONTEXT');
  const selectTail=baseline?baselineTailTarget:tailTarget;
  const uuid=/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
  const origin=w.performance.timeOrigin;
@@ -238,7 +238,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   uuid.test(m.previousDocumentId||'')&&uuid.test(documentId||'')&&documentId!==m.previousDocumentId&&Number.isFinite(m.previousTimeOrigin)&&m.previousTimeOrigin>0&&Number.isFinite(origin)&&origin>=m.previousTimeOrigin:
   Number.isSafeInteger(m.documentAfter)&&Number.isFinite(origin)&&origin>m.documentAfter;
  if(!fresh)return {status:'WAIT_FRESH',reason:'FRESHNESS',rows:[],stats:zero()};
- const model=createModel(core,fields,m.groupId);let invalid=false,dispose=null;const end=w.performance.now()+Math.min(60000,Math.max(0,Number(m.remainingMs)||0));
+ const model=createModel(core,fields,m.groupId);let invalid=false,dispose=null,gestureWatch=null;const end=w.performance.now()+Math.min(60000,Math.max(0,Number(m.remainingMs)||0));
  let wake;const cancelled=new Promise(r=>{wake=r;});
  const abort=()=>{if(invalid)return;invalid=true;model.clear();wake();notify({type:'desktopPreviewStop',nonce:m.nonce});void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});};
  const pause=ms=>Promise.race([new Promise(r=>w.setTimeout(r,ms)),cancelled]);setAbort(abort);
@@ -247,8 +247,19 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   dispose=w.FlipVisiblePosts.watch(w,m,abort);
   const ack=await send({type:'confirmDesktop',nonce:m.nonce,safe:true});if(!ack?.confirmed||invalid||!safe(m))return empty('CONTEXT');
   const active=async()=>{if(invalid||!safe(m)||w.performance.now()>=end)return false;const c=await send({type:'desktopContext',nonce:m.nonce});return !invalid&&safe(m)&&c?.active===true&&c.nonce===m.nonce;};
+  let gestureTarget=null;
+  model.stats.gestureRequested=Number(m.gestureScroll===true);
+  if(m.gestureScroll===true){
+   if(!w.FlipDesktopGesture)return empty('ERROR');
+   const began=w.performance.now();gestureWatch=w.FlipDesktopGesture.start(w,Math.min(15000,Math.max(0,end-began-1500)));
+   notify({type:'desktopGestureHint',nonce:m.nonce,stage:'WAITING'});
+   const picked=await Promise.race([gestureWatch.promise,cancelled]);
+   if(invalid||!safe(m))return empty('CONTEXT');
+   gestureTarget=picked?.target||null;if(gestureTarget)notify({type:'desktopGestureHint',nonce:m.nonce,stage:'ANCHORED'});model.stats.gestureWaitMs=Math.min(15000,Math.max(0,Math.floor(w.performance.now()-began)));
+   for(const [from,to] of [['touches','gestureTouches'],['anchored','gestureAnchored'],['rejected','gestureRejected']])model.stats[to]=picked?.stats?.[from]||0;
+  }
   // Reserve time for final extraction and native delivery within the original deadline.
-  const scrollStart=w.performance.now(),scrollEnd=Math.min(scrollStart+30000,end-1500);
+  const scrollStart=w.performance.now(),scrollEnd=m.gestureScroll===true&&!gestureTarget?scrollStart:Math.min(scrollStart+30000,end-1500);
   let noTargetStreak=0,lastTailAt=-Infinity,nativeFailures=0,lastMoved=null;const photoSlots=new Map(),viewport=baseline?null:w.FlipDesktopViewport;let mediaBindings=[];const snapshots=new Map();
   model.stats.viewportModule=Number(!!viewport);
   model.stats.viewportGranted=Number(m.viewportConsent===true||m.photosConsent===true);
@@ -294,7 +305,13 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
     }
    }
    if(step===30||w.performance.now()>=scrollEnd)break;
-   let recovered=false,container=scrollContainer(w,model.stats);
+   let recovered=false,container;
+   if(m.gestureScroll===true){
+    if(!gestureWatch.valid(gestureTarget))return empty('CONTEXT');
+    const root=gestureTarget===w.document.scrollingElement,pos=root?Math.max(w.scrollY||0,gestureTarget.scrollTop||0):gestureTarget.scrollTop||0;
+    if(gestureTarget.scrollHeight-gestureTarget.clientHeight-pos<=2){model.stats.scrollAtEnd=Math.max(1,model.stats.scrollAtEnd);model.stats.scrollNoTarget++;await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now())));continue;}
+    container=gestureTarget;model.stats[root?'scrollRoot':'scrollInner']=1;
+   }else container=scrollContainer(w,model.stats);
    // Retry a not-yet-scrollable feed within the same bounded window.
    if(!container){
     noTargetStreak++;
@@ -331,12 +348,13 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
    }
    if(!recovered)noTargetStreak=0;
    const root=container===w.document.scrollingElement;
-   const before=root?w.scrollY:container.scrollTop;
+   const readPosition=()=>root&&m.gestureScroll===true?Math.max(w.scrollY||0,container.scrollTop||0):root?w.scrollY:container.scrollTop;
+   const before=readPosition();
    const top=Math.max(400,Math.min(900,Math.round((root?w.innerHeight:container.clientHeight)*.85)));
    if(root)w.scrollBy({left:0,top,behavior:'instant'});else container.scrollBy({left:0,top,behavior:'instant'});
-   model.stats.scrollSteps++;
+   model.stats.scrollSteps++;if(m.gestureScroll===true)model.stats.gestureScrollSteps++;
    await pause(Math.min(1000,Math.max(0,scrollEnd-w.performance.now()))); // measure rendered movement, at most one attempt per second
-   if((root?w.scrollY:container.scrollTop)>before){model.stats.scrollMoves++;lastMoved=container;}else model.stats.scrollStalls++;
+   if(readPosition()>before){model.stats.scrollMoves++;if(m.gestureScroll===true)model.stats.gestureScrollMoves++;lastMoved=container;}else model.stats.scrollStalls++;
   }
   model.stats.scrollElapsedMs=Math.min(30000,Math.max(0,Math.floor(w.performance.now()-scrollStart)));
   await pause(700);if(!await active())return empty('CONTEXT');readDOM(w,model,core,m.groupId);
@@ -344,10 +362,10 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   for(const row of result.rows||[])if(snapshots.get(row.postId)!==JSON.stringify(row))model.merge(row);
   for(const k of ['network','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped'])model.stats[k]=result.stats?.[k]||0;
   model.stats.desktop=w.innerWidth>=900?1:0;
-  for(const k of statKeys)model.stats[k]=Math.max(0,Math.min(k==='bytes'?4194304:k==='scrollElapsedMs'?30000:10000,Math.floor(model.stats[k])));
+  for(const k of statKeys)model.stats[k]=Math.max(0,Math.min(k==='bytes'?4194304:k==='scrollElapsedMs'?30000:k==='gestureWaitMs'?15000:10000,Math.floor(model.stats[k])));
   return {status:'OK',reason:'DONE',rows:model.rows(),stats:{...model.stats}};
  }catch{return empty('ERROR');}
- finally{setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
+ finally{gestureWatch?.stop();setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
 const api={imageURL,photoLinkId,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);

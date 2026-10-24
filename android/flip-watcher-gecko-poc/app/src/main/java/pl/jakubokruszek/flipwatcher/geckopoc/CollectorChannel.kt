@@ -23,6 +23,7 @@ class CollectorChannel(
     private val onPageConnected: () -> Unit = {},
     private val onShareStop: () -> Unit = {},
     private val onDesktopStop: () -> Unit = {},
+    private val onDesktopGesture: (String) -> Unit = {},
     private val onProbe: (PageProbe) -> Unit = {},
 ) {
     private var shareNonce: String? = null
@@ -48,6 +49,7 @@ class CollectorChannel(
             val json = ScanProtocol.asJson(message) ?: return
             when (json.optString("type")) {
                 "desktopViewportRequest" -> viewportBridge?.handle(json){ack->if(port===this@CollectorChannel.port)runCatching{port.postMessage(ack)}}
+                "desktopGestureHint" -> desktopNonce?.let{nonce->DesktopProtocol.gestureHint(json,nonce)?.let(onDesktopGesture)}
                 "desktopPreviewStop" -> if(json.optString("nonce")==desktopNonce)onDesktopStop()
                 "shareLinkStop" -> if (json.optString("nonce") == shareNonce) onShareStop()
                 "visiblePostsStop" -> onVisibleStop()
@@ -108,9 +110,9 @@ class CollectorChannel(
         val result=request(nonce,JSONObject().put("type","armDesktopPreview").put("nonce",nonce).put("consent",true).put("desktopConsent",true).put("groupId",group).put("allowLoopback",fixtureMode).put("windowMs",windowMs),5_000)
         return if(result?.optString("type")=="desktopArmed"&&result.optString("nonce")==nonce)result.optString("status").takeIf{it in setOf("ARMED","STOP","BUSY","UNSUPPORTED")}?:"STOP" else "STOP"
     }
-    suspend fun desktopPreview(nonce:String,documentAfter:Long,remainingMs:Int,group:String=PocPolicy.APPROVED_GROUP_ID,previous:DesktopDocumentProof?=null,baseline:Boolean=false):DesktopReply? {
+    suspend fun desktopPreview(nonce:String,documentAfter:Long,remainingMs:Int,group:String=PocPolicy.APPROVED_GROUP_ID,previous:DesktopDocumentProof?=null,baseline:Boolean=false,gesture:Boolean=false):DesktopReply? {
         if(desktopNonce!=nonce||previous==null)return null
-        val result=request(nonce,JSONObject().put("type","desktopPreview").put("nonce",nonce).put("consent",true).put("groupId",group).put("allowLoopback",fixtureMode).put("documentAfter",documentAfter).put("remainingMs",remainingMs).put("previousDocumentId",previous.documentId).put("previousTimeOrigin",previous.timeOrigin).put("baselineScroll",baseline).put("viewportConsent",!baseline&&viewportBridge!=null).put("photosConsent",!baseline&&viewportBridge!=null),remainingMs.toLong().coerceIn(500,60_000))
+        val result=request(nonce,JSONObject().put("type","desktopPreview").put("nonce",nonce).put("consent",true).put("groupId",group).put("allowLoopback",fixtureMode).put("documentAfter",documentAfter).put("remainingMs",remainingMs).put("previousDocumentId",previous.documentId).put("previousTimeOrigin",previous.timeOrigin).put("baselineScroll",baseline).put("gestureScroll",gesture).put("viewportConsent",!baseline&&viewportBridge!=null).put("photosConsent",!baseline&&viewportBridge!=null),remainingMs.toLong().coerceIn(500,60_000))
         return DesktopProtocol.parse(result,nonce,group)
     }
     fun abortDesktop(){viewportBridge?.let{it.close();lastViewportCaptureCounts=it.captureCounts.toList()};viewportBridge=null;desktopNonce=null;runCatching{port?.postMessage(JSONObject().put("type","abortDesktopPreview").put("nonce",UUID.randomUUID().toString()))}}

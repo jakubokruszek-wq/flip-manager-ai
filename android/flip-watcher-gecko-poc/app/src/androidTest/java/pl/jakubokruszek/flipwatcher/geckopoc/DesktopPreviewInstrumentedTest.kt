@@ -7,6 +7,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
@@ -21,6 +22,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 @RunWith(AndroidJUnit4::class)
 class DesktopPreviewInstrumentedTest {
     private val context:Context=ApplicationProvider.getApplicationContext()
+    // Local fixture only: normal Android touch input, never included in the app APK.
+    private suspend fun fixtureSwipe(view:GeckoView){
+        val down=android.os.SystemClock.uptimeMillis();val x=view.width*.75f;val start=view.height*.8f
+        fun send(action:Int,y:Float){val e=android.view.MotionEvent.obtain(down,android.os.SystemClock.uptimeMillis(),action,x,y,0);e.source=android.view.InputDevice.SOURCE_TOUCHSCREEN;try{view.onTouchEvent(e)}finally{e.recycle()}}
+        send(android.view.MotionEvent.ACTION_DOWN,start)
+        try{delay(50);for(i in 1..12){send(android.view.MotionEvent.ACTION_MOVE,start-view.height*.5f*i/12);delay(40)}}
+        finally{send(android.view.MotionEvent.ACTION_UP,start-view.height*.5f)}
+    }
     @Test fun desktopModeCapturesInitialNetworkDomAndHydrationWithSameRunner(){
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use {scenario->
             var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it}
@@ -120,14 +129,17 @@ class DesktopPreviewInstrumentedTest {
     @Test fun nativeWheelUsesSafeMarginWhenCentralIframeBlocksOldProbes()=checkNativeViewport(true,false,false,true)
     @Test fun anonymousAncestorHitScrollsAndCapturesDelegatedImages()=checkNativeViewport(true,false,false,false,true)
     @Test fun baselineScrollIgnoresAvailableNativeViewAndCapturesNoPixels()=checkNativeViewport(false,baseline=true)
-    private fun checkNativeViewport(deep:Boolean,networkOnly:Boolean=false,cachedFeed:Boolean=false,marginOnly:Boolean=false,delegated:Boolean=false,baseline:Boolean=false){
+    @Test fun trustedSwipeSelectsActualPaneAndAutomaticContinuationIgnoresFiniteDecoy()=checkNativeViewport(false,baseline=true,gesture=true)
+    @Test fun noOperatorGestureNeverStartsAutomaticScrollOrPixelReadback()=checkNativeViewport(false,baseline=true,gesture=true,noGesture=true)
+    private fun checkNativeViewport(deep:Boolean,networkOnly:Boolean=false,cachedFeed:Boolean=false,marginOnly:Boolean=false,delegated:Boolean=false,baseline:Boolean=false,gesture:Boolean=false,noGesture:Boolean=false){
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use {scenario->
             var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it}
             runBlocking{withTimeout(70_000){withContext(Dispatchers.Main){
-                val server=LoopbackFixtureServer(pages=if(networkOnly)mapOf("/api/graphql/" to "network-media")else emptyMap()){asset->
+                val gestureSeen=AtomicBoolean(false)
+                val server=LoopbackFixtureServer(pages=if(networkOnly)mapOf("/api/graphql/" to "network-media")else emptyMap(),onRequest={path,_->if(path=="/gesture-ready")gestureSeen.set(true)}){asset->
                     if(networkOnly&&asset=="fixtures/network-media.html")"""{"post_id":"550000000000091","url":"https://www.facebook.com/groups/1234567890123/posts/550000000000091/","message":{"text":"Sprzedam mieszkanie 42m2. Cena 319000 zł."},"attachments":[{"media":{"__typename":"Photo","photo_id":"880000000000001","image":{"uri":"https://scontent.fbcdn.net/red.jpg"}}},{"media":{"__typename":"Photo","photo_id":"880000000000002","image":{"uri":"https://scontent.fbcdn.net/green.jpg"}}}]}"""
                     else {
-                    val selected=if(asset=="fixtures/desktop-start.html")(if(baseline)"fixtures/desktop-start.html" else if(deep)"fixtures/desktop-viewport-deep.html" else "fixtures/desktop-viewport.html") else asset
+                    val selected=if(asset=="fixtures/desktop-start.html")(if(gesture)"fixtures/desktop-gesture.html" else if(baseline)"fixtures/desktop-start.html" else if(deep)"fixtures/desktop-viewport-deep.html" else "fixtures/desktop-viewport.html") else asset
                     runCatching{context.assets.open(selected).bufferedReader().use{it.readText()}}.getOrNull()?.let{html->if(baseline)html.replace("height:1800px","height:50000px")else if(networkOnly)html.replace("<a href=\"https://www.facebook.com/groups/1234567890123/posts/550000000000091/\">Post</a>","<span>Post without DOM identity</span>").replace("<head>","<head><script>fetch('/api/graphql/').then(r=>r.text());</script>")else if(cachedFeed)html.replace("</main>","<div style=\"height:6000px\" id=\"blank-tail\"></div></main>").replace("<main role=\"feed\"", "<div id=\"feed\"").replace("</main>","</div>").replace("document.querySelector('main')","document.querySelector('#feed')").replace("groups/1234567890123/posts/550000000000091/","groups/other/posts/550000000000091/").replace("groups/1234567890123/posts/550000000000092/","groups/other/posts/550000000000092/").replace("<div role=\"article\" style=\"height:20px\">","<div style=\"height:20px\">")else if(delegated)html.replace("<main style=", "<div id=\"feed\" style=").replace("</main>","</div>").replace("document.querySelector('main')","document.querySelector('#feed')").replace("height:9000px", "height:50000px;pointer-events:none")else if(marginOnly)html.replace("height:9000px","height:50000px").replace("</body>","<iframe sandbox=\"\" style=\"position:fixed;left:20vw;top:20vh;width:60vw;height:60vh;z-index:10000\"></iframe></body>")else html}
                     }
                 }
@@ -150,10 +162,28 @@ class DesktopPreviewInstrumentedTest {
                     channel.attach(GeckoHost.collectorExtension(context));session.open(GeckoHost.runtime(context));host!!.geckoView.setSession(session);session.setActive(true)
                     session.loadUri(target);assertTrue(channel.awaitPort(15_000));withTimeout(15_000){while(!loaded||current!=target)delay(100)}
                     val trial=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=trial;assertTrue(trial.begin(true))
-                    val result=DesktopSessionPreview.run(session,channel,trial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=40_000,view=host!!.geckoView,images=images,baseline=baseline)
+                    val operator=if(gesture&&!noGesture)launch{
+                        while(trial.phase!=DesktopTrial.Phase.READING)delay(100)
+                        delay(3000)
+                        repeat(3){if(gestureSeen.get())return@launch;fixtureSwipe(host!!.geckoView);delay(500)}
+                    }else null
+                    val result=DesktopSessionPreview.run(session,channel,trial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=40_000,view=host!!.geckoView,images=images,baseline=baseline,gesture=gesture)
+                    operator?.cancel()
                     assertEquals("DONE",result.reason);val reply=result.reply!!
                     android.util.Log.i("GeckoPocTest","NATIVE_CAPTURE_COUNTS ${channel.lastViewportCaptureCounts.joinToString(",")}")
-                    android.util.Log.i("GeckoPocTest","VIEWPORT_BEFORE_ASSERT deep=$deep networkOnly=$networkOnly delegated=$delegated baseline=$baseline pictures=${images.count} newOffer=${reply.rows.any{it.postId=="550000000000096"}} ${DesktopSummary.create("DONE",trial.requests,reply).report()}")
+                    android.util.Log.i("GeckoPocTest","VIEWPORT_BEFORE_ASSERT deep=$deep networkOnly=$networkOnly delegated=$delegated baseline=$baseline gesture=$gesture pictures=${images.count} newOffer=${reply.rows.any{it.postId=="550000000000096"}} ${DesktopSummary.create("DONE",trial.requests,reply).report()}")
+                    if(noGesture){
+                        assertEquals(0,reply.stats.getValue("gestureAnchored"));assertEquals(0,reply.stats.getValue("scrollSteps"))
+                        assertTrue(reply.stats.getValue("gestureWaitMs") in 14000..15000)
+                        for(key in listOf("nativeRequests","photoPreviewFrames","photoPreviews"))assertEquals(0,reply.stats.getValue(key))
+                        assertEquals(0,images.count);assertTrue(channel.lastViewportCaptureCounts.isEmpty());return@withContext
+                    }
+                    if(gesture){
+                        assertTrue("real local pane must have moved",gestureSeen.get())
+                        assertEquals("browser-trusted swipe must select the actual pane",1,reply.stats.getValue("gestureAnchored"))
+                        assertTrue("automatic continuation must outlast finite decoy",reply.stats.getValue("gestureScrollMoves")>=25)
+                        assertTrue("new exact offer must be extracted",reply.rows.any{it.postId=="550000000000096"&&it.area==68.0&&it.price==680000.0})
+                    }
                     if(baseline){
                         assertTrue("baseline must really scroll throughout the window",reply.stats.getValue("scrollMoves")>=25)
                         assertTrue(reply.stats.getValue("scrollElapsedMs") in 29000..30000)

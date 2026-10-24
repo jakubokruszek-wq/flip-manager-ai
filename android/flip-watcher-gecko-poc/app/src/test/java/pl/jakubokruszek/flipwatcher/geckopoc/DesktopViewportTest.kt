@@ -59,4 +59,18 @@ class DesktopViewportTest {
         val raw=JSONObject().put("verdict","NO_GO").put("reason","EMPTY").put("offers",0).put("navigations",1).put("stats",JSONObject(stats)).toString()
         val result=DesktopSummary.decode(raw)!!;assertEquals(0,result.stats.getValue("pointProbes"));assertEquals(0,result.stats.getValue("pointFrame"))
     }
+    @Test fun gestureCountersAreBoundedAndOldSeventyThreeFieldHistorySurvives(){
+        val stats=DesktopProtocol.emptyStats().toMutableMap().apply{put("gestureRequested",1);put("gestureTouches",1);put("gestureAnchored",1);put("gestureWaitMs",15000)}
+        assertNotNull(DesktopProtocol.parseStats(JSONObject(stats)))
+        for((key,value) in listOf("gestureRequested" to 2,"gestureTouches" to 21,"gestureRejected" to 21,"gestureWaitMs" to 15001,"gestureScrollSteps" to 1)){assertNull(key,DesktopProtocol.parseStats(JSONObject(stats).put(key,value)))}
+        val raw=JSONObject().put("verdict","NO_GO").put("reason","EMPTY").put("offers",0).put("navigations",1).put("stats",JSONObject(DesktopProtocol.emptyStats().filterKeys{it in DesktopProtocol.statKeys.take(73)})).toString()
+        assertEquals(0,DesktopSummary.decode(raw)!!.stats.getValue("gestureRequested"))
+        assertNull(DesktopProtocol.parseStats(JSONObject(stats).put("gestureTarget","PRIVATE")))
+    }
+    @Test fun gesturePhaseHintsRequireExactNonceAndOnlyFixedStage(){
+        val hint=JSONObject().put("type","desktopGestureHint").put("nonce",nonce).put("stage","WAITING")
+        assertEquals("WAITING",DesktopProtocol.gestureHint(hint,nonce));assertNull(DesktopProtocol.gestureHint(hint,"stale"))
+        assertNull(DesktopProtocol.gestureHint(JSONObject(hint.toString()).put("stage","SCRIPT"),nonce))
+        assertNull(DesktopProtocol.gestureHint(JSONObject(hint.toString()).put("target","PRIVATE"),nonce))
+    }
 }

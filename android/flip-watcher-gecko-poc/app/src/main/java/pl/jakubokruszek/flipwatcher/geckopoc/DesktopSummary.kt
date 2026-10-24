@@ -6,8 +6,13 @@ import org.json.JSONObject
 class DesktopSummary private constructor(val verdict:String,val reason:String,val offers:Int,val navigations:Int,val stats:Map<String,Int>){
     fun encode():String=JSONObject().put("verdict",verdict).put("reason",reason).put("offers",offers).put("navigations",navigations).put("stats",JSONObject(stats)).toString()
     fun report():String=buildString {
-        appendLine("KOMPUTER 0.5.16 • tylko lokalnie • $verdict")
+        appendLine("KOMPUTER 0.5.17 • tylko lokalnie • $verdict")
         if(stats.getValue("viewportGranted")==0)appendLine("Tryb bez miniatur i wejścia GeckoView; DOM i pola ofert pozostają aktywne.")
+        if(stats.getValue("gestureRequested")==1){
+            appendLine("Cel wskazany gestem: ${stats.getValue("gestureAnchored")} • gesty ${stats.getValue("gestureTouches")} • odmowy ${stats.getValue("gestureRejected")} • oczekiwanie ${stats.getValue("gestureWaitMs")} ms / 15000")
+            appendLine("Kontynuacja wskazanego kontenera: ${stats.getValue("gestureScrollMoves")}/${stats.getValue("gestureScrollSteps")}")
+            if(stats.getValue("gestureAnchored")==0)appendLine("UWAGA: nie wskazano kontenera rzeczywistym przesunięciem palca; automatyczne przewijanie nie rozpoczęło się.")
+        }
         appendLine("Powód: $reason • tryb komputerowy: ${stats.getValue("desktop")} • nawigacje: $navigations/4")
         appendLine("Dokładne ID/permalinki: ${stats.getValue("candidates")} • kandydaci ofert po filtrach: $offers")
         appendLine("Odczyty rekordów DOM (powtórzenia): ${stats.getValue("dom")} • dane strony: ${stats.getValue("hydration")} • sieć: ${stats.getValue("network")}")
@@ -53,7 +58,7 @@ class DesktopSummary private constructor(val verdict:String,val reason:String,va
             if(verdict !in setOf("CONDITIONAL_GO","NO_GO")||reason !in DesktopTrial.reasons||j.opt("offers") !is Int||j.opt("navigations") !is Int)return null
             val offers=j.getInt("offers");val nav=j.getInt("navigations");val stored=j.getJSONObject("stats")
             // Read old count-only history without changing/deleting it; fresh protocol stays strict.
-            for(size in listOf(22,30,34,38,45,54))if(stored.keys().asSequence().toSet()==DesktopProtocol.statKeys.take(size).toSet())for(key in DesktopProtocol.statKeys.drop(size))stored.put(key,0)
+            for(size in listOf(22,30,34,38,45,54,73))if(stored.keys().asSequence().toSet()==DesktopProtocol.statKeys.take(size).toSet())for(key in DesktopProtocol.statKeys.drop(size))stored.put(key,0)
             val stats=DesktopProtocol.parseStats(stored)?:return null
             if(verdict=="NO_GO"&&offers!=0)return null
             if(offers !in 0..20||nav !in 0..4||offers>stats.getValue("candidates")||(verdict=="CONDITIONAL_GO")!=(reason=="DONE"&&offers>0))return null

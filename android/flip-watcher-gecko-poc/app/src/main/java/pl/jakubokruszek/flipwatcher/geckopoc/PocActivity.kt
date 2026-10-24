@@ -79,6 +79,8 @@ class PocActivity : ComponentActivity() {
     private var visibleBusy = false
     internal val desktopThumbnails=DesktopThumbnails()
     private var desktopBusy=false
+    private var desktopGesture=false
+    private var desktopGestureStage="LOADING"
     private var desktopGate:DesktopTrial?=null
     private var desktopNonce:String?=null
     private var desktopJob:Job?=null
@@ -191,17 +193,23 @@ class PocActivity : ComponentActivity() {
         if(desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||kind!=PageKind.APPROVED_GROUP||progress!=100||channel?.isConnected!=true)return
         val currentSession=session?:return;val currentChannel=channel?:return;val target=url?:return
         val extended=android.widget.CheckBox(this).apply{text="Eksperymentalne miniatury i przewijanie GeckoView";isChecked=false;tag="poc.desktop.extended"}
-        desktopConsentDialog=AlertDialog.Builder(this).setTitle("Jedna próba komputerowa — lokalnie").setView(extended)
-            .setMessage("NOWA JEDNORAZOWA ZGODA: raz otworzyć zatwierdzoną grupę w standardowym trybie komputerowym GeckoView? Domyślnie pętla przewijania z 0.5.7, bez miniatur i wejścia native. Opcja poniżej osobno włącza eksperymentalne miniatury w RAM i oficjalne wejście kółka myszy przy zatrzymaniu DOM. Do 60 s łącznie, do 30 s / 30 kroków przewijania i maksymalnie 20 ID. Odczyt DOM, danych strony i odpowiedzi fetch/XHR/other tej grupy: do 64 odpowiedzi, 2 MiB każda, 4 MiB łącznie; nasłuch przed otwarciem. Bez odczytu Beacon, nagłówków, formularzy, cookies lub tokenów. Pola ofert są heurystyczne, ID/permalinki dokładne. Opcjonalne miniatury: do 3 widocznych zdjęć/post, przejściowy obraz widoku w RAM usuwany po wycięciu, bez dodatkowego pobierania mediów. Podgląd znika po pauzie lub zmianie kontekstu; lokalnie zapisuje się tylko raport liczbowy bez treści i ID. Bez uploadu i kolektora; stary limit skanu bez zmian. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu lub wygaszenie: STOP. Tryb komputerowy pozostaje do zamknięcia sesji. Zgoda i wybór opcji nie są zapamiętywane.")
+        val gesture=android.widget.CheckBox(this).apply{text="Wskaż obszar jednym przesunięciem palca";isChecked=true;tag="poc.desktop.gesture"}
+        extended.isEnabled=false
+        gesture.setOnCheckedChangeListener{_,checked->extended.isEnabled=!checked;if(checked)extended.isChecked=false}
+        val options=android.widget.LinearLayout(this).apply{orientation=android.widget.LinearLayout.VERTICAL;addView(gesture);addView(extended)}
+        desktopConsentDialog=AlertDialog.Builder(this).setTitle("Jedna próba komputerowa — lokalnie").setView(options)
+            .setMessage("NOWA JEDNORAZOWA ZGODA: raz otworzyć zatwierdzoną grupę w standardowym trybie komputerowym GeckoView? Domyślnie po załadowaniu grupy masz do 15 s na jedno przesunięcie palcem w górę w treści grupy. Aplikacja rozpozna rzeczywiście przesunięty kontener i będzie go przewijać automatycznie do 30 s. Obserwuje tylko zaufany gest i liczby ruchu, dane gestu są chwilowo w RAM, raport nie zawiera współrzędnych ani treści. Bez wskazania nie rozpocznie automatycznego przewijania. Zdjęcia są wyłączone. Po odznaczeniu wskazania gestem pozostaje pętla z 0.5.7. Opcja poniżej osobno włącza eksperymentalne miniatury w RAM i oficjalne wejście kółka myszy przy zatrzymaniu DOM. Do 60 s łącznie, do 30 s / 30 kroków przewijania i maksymalnie 20 ID. Odczyt DOM, danych strony i odpowiedzi fetch/XHR/other tej grupy: do 64 odpowiedzi, 2 MiB każda, 4 MiB łącznie; nasłuch przed otwarciem. Bez odczytu Beacon, nagłówków, formularzy, cookies lub tokenów. Pola ofert są heurystyczne, ID/permalinki dokładne. Opcjonalne miniatury: do 3 widocznych zdjęć/post, przejściowy obraz widoku w RAM usuwany po wycięciu, bez dodatkowego pobierania mediów. Podgląd znika po pauzie lub zmianie kontekstu; lokalnie zapisuje się tylko raport liczbowy bez treści i ID. Bez uploadu i kolektora; stary limit skanu bez zmian. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu lub wygaszenie: STOP. Tryb komputerowy pozostaje do zamknięcia sesji. Zgoda i wybór opcji nie są zapamiętywane.")
             .setNegativeButton("Anuluj",null).setPositiveButton("Zgadzam się — uruchom próbę"){_,_->
                 if(!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)||session!==currentSession||channel!==currentChannel||url!=target||kind!=PageKind.APPROVED_GROUP||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||progress!=100||!currentChannel.isConnected)return@setPositiveButton
                 stopVisiblePosts();finishShare("CANCELLED",clear=true);clearDesktopDetails()
                 val gate=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()})
                 if(!gate.begin(true)){publishDesktop(DesktopSummary.create("NO_CONSENT_OR_CONTEXT",0),emptyList());return@setPositiveButton}
                 val baseline=!extended.isChecked
+                val guided=gesture.isChecked
+                desktopGesture=guided;desktopGestureStage="LOADING"
                 clearDesktopDetails();geckoView.requestFocus();desktopGate=gate;desktopBusy=true;desktopRows=emptyList();desktopNonce=UUID.randomUUID().toString();render()
                 desktopJob=lifecycleScope.launch{
-                    val result=DesktopSessionPreview.run(currentSession,currentChannel,gate,desktopNonce!!,target,{url},view=geckoView,images=desktopThumbnails,baseline=baseline)
+                    val result=DesktopSessionPreview.run(currentSession,currentChannel,gate,desktopNonce!!,target,{url},view=geckoView,images=desktopThumbnails,baseline=baseline,gesture=guided)
                     if(desktopGate===gate&&desktopBusy){userAgent=result.userAgent;finishDesktop(result.reason,result.reply)}
                 }
             }.create()
@@ -211,7 +219,7 @@ class PocActivity : ComponentActivity() {
     private fun finishDesktop(reason:String,reply:DesktopReply?=null,show:Boolean=true){
         if(!desktopBusy)return
         val gate=desktopGate;gate?.stop(reason)
-        desktopBusy=false;desktopJob?.cancel();desktopJob=null
+        desktopBusy=false;desktopGesture=false;desktopJob?.cancel();desktopJob=null
         desktopNonce?.let{GeckoHost.background.abortDesktop(it)};desktopNonce=null;channel?.abortDesktop()
         if(reason!="DONE")session?.stop()
         val summary=DesktopSummary.create(reason,gate?.requests?:0,reply)
@@ -446,7 +454,7 @@ class PocActivity : ComponentActivity() {
         val ext = extension ?: run { output.text = "Rozszerzenie kolektora nie jest gotowe: ${extensionError ?: "instalacja w toku"}"; return }
         // Default settings: normal mobile Firefox user agent, JavaScript and cookies as in the browser. No override, no spoofing.
         val newSession = GeckoSession(GeckoSessionSettings.Builder().build())
-        val newChannel = CollectorChannel(newSession, fixtureMode = false, onVisibleStop = { stopVisiblePosts() }, onPageDisconnect = { if(!desktopBusy&&desktopRows.isNotEmpty())clearDesktopDetails(); if(desktopBusy&&desktopGate?.phase==DesktopTrial.Phase.READING)finishDesktop("PORT_LOST"); shareResolver?.disconnected(); if (!responseReloadGate.allowOldDisconnect()) stopVisiblePosts(); if (shareBusy && shareResolver?.active != true) finishShare() }, onPageConnected = { responseReloadGate.connected() }, onShareStop = { if (shareBusy) finishShare("UNSAFE_DOCUMENT") }, onDesktopStop={if(desktopBusy)finishDesktop("CONTEXT")}) { value -> probe = value; render() }
+        val newChannel = CollectorChannel(newSession, fixtureMode = false, onVisibleStop = { stopVisiblePosts() }, onPageDisconnect = { if(!desktopBusy&&desktopRows.isNotEmpty())clearDesktopDetails(); if(desktopBusy&&desktopGate?.phase==DesktopTrial.Phase.READING)finishDesktop("PORT_LOST"); shareResolver?.disconnected(); if (!responseReloadGate.allowOldDisconnect()) stopVisiblePosts(); if (shareBusy && shareResolver?.active != true) finishShare() }, onPageConnected = { responseReloadGate.connected() }, onShareStop = { if (shareBusy) finishShare("UNSAFE_DOCUMENT") }, onDesktopStop={if(desktopBusy)finishDesktop("CONTEXT")},onDesktopGesture={stage->if(desktopBusy&&desktopGesture){desktopGestureStage=stage;render()}}) { value -> probe = value; render() }
         newChannel.attach(ext)
         newSession.progressDelegate = progressDelegate
         newSession.contentDelegate = contentDelegate
@@ -950,7 +958,7 @@ class PocActivity : ComponentActivity() {
             stop != null -> stop
             !open -> "Sesja zamknięta. „Otwórz sesję” uruchamia przeglądarkę tylko dla grupy ${PocPolicy.APPROVED_GROUP_ID}."
             loginRequested && kind == PageKind.LOGIN -> "Logowanie ręczne na stronie Facebooka. Po zalogowaniu użyj „Wróć do grupy”."
-            desktopBusy -> "Jedna próba komputerowa • ${desktopGate?.phase} • tylko lokalnie"
+            desktopBusy -> if(desktopGesture)when(desktopGestureStage){"WAITING"->"TERAZ przesuń treść grupy palcem w górę (15 s).";"ANCHORED"->"Automatyczne przewijanie wskazanego obszaru • tylko lokalnie";else->"Ładowanie grupy — zaczekaj na komunikat o przesunięciu palcem."} else "Jedna próba komputerowa • ${desktopGate?.phase} • tylko lokalnie"
             shareBusy -> "Sprawdzanie jednego linku: do 20 s. Bez skanu."
             responseBusy -> if (responseReloadGate.active) "Trwa diagnostyka od otwarcia (25 s)." else "Trwa lokalna diagnostyka odpowiedzi (15 s)."
             shareResolver?.status == ShareLinkResolver.Status.CONFIRMED -> "Link zatwierdzonej grupy potwierdzony. Bez skanu."
