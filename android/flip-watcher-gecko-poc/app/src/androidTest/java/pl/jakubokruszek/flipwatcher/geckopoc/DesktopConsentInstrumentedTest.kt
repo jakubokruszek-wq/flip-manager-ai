@@ -53,6 +53,20 @@ class DesktopConsentInstrumentedTest {
         assertTrue("button outside usable screen",owner.contains(rect(v)))
         return rect(v)
     }
+    private fun settleBodyButton(scenario:ActivityScenario<GeckoTestHostActivity>,d:DesktopConsentDialog,tag:String){
+        // fullScroll uses ScrollView's own scroller; main-thread idle does not
+        // mean the last pixel of its animation has reached the viewport.
+        repeat(100){
+            instrumentation.waitForIdleSync();var visible=false
+            scenario.onActivity{
+                val button=d.window!!.decorView.findViewWithTag<Button>(tag);val r=Rect()
+                visible=button.isShown&&button.getGlobalVisibleRect(r)&&r.height()==button.height&&r.width()==button.width
+            }
+            if(visible)return
+            SystemClock.sleep(20)
+        }
+        fail("scrollable consent button never became fully visible")
+    }
     private fun tap(r:Rect){
         val t=SystemClock.uptimeMillis()
         for(action in listOf(MotionEvent.ACTION_DOWN,MotionEvent.ACTION_UP)){
@@ -87,6 +101,7 @@ class DesktopConsentInstrumentedTest {
                 before=reachable(d,"poc.desktop.consentAccept")
                 d.window!!.decorView.findViewWithTag<ScrollView>("poc.desktop.consentBody").fullScroll(View.FOCUS_DOWN)
             };instrumentation.waitForIdleSync()
+            settleBodyButton(scenario,d,"poc.desktop.consentDisclosure")
             scenario.onActivity{disclosure=reachable(d,"poc.desktop.consentDisclosure")};tap(disclosure);settle(scenario,d)
             scenario.onActivity{d.window!!.decorView.findViewWithTag<ScrollView>("poc.desktop.consentBody").fullScroll(View.FOCUS_DOWN)}
             instrumentation.waitForIdleSync();lateinit var cancel:Rect
