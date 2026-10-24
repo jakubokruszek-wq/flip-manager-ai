@@ -1,0 +1,9 @@
+<!doctype html><meta charset="utf-8"><title>Local MAIN fixture</title>
+<script>
+// This inline code runs before document_idle. A late isolated injection cannot satisfy this check.
+if(window.__mainLabInstalled===true)window.postMessage({channel:'MAIN_LAB_COMMAND',nonce:new URL(location.href).searchParams.get('labNonce'),op:'beforePage'},location.origin);
+const endpoint='/ajax/main-lab/?fixture=main-world-data';
+window.fixtureFetch=fetch(endpoint).then(r=>r.text()).then(t=>{document.documentElement.dataset.fetchIntact=String(t.includes('LOCAL_MAIN_FIXTURE'));});
+const x=new XMLHttpRequest();x.open('GET',endpoint);x.onload=()=>{document.documentElement.dataset.xhrIntact=String(x.responseText.includes('LOCAL_MAIN_FIXTURE'));};x.send();
+</script>
+<article><p>Local fixture, no Facebook.</p></article>

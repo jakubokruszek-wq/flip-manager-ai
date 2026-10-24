@@ -1,0 +1,4 @@
+<!doctype html><meta charset="utf-8"><title>Local initial response fixture</title><body><div>Local initial load diagnostic</div><script>
+// Exactly one request per document, no polling or scrolling.
+fetch('/ajax/feed/?fixture=response-data').then(r=>r.text()).then(text=>{if(text.includes('550000000000003'))document.body.appendChild(document.createElement('article'));}).catch(()=>{});
+</script></body>

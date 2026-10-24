@@ -1,0 +1,6 @@
+<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>Fixture: network-control</title></head><body>
+<p>Test kontrolny nasłuchu GeckoView — lokalna strona POC, bez Facebooka.</p>
+<script>
+// Page-initiated requests to the POC's own marker endpoint, every 300 ms.
+setInterval(function () { fetch("/flip-control?fixture=network-control-ping&t=" + Date.now()).catch(function () {}); }, 300);
+</script></body></html>

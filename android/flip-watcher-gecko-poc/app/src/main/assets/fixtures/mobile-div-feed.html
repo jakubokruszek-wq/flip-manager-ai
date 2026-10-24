@@ -1,0 +1,28 @@
+<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Fixture: mobile-div-feed</title></head><body><div id="screen-root">
+<div data-mcomponent="MContainer" data-type="container" data-tracking-duration-id="31" data-focusable="true"><div data-mcomponent="TextArea" data-action-id="31" role="button" tabindex="0">Sprzedam mieszkanie 31</div><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="300" height="200" alt=""></div>
+<div data-mcomponent="MContainer" data-type="container" data-tracking-duration-id="32" data-focusable="true"><div data-mcomponent="TextArea" data-action-id="32" role="button" tabindex="0">Sprzedam mieszkanie 32</div><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="300" height="200" alt=""></div>
+<div data-mcomponent="MContainer" data-type="container" data-tracking-duration-id="39" data-focusable="true"><div data-mcomponent="TextArea" data-action-id="39" role="button" tabindex="0">Sprzedam mieszkanie 39</div><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="300" height="200" alt=""></div>
+</div>
+<script>requireLazy(["ScheduledServerJS"],function(j){j.handle({"__bbox":{"require":[["RelayPrefetchedStreamCache","next",[],["adp_GroupsFeed",{"__bbox":{"complete":true,"result":{"data":{"group":{"group_feed":{"edges":[
+{"node":{"__typename":"Story","post_id":"550000000000001","url":"https://www.facebook.com/groups/1234567890123/posts/550000000000001/","comet_sections":{"content":{"story":{"message":{"text":"Sprzedam 2 pokoje"}}}},"feedback":{"comments":[{"__typename":"Comment","id":"570000000000001","url":"https://www.facebook.com/groups/1234567890123/posts/550000000000001/?comment_id=570000000000001"}]}}},
+{"node":{"__typename":"Story","post_id":"550000000000002","url":"https://www.facebook.com/groups/1234567890123/posts/550000000000002/","attached_story":{"__typename":"Story","post_id":"560000000000001","url":"https://www.facebook.com/groups/999999999999/posts/560000000000001/"}}},
+{"node":{"__typename":"Story","post_id":"550000000000009"}},
+{"node":{"__typename":"Photo","id":"580000000000001","url":"https://www.facebook.com/photo/?fbid=580000000000001&set=g.1234567890123"}}
+]}}}}}}]]}});});</script>
+<script>
+// Like the mobile site: more posts arrive over XHR and are appended as divs, without links.
+setTimeout(function () {
+  fetch("/data?fixture=mobile-net-data").then(function (r) { return r.text(); }).then(function () {
+    var root = document.getElementById("screen-root");
+    ["33", "34"].forEach(function (n) {
+      var d = document.createElement("div");
+      d.setAttribute("data-mcomponent", "MContainer");
+      d.setAttribute("data-tracking-duration-id", n);
+      d.textContent = "Doładowany post " + n;
+      root.appendChild(d);
+    });
+    document.body.setAttribute("data-net-loaded", "1");
+  });
+}, 300);
+</script>
+</body></html>

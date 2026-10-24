@@ -1,0 +1,11 @@
+{
+  "manifest_version": 2,
+  "name": "LOCAL ONLY MAIN transport experiment",
+  "version": "1.0",
+  "browser_specific_settings": {"gecko": {"id": "main-lab@flip-manager.local"}},
+  "permissions": ["nativeMessaging", "nativeMessagingFromContent", "geckoViewAddons", "http://127.0.0.1/*"],
+  "content_scripts": [
+    {"matches": ["http://127.0.0.1/groups/*"], "js": ["collector-core.js", "main-hook.js"], "run_at": "document_start", "world": "MAIN", "all_frames": false},
+    {"matches": ["http://127.0.0.1/groups/*"], "js": ["bridge.js"], "run_at": "document_start", "all_frames": false}
+  ]
+}

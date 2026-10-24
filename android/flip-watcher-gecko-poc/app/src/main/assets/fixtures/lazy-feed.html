@@ -1,0 +1,22 @@
+<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Fixture: lazy-feed</title>
+<style>[role=article]{height:120px;border-bottom:1px solid #ccc}</style></head><body>
+<main id="feed"></main><div id="sentinel" style="height:10px"></div>
+<script>
+// Like a real feed: 5 posts at first, 5 more each time the sentinel becomes visible
+// (IntersectionObserver), up to 30. Measures whether loading works without a screen.
+var next = 0;
+function addBatch() {
+  var feed = document.getElementById("feed");
+  for (var i = 0; i < 5 && next < 30; i++, next++) {
+    var id = String(520000000000000 + next);
+    var card = document.createElement("div");
+    card.setAttribute("role", "article");
+    card.innerHTML = '<p>Post ' + next + '</p><a href="https://www.facebook.com/groups/1234567890123/posts/' + id + '/">' + id + '</a>';
+    feed.appendChild(card);
+  }
+}
+addBatch();
+new IntersectionObserver(function (entries) {
+  if (entries.some(function (e) { return e.isIntersecting; })) requestAnimationFrame(addBatch);
+}).observe(document.getElementById("sentinel"));
+</script></body></html>

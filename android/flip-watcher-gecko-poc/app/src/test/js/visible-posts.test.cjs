@@ -1,0 +1,117 @@
+require("../../../../../../extensions/facebook-collector/collector-core.js");
+const {test} = require("node:test");
+const assert = require("node:assert/strict");
+const v = require("../../main/extension/visible-posts.js");
+const groupId = "lodzsprzedazzakupwynajem";
+const href = `https://www.facebook.com/groups/${groupId}/`;
+const input = {consent:true, groupId, href, visible:true, cards:[{semantic:true,text:"Cena 450 000 zł, 54,5 m², 3 pokoje, dzielnica: Widzew",hrefs:[`${href}posts/123456789/`], photos:1}]};
+test("new explicit consent required, old consent is insufficient",()=>{assert.equal(v.analyze({...input,consent:false,scanConsent:true}).status,"STOP");assert.equal(v.analyze({...input,consent:undefined}).status,"STOP");});
+test("approved slug only; page changes, hidden, login and CAPTCHA stop",()=>{for(const change of [{href:"https://www.facebook.com/login/"},{href:href.replace(groupId,"other")},{visible:false},{blocked:true},{href:href+"?token=secret"}])assert.equal(v.analyze({...input,...change}).status,"STOP");});
+test("confirmed links distinct from heuristic fields, counts only",()=>{const out=v.analyze(input);assert.equal(out.counts.confirmedIds,1);for(const key of ["priceCandidates","areaCandidates","roomCandidates","districtCandidates","photoCandidates"])assert.equal(out.counts[key],1);const json=JSON.stringify(out);assert.ok(!json.includes("123456789"));assert.ok(!json.includes("Widzew"));});
+test("fake IDs, photo fbid, foreign groups and arbitrary numbers rejected",()=>{for(const link of [`${href}?fbid=123`,"https://evil.com/groups/"+groupId+"/posts/123/",href+"photos/123/",href+"posts/not-an-id/",href.replace(groupId,"other")+"posts/123/","123456789"])assert.equal(v.exact(link,groupId),null);});
+test("cap 20, deduplicate ID; mobile candidates remain heuristic",()=>{const out=v.analyze({...input,cards:Array(30).fill({...input.cards[0],semantic:false})});assert.equal(out.counts.candidates,20);assert.equal(out.counts.confirmedIds,1);assert.equal(out.counts.heuristicCandidates,20);});
+test("no retained results after clear or session interruption",()=>{v.analyze(input);assert.equal(v.analyze({...input,consent:false,cards:[]}).status,"STOP");assert.equal(v.analyze({...input,cards:[]}).counts.confirmedIds,0);});
+test("diagnosis module isolated from storage, network and scan",()=>{const fs=require("node:fs");const src=fs.readFileSync(require.resolve("../../main/extension/visible-posts.js"),"utf8");assert.doesNotMatch(src,/fetch\s*\(|XMLHttpRequest|localStorage|cookies|filterResponseData|scan\s*\(|console\./);});
+test("without consent rendered DOM is never queried",()=>{
+  const win={document:{querySelector(){throw Error('unauthorized DOM read')}},location:{href}};
+  assert.equal(v.read(win,{consent:false,groupId}).status,"STOP");
+});
+test("page interruption and data clearing dispose the observer",()=>{
+  let callback, disconnected=0, stopped=0;
+  const listeners=new Map();
+  const win={location:{href},document:{title:"group",body:{innerText:""},visibilityState:"visible",documentElement:{},querySelector(){return null},addEventListener(n,f){listeners.set(n,f)},removeEventListener(n){listeners.delete(n)}},MutationObserver:class{constructor(f){callback=f}observe(){}disconnect(){disconnected++}},addEventListener(n,f){listeners.set(n,f)},removeEventListener(n){listeners.delete(n)}};
+  const clear=v.watch(win,{groupId},()=>stopped++);
+  clear(); assert.equal(disconnected,1);assert.equal(stopped,0);assert.equal(listeners.size,0);
+  v.watch(win,{groupId},()=>stopped++);win.location.href=href.replace(groupId,"other");callback();assert.equal(stopped,1);assert.equal(disconnected,2);assert.equal(listeners.size,0);
+});
+
+test("lost group access stops before card extraction",()=>{
+ const win={innerWidth:500,innerHeight:900,location:{href},document:{title:"Facebook",body:{innerText:"Ta zawartość jest niedostępna"},visibilityState:"visible",querySelector(){return null},querySelectorAll(){throw Error("cards read after STOP")}}};
+ assert.equal(v.read(win,{consent:true,groupId}).status,"STOP");
+});
+
+test("shared desktop parser accepts bound story links, rejects unbound and conflicting cards",()=>{
+ assert.equal(v.exact(`https://www.facebook.com/story.php?story_fbid=123456789&id=${groupId}`,groupId),"123456789");
+ assert.equal(v.exact("https://www.facebook.com/story.php?story_fbid=123456789",groupId),null);
+ const out=v.analyze({...input,cards:[{...input.cards[0],hrefs:[href+"posts/123456789/",href+"posts/987654321/"]}]});
+ assert.equal(out.counts.confirmedIds,0);assert.equal(out.counts.ambiguousCards,1);
+});
+
+function fakeWindow(mode) {
+ const block={innerText:"Sprzedam mieszkanie bez podanej ceny",parentElement:{closest(){return null}},closest(){return null},matches(){return false},contains(){return false},querySelectorAll(){return []},getBoundingClientRect(){return {width:300,height:100,top:10,left:10,bottom:110,right:310}}};
+ const win={innerWidth:400,innerHeight:800,location:{href},getComputedStyle(){return {visibility:"visible",display:"block",opacity:"1"}},document:{title:"Grupa",body:{innerText:block.innerText},visibilityState:"visible",querySelector(){return null},querySelectorAll(s){return mode==="mobile" && s.includes("TextArea") ? [block] : mode==="desktop" && s.includes("post_message") ? [block] : []},createTreeWalker(){let used=false;return {nextNode(){if(used)return null;used=true;return {nodeValue:block.innerText,parentElement:block}}}}}};
+ return win;
+}
+for(const mode of ["desktop","mobile","fallback"]) test(`rendered ${mode} text without price or article is diagnosed`,()=>{
+ const out=v.read(fakeWindow(mode),{consent:true,groupId});
+ assert.equal(out.status,"GROUP_OK");assert.equal(out.counts.candidates,1);assert.equal(out.counts.priceCandidates,0);assert.equal(out.counts.confirmedIds,0);
+ assert.equal(out.counts[mode==="desktop"?"desktopMessageBlocks":mode==="mobile"?"mobileTextBlocks":"fallbackTextBlocks"],1);
+ assert.ok(!JSON.stringify(out).includes("Sprzedam"));
+});
+function ancestorFixture(options={}) {
+ const seed={};
+ const second={};
+ const group=groupId;
+ const links=options.links || [`${href}posts/123456789/`];
+ const wrapper={innerText:"Cena 450 000 zł i 54 m²",parentElement:null,matches(){return false},contains(el){return el===seed || options.shared && el===second},querySelectorAll(s){return s==='a[href]' ? links.map(href=>({href})) : options.photo ? [{}] : []}};
+ seed.parentElement=wrapper;
+ return {seed,second,wrapper,doc:{body:{},documentElement:{}}};
+}
+test("ancestor links and sibling image found without upgrading confirmed IDs",()=>{
+ const f=ancestorFixture({photo:true});const out=v.ancestors([f.seed],[f.seed],f.doc,groupId,()=>true);
+ assert.equal(out.ancestorWithExactId,1);assert.equal(out.ancestorWithPhotos,1);assert.equal(out.ancestorExactAndPhoto,1);assert.equal(out.ancestorWithPrice,1);assert.equal(out.ancestorWithArea,1);
+ assert.ok(!JSON.stringify(out).includes("123456789"));assert.ok(!JSON.stringify(out).includes("450 000"));
+});
+test("shared wrapper counted once and never attributed to either text block",()=>{
+ const f=ancestorFixture({shared:true,photo:true});f.second.parentElement=f.wrapper;
+ const out=v.ancestors([f.seed,f.second],[f.seed,f.second],f.doc,groupId,()=>true);
+ assert.equal(out.ancestorContainers,1);assert.equal(out.ancestorSharedContainers,1);assert.equal(out.ancestorWithExactId,0);assert.equal(out.ancestorWithPhotos,0);
+});
+test("ambiguous and foreign ancestor links do not bind identity",()=>{
+ for(const links of [[href+"posts/123456789/",href+"posts/987654321/"],[href+"posts/123456789/",href.replace(groupId,"othergroup")+"posts/987654321/"]]){
+ const f=ancestorFixture({links});const out=v.ancestors([f.seed],[f.seed],f.doc,groupId,()=>true);assert.equal(out.ancestorWithExactId,0);assert.ok(out.ancestorAmbiguousContainers+out.ancestorForeignContainers>0);
+ }
+});
+test("feed/root boundary stops without inspecting contents",()=>{
+ const f=ancestorFixture();f.wrapper.matches=()=>true;f.wrapper.querySelectorAll=()=>{throw Error("feed inspected")};const out=v.ancestors([f.seed],[f.seed],f.doc,groupId,()=>true);assert.equal(out.ancestorContainers,0);assert.equal(out.ancestorFeedStops,1);
+});
+test("ancestor traversal depth and hidden containers are bounded",()=>{
+ const f=ancestorFixture({links:[]});let node=f.wrapper;for(let i=0;i<10;i++){node.parentElement={...f.wrapper,parentElement:null};node=node.parentElement;}
+ const out=v.ancestors([f.seed],[f.seed],f.doc,groupId,()=>true);assert.equal(out.ancestorContainers,6);assert.equal(out.ancestorMaxDepth,6);assert.equal(out.ancestorDepthStops,1);
+ assert.equal(v.ancestors([f.seed],[f.seed],f.doc,groupId,()=>false).ancestorContainers,0);
+});
+
+test("foreign story.php source cannot hide behind the desktop profile classification",()=>{
+ const f=ancestorFixture({links:[href+"posts/123456789/","https://www.facebook.com/story.php?story_fbid=987654321&id=999999999"]});
+ const out=v.ancestors([f.seed],[f.seed],f.doc,groupId,()=>true);
+ assert.equal(out.ancestorForeignContainers,1);assert.equal(out.ancestorWithExactId,0);
+});
+function attrNode(values={},children=[], options={}) {
+ return {querySelectorAll(){return children},matches(selector){return !!options.interactive && selector==='a,button,[role="button"],[tabindex]'},closest(){return !!options.form},hasAttribute(name){return name in values},getAttribute(name){assert.ok(["href","data-href","data-url","data-uri","data-permalink","data-story-url","data-navigation-url"].includes(name),"forbidden attribute read: "+name);return values[name]??null}};
+}
+test("exact URL in data-href is a local hint, not a confirmed post",()=>{
+ const n=attrNode({"data-href":href+"posts/123456789/","data-action-id":"987654321","data-store":"private","onclick":"private"},[],{interactive:true});
+ const p=v.attributeProbe(groupId,()=>true,{});p.inspect(n);p.inspect(n);const out=p.counts();
+ assert.equal(out.attrNodes,1);assert.equal(out.attrExactUrls,1);assert.equal(out.attrExactIdHints,1);assert.equal(out.attrActionMarkers,1);assert.equal(out.attrStoreMarkers,1);
+ assert.ok(!JSON.stringify(out).includes("123456789"));assert.ok(!JSON.stringify(out).includes("private"));
+});
+test("attribute parser never infers IDs from actions, JSON or javascript",()=>{
+ for(const value of ["123456789","javascript:open('"+href+"posts/123456789/')",JSON.stringify({url:href+"posts/123456789/"}),"https://evil.com/groups/"+groupId+"/posts/123456789/","https://www.facebook.com/photo.php?fbid=123456789"]){
+ const p=v.attributeProbe(groupId,()=>true,{});p.inspect(attrNode({"data-url":value}));assert.equal(p.counts().attrExactIdHints,0);
+ }
+});
+test("ambiguous or foreign attributes do not confirm identity",()=>{
+ for(const other of [href+"posts/987654321/",href.replace(groupId,"othergroup")+"posts/987654321/"]){
+ const p=v.attributeProbe(groupId,()=>true,{});p.inspect(attrNode({"data-href":href+"posts/123456789/","data-url":other}));assert.equal(p.counts().attrExactIdHints,0);assert.ok(p.counts().attrAmbiguousNodes+p.counts().attrForeignUrls>0);
+ }
+});
+test("attribute budget, oversize values and deduplication are bounded",()=>{
+ const children=Array.from({length:250},()=>attrNode({"data-url":"x".repeat(3000)}));const p=v.attributeProbe(groupId,()=>true,{});p.inspect(attrNode({},children));const out=p.counts();assert.equal(out.attrNodes,200);assert.equal(out.attrNodeLimit,1);assert.equal(out.attrOversizeValues,199);assert.equal(out.attrExactIdHints,0);
+});
+test("hidden/form/feed/root attributes are not read",()=>{
+ const trap=attrNode();trap.getAttribute=()=>{throw Error("forbidden node read")};
+ const hidden=v.attributeProbe(groupId,()=>false,{});hidden.inspect(trap);assert.equal(hidden.counts().attrNodes,0);
+ const form=v.attributeProbe(groupId,()=>true,{});trap.closest=()=>true;form.inspect(trap);assert.equal(form.counts().attrNodes,0);
+ const body=v.attributeProbe(groupId,()=>true,{body:trap});body.inspect(trap);assert.equal(body.counts().attrNodes,0);
+ const feed=v.attributeProbe(groupId,()=>true,{});trap.matches=()=>true;feed.inspect(trap);assert.equal(feed.counts().attrNodes,0);
+});

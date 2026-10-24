@@ -1,0 +1,6 @@
+{
+  "features/facebook-watcher/extract-facebook-property.ts": "cf960ea996fa053db33e0ef0b54992a023555dfe54db2bdaa50cd379fbff447f",
+  "features/facebook-watcher/facebook-intent.ts": "12ecec0efee1877119f280b88902904582d804ec25e25bc26a4546c3febeba12",
+  "features/facebook-watcher/extract-facebook-listing.ts": "13f648ff35cd7519f969bde89ccec1a2fecebcec5f183b4016e1a973240c9d16",
+  "features/facebook-watcher/facebook-location-quality.ts": "3a6e6805866f05a8b9d96b34fbed65fe8734798856ec81722536a9692690d507"
+}

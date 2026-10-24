@@ -1,0 +1,74 @@
+{
+  "manifest_version": 2,
+  "name": "Flip Watcher Gecko POC collector",
+  "version": "0.5.21",
+  "description": "Built-in GeckoView extension: reads post ids of the one approved Facebook group with the unchanged collector-core.js.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "flip-gecko-poc@flip-manager.local"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/*",
+        "https://m.facebook.com/groups/lodzsprzedazzakupwynajem/*",
+        "https://facebook.com/groups/lodzsprzedazzakupwynajem/*",
+        "http://127.0.0.1/groups/*"
+      ],
+      "js": [
+        "main-bootstrap.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://www.facebook.com/*",
+        "https://m.facebook.com/*",
+        "https://facebook.com/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": [
+        "collector-core.js",
+        "poc-adapter.js",
+        "visible-posts.js",
+        "main-content.js",
+        "share-context.js",
+        "desktop-fields.js",
+        "desktop-viewport.js",
+        "desktop-notice.js",
+        "desktop-gesture.js",
+        "desktop-preview.js",
+        "poc-content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "permissions": [
+    "nativeMessaging",
+    "nativeMessagingFromContent",
+    "geckoViewAddons",
+    "scripting",
+    "webRequest",
+    "webRequestBlocking",
+    "https://*.facebook.com/*",
+    "https://facebook.com/*",
+    "https://*.fbcdn.net/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "scripts": [
+      "collector-core.js",
+      "poc-adapter.js",
+      "response-diagnosis.js",
+      "main-transport.js",
+      "desktop-fields.js",
+      "desktop-preview.js",
+      "desktop-background.js",
+      "poc-background.js"
+    ]
+  }
+}
