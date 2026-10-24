@@ -150,7 +150,8 @@ class DesktopPreviewInstrumentedTest {
     @Test fun exactNotificationDescriptionClosesUnlabelledDialogBeforeRealWindowSwipe()=checkNativeViewport(false,baseline=true,gesture=true,consentWindow=true,noticeWindow=true,noticeVariant=2)
     @Test fun unknownAlertDialogIsNeverClickedAndStopsBeforeGesture()=checkNativeViewport(false,baseline=true,gesture=true,consentWindow=true,noticeWindow=true,unknownNotice=true)
     @Test fun noOperatorGestureNeverStartsAutomaticScrollOrPixelReadback()=checkNativeViewport(false,baseline=true,gesture=true,noGesture=true)
-    private fun checkNativeViewport(deep:Boolean,networkOnly:Boolean=false,cachedFeed:Boolean=false,marginOnly:Boolean=false,delegated:Boolean=false,baseline:Boolean=false,gesture:Boolean=false,noGesture:Boolean=false,consentWindow:Boolean=false,noticeWindow:Boolean=false,unknownNotice:Boolean=false,noticeVariant:Int=0){
+    @Test fun alreadyDecodedCssPhotosCaptureRealColorsAndPreserveFurtherScroll()=checkNativeViewport(false,cssPhotos=true)
+    private fun checkNativeViewport(deep:Boolean,networkOnly:Boolean=false,cachedFeed:Boolean=false,marginOnly:Boolean=false,delegated:Boolean=false,baseline:Boolean=false,gesture:Boolean=false,noGesture:Boolean=false,consentWindow:Boolean=false,noticeWindow:Boolean=false,unknownNotice:Boolean=false,noticeVariant:Int=0,cssPhotos:Boolean=false){
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use {scenario->
             var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it
                 if(consentWindow){
@@ -167,7 +168,7 @@ class DesktopPreviewInstrumentedTest {
                 val server=LoopbackFixtureServer(pages=if(networkOnly)mapOf("/api/graphql/" to "network-media")else emptyMap(),onRequest={path,_->if(path=="/gesture-ready")gestureSeen.set(true);if(path=="/notice-dismissed")noticeDismissed.set(true)}){asset->
                     if(networkOnly&&asset=="fixtures/network-media.html")"""{"post_id":"550000000000091","url":"https://www.facebook.com/groups/1234567890123/posts/550000000000091/","message":{"text":"Sprzedam mieszkanie 42m2. Cena 319000 zł."},"attachments":[{"media":{"__typename":"Photo","photo_id":"880000000000001","image":{"uri":"https://scontent.fbcdn.net/red.jpg"}}},{"media":{"__typename":"Photo","photo_id":"880000000000002","image":{"uri":"https://scontent.fbcdn.net/green.jpg"}}}]}"""
                     else {
-                    val selected=if(asset=="fixtures/desktop-start.html")(if(noticeWindow)"fixtures/desktop-notice.html" else if(gesture)"fixtures/desktop-gesture.html" else if(baseline)"fixtures/desktop-start.html" else if(deep)"fixtures/desktop-viewport-deep.html" else "fixtures/desktop-viewport.html") else asset
+                    val selected=if(asset=="fixtures/desktop-start.html")(if(noticeWindow)"fixtures/desktop-notice.html" else if(gesture)"fixtures/desktop-gesture.html" else if(baseline)"fixtures/desktop-start.html" else if(cssPhotos)"fixtures/desktop-viewport-css.html" else if(deep)"fixtures/desktop-viewport-deep.html" else "fixtures/desktop-viewport.html") else asset
                     runCatching{context.assets.open(selected).bufferedReader().use{it.readText()}}.getOrNull()?.let{html->val described=when(noticeVariant){
                         1->html.replace("role=\"alertdialog\"", "role=\"dialog\"").replace("aria-label=\"Push notifications request\"", "aria-labelledby=\"notice-name\"").replace("<span style=", "<span id=\"notice-name\">Push notifications request</span><span style=")
                         2->html.replace("role=\"alertdialog\"", "role=\"dialog\"").replace("aria-label=\"Push notifications request\"", "aria-label=\"Informacje\"")
@@ -255,7 +256,7 @@ class DesktopPreviewInstrumentedTest {
                     assertEquals("DONE",result.reason);val reply=result.reply!!
                     if(noticeWindow){assertEquals(1,reply.stats.getValue("noticeDetected"));assertEquals(1,reply.stats.getValue("noticeClosed"));assertTrue(noticeDismissed.get());assertEquals(if(noticeVariant==1)2 else if(noticeVariant==2)3 else 1,reply.stats.getValue("noticeNameSource"))}
                     android.util.Log.i("GeckoPocTest","NATIVE_CAPTURE_COUNTS ${channel.lastViewportCaptureCounts.joinToString(",")}")
-                    android.util.Log.i("GeckoPocTest","VIEWPORT_BEFORE_ASSERT deep=$deep networkOnly=$networkOnly delegated=$delegated baseline=$baseline gesture=$gesture notice=$noticeWindow variant=$noticeVariant pictures=${images.count} newOffer=${reply.rows.any{it.postId=="550000000000096"}} ${DesktopSummary.create("DONE",trial.requests,reply).report()}")
+                    android.util.Log.i("GeckoPocTest","VIEWPORT_BEFORE_ASSERT deep=$deep networkOnly=$networkOnly cssPhotos=$cssPhotos delegated=$delegated baseline=$baseline gesture=$gesture notice=$noticeWindow variant=$noticeVariant pictures=${images.count} newOffer=${reply.rows.any{it.postId=="550000000000096"}} ${DesktopSummary.create("DONE",trial.requests,reply).report()}")
                     if(noGesture){
                         assertEquals(0,reply.stats.getValue("gestureAnchored"));assertEquals(0,reply.stats.getValue("scrollSteps"))
                         assertTrue(reply.stats.getValue("gestureWaitMs") in 14000..15000)
@@ -283,6 +284,7 @@ class DesktopPreviewInstrumentedTest {
                     if(delegated){assertTrue("ancestor hit must lead to real native movement",reply.stats.getValue("scrollNativeMoves")>0);assertEquals("pointer delegation must not remove photos",2,images.count)}
                     if(marginOnly){assertTrue("central frame must be detected and excluded",reply.stats.getValue("pointFrame")>0);assertTrue("safe margin must produce real movement",reply.stats.getValue("scrollNativeMoves")>0);return@withContext}
                     if(cachedFeed){assertEquals("cross-post cards cannot become own group offers",false,reply.rows.any{it.postId in setOf("550000000000091","550000000000092")});assertEquals(0,images.count);return@withContext}
+                    if(cssPhotos){assertTrue(reply.stats.getValue("photoRawCss")>0);assertTrue(reply.stats.getValue("photoSelected")>=2)}
                     val thumbs=images.rows("550000000000091")
                     if(networkOnly){assertTrue("network identity required",reply.stats.getValue("network")>0);assertEquals("initial post must not be invented from DOM", "NETWORK",reply.rows.single{it.postId=="550000000000091"}.layer)}
                     assertEquals("actual rendered image crops missing",2,thumbs.size)

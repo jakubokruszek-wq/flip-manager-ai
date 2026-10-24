@@ -138,7 +138,7 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null)
  for(const {card} of scrollCards(w,core,group)){
   if(exactCards.some(p=>p.card===card))continue;
   // Media identity comes from an exact parsed network record, never text, order or an image ID guessed as a post ID.
-  const sources=photoNodes(card,null,group,core),ids=new Set(sources.map(p=>identity(p.item,owners)).filter(Boolean));
+  const sources=photoNodes(card,null,group,core,audit),ids=new Set(sources.map(p=>identity(p.item,owners)).filter(Boolean));
   if(ids.size!==1){if(sources.length)count('photoIdentityRejected');continue;}const id=[...ids][0];targets.push({card,id,network:true});
  }
 
@@ -147,10 +147,11 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null)
   if(!allowedIds.has(id))continue;
   count(fromNetwork?'photoNetworkCards':'photoExactCards');
   if(!slots.has(id)){if(slots.size===20)continue;slots.set(id,new Map());}const media=slots.get(id);
-  for(const {node,item} of photoNodes(card,id,group,core)){
+  for(const {node,item,source:readSource,ready} of photoNodes(card,id,group,core,audit)){
    count('photoSources');
-   if(fromNetwork&&identity(item,owners)!==id){count('photoIdentityRejected');continue;}
+   if((fromNetwork||item.networkRequired)&&identity(item,owners)!==id){count('photoIdentityRejected');continue;}
    if(node.tagName==='IMG'&&(node.complete!==true||node.naturalWidth<1)){count('photoUnready');continue;}
+   const needsNetwork=fromNetwork||item.networkRequired;
    const key=item.mediaId||item.url;if(!key)continue;
    if(media.get(key)?.done){count('photoAlreadyDone');continue;}
    const r=node.getBoundingClientRect(),x=Math.max(0,r.left-left),y=Math.max(0,r.top-top),right=Math.min(width,r.right-left),bottom=Math.min(height,r.bottom-top);
@@ -169,9 +170,9 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null)
    if(!uncovered()){count('photoOccluded');continue;}
    // Offscreen/occluded images must not consume the three visible-preview slots.
    if(!media.has(key)){if(media.size===3)continue;media.set(key,{slot:media.size,done:false});}const mark=media.get(key);
-   const source=node.currentSrc||node.getAttribute?.('href')||node.getAttribute?.('src');
-   checks.push(lookup=>{const after=node.getBoundingClientRect();return node.isConnected!==false&&node.ownerDocument===w.document&&(fromNetwork?scrollCards(w,core,group).some(p=>p.card===card)&&identity(photoNodes(card,id,group,core).find(p=>p.node===node)?.item||{},lookup)===id:cards(w,core,group).some(p=>p.card===card&&p.id===id))&&["left","top","right","bottom"].every(k=>Math.abs(after[k]-r[k])<1)&&source===(node.currentSrc||node.getAttribute?.('href')||node.getAttribute?.('src'))&&uncovered();});
-   count('photoSelected');network=network||fromNetwork;tiles.push({postId:id,slot:mark.slot,x,y,width:right-x,height:bottom-y});keys.push(mark);
+   const sourceValue=()=>readSource?readSource():node.currentSrc||node.getAttribute?.('href')||node.getAttribute?.('src');const source=sourceValue();
+   checks.push(lookup=>{const after=node.getBoundingClientRect();return node.isConnected!==false&&node.ownerDocument===w.document&&(needsNetwork?scrollCards(w,core,group).some(p=>p.card===card)&&identity(photoNodes(card,id,group,core).find(p=>p.node===node)?.item||{},lookup)===id:cards(w,core,group).some(p=>p.card===card&&p.id===id))&&["left","top","right","bottom"].every(k=>Math.abs(after[k]-r[k])<1)&&source===sourceValue()&&(!ready||ready())&&uncovered();});
+   count('photoSelected');network=network||needsNetwork;tiles.push({postId:id,slot:mark.slot,x,y,width:right-x,height:bottom-y});keys.push(mark);
    if(tiles.length===3)return result();
   }
  }

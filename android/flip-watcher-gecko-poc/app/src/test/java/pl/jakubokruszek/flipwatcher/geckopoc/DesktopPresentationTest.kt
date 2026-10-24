@@ -68,4 +68,15 @@ class DesktopPresentationTest {
         assertNull(DesktopProtocol.parseStats(json))
     }
 
+    @Test fun version0522HistoryPadsExtractionAuditOnlyInRam(){
+        val original=org.json.JSONObject(DesktopSummary.create("EMPTY",1).encode())
+        val stats=original.getJSONObject("stats")
+        for(key in DesktopProtocol.statKeys.drop(95))stats.remove(key)
+        val raw=original.toString();val restored=DesktopSummary.decode(raw)!!
+        for(key in DesktopProtocol.statKeys.drop(95))assertEquals(0,restored.stats.getValue(key))
+        assertEquals(raw,original.toString())
+        val values=DesktopProtocol.emptyStats().toMutableMap().apply{put("viewportGranted",1);put("photoOwnerRejected",5)}
+        assertTrue(DesktopSummary.create("DONE",1,DesktopReply("OK","DONE",emptyList(),values)).report().contains("właściciel 5"))
+    }
+
 }
