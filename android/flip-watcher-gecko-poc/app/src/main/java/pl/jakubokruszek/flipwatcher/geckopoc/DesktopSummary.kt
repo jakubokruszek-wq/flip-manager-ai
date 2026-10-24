@@ -6,9 +6,17 @@ import org.json.JSONObject
 class DesktopSummary private constructor(val verdict:String,val reason:String,val offers:Int,val navigations:Int,val stats:Map<String,Int>){
     fun encode():String=JSONObject().put("verdict",verdict).put("reason",reason).put("offers",offers).put("navigations",navigations).put("stats",JSONObject(stats)).toString()
     fun report():String=buildString {
-        appendLine("KOMPUTER 0.5.20 • tylko lokalnie • $verdict")
+        appendLine("KOMPUTER 0.5.21 • tylko lokalnie • $verdict")
         appendLine("Komunikat powiadomień: wykryty ${stats.getValue("noticeDetected")} • zamknięty ${stats.getValue("noticeClosed")} • uprawnienia bez zmian")
-        if(reason=="NOTICE_BLOCKED")appendLine("STOP: okno strony blokuje interakcję. Nie zamknięto nieznanego komunikatu ani nie rozpoczęto przewijania.")
+        if(reason=="NOTICE_BLOCKED"){
+            appendLine("Powód: NOTICE_BLOCKED")
+            val causes=listOf("Starszy wynik nie zawiera szczegółów", "Nieznana nazwa i brak dokładnego opisu powiadomień", "Więcej niż jedno widoczne okno", "Okno zawiera formularz, post albo oznaki logowania/weryfikacji", "Brak pojedynczego przycisku zamknięcia", "Przycisk nie jest bezpiecznym Zamknij", "Przycisk niewidoczny lub nieaktywny", "Przycisk zasłonięty", "Przekroczony limit inspekcji okna", "Okno lub przycisk zmieniły się przed działaniem", "Zamknij nie usunęło okna", "Upłynął czas próby", "Utracony kontekst strony")
+            appendLine("STOP: ${causes[stats.getValue("noticeReason")]} (kod ${stats.getValue("noticeReason")}).")
+            appendLine("Okna: ${stats.getValue("noticeModals")} • widoczne: ${stats.getValue("noticeVisible")} • rozpoznanie: ${stats.getValue("noticeNameSource")} (0 brak, 1 etykieta, 2 nagłówek, 3 dokładny opis)")
+            if(stats.getValue("noticeReason")==0)appendLine("Starsza wersja nie zapisała danych kontekstu ani przyczyny odmowy.") else appendLine("Kontekst grupy potwierdzony: ${stats.getValue("verified")} • tryb komputerowy: ${stats.getValue("desktop")} • nawigacje: $navigations/4")
+            append("Nie zwrócono ofert i nie rozpoczęto przewijania. Pozostałe liczniki nie zostały pobrane. Dane tymczasowe odrzucono; bez uploadu.")
+            return@buildString
+        }
         if(stats.getValue("viewportGranted")==0)appendLine("Tryb bez miniatur i wejścia GeckoView; DOM i pola ofert pozostają aktywne.")
         if(stats.getValue("gestureRequested")==1){
             appendLine("Cel wskazany gestem: ${stats.getValue("gestureAnchored")} • gesty ${stats.getValue("gestureTouches")} • odmowy ${stats.getValue("gestureRejected")} • oczekiwanie ${stats.getValue("gestureWaitMs")} ms / 15000")
@@ -60,7 +68,7 @@ class DesktopSummary private constructor(val verdict:String,val reason:String,va
             if(verdict !in setOf("CONDITIONAL_GO","NO_GO")||reason !in DesktopTrial.reasons||j.opt("offers") !is Int||j.opt("navigations") !is Int)return null
             val offers=j.getInt("offers");val nav=j.getInt("navigations");val stored=j.getJSONObject("stats")
             // Read old count-only history without changing/deleting it; fresh protocol stays strict.
-            for(size in listOf(22,30,34,38,45,54,73,80))if(stored.keys().asSequence().toSet()==DesktopProtocol.statKeys.take(size).toSet())for(key in DesktopProtocol.statKeys.drop(size))stored.put(key,0)
+            for(size in listOf(22,30,34,38,45,54,73,80,82))if(stored.keys().asSequence().toSet()==DesktopProtocol.statKeys.take(size).toSet())for(key in DesktopProtocol.statKeys.drop(size))stored.put(key,0)
             val stats=DesktopProtocol.parseStats(stored)?:return null
             if(verdict=="NO_GO"&&offers!=0)return null
             if(offers !in 0..20||nav !in 0..4||offers>stats.getValue("candidates")||(verdict=="CONDITIONAL_GO")!=(reason=="DONE"&&offers>0))return null

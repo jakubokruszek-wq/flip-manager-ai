@@ -26,10 +26,23 @@ class DesktopPreviewTest {
         val raw=j.toString();val decoded=DesktopSummary.decode(raw)!!;assertEquals(0,decoded.stats.getValue("noticeDetected"));assertEquals(0,decoded.stats.getValue("noticeClosed"));assertEquals(raw,j.toString())
     }
     @Test fun blockedNoticeReturnsOnlyNoGoCountsAndNoRows(){
-        val j=message(JSONArray()).put("status","STOP").put("reason","NOTICE_BLOCKED");j.getJSONObject("stats").put("noticeDetected",1)
+        val j=message(JSONArray()).put("status","STOP").put("reason","NOTICE_BLOCKED");j.getJSONObject("stats").put("noticeDetected",1).put("noticeReason",1)
         val reply=DesktopProtocol.parse(j,nonce)!!;assertTrue(reply.rows.isEmpty());val summary=DesktopSummary.create("NOTICE_BLOCKED",1,reply)
         assertEquals("NO_GO",summary.verdict);assertEquals(1,summary.stats.getValue("noticeDetected"));assertFalse(summary.report().contains("/groups/"))
         assertNull(DesktopProtocol.parse(message().put("status","STOP").put("reason","NOTICE_BLOCKED"),nonce))
+    }
+    @Test fun noticeAuditUsesOnlyBoundedFixedCodesAndCounters(){
+        for((key,value) in listOf("noticeReason" to 13,"noticeModals" to 65,"noticeVisible" to 1,"noticeNameSource" to 4))assertNull(DesktopProtocol.parseStats(JSONObject(DesktopProtocol.emptyStats()).put(key,value)))
+        assertNull(DesktopProtocol.parse(message(JSONArray()).put("status","STOP").put("reason","NOTICE_BLOCKED"),nonce))
+    }
+    @Test fun priorEightyTwoCounterHistoryRetainsTheOriginalStopWithoutInventingDetails(){
+        val j=JSONObject(DesktopSummary.create("NOTICE_BLOCKED",1).encode());for(key in DesktopProtocol.statKeys.drop(82))j.getJSONObject("stats").remove(key)
+        val raw=j.toString();val decoded=DesktopSummary.decode(raw)!!;assertEquals("NOTICE_BLOCKED",decoded.reason);assertEquals(0,decoded.stats.getValue("noticeReason"));assertTrue(decoded.report().contains("Starszy wynik"));assertEquals(raw,j.toString())
+    }
+    @Test fun blockedNoticeReportKeepsVerifiedContextAndDoesNotInventUnperformedMeasurements(){
+        val j=message(JSONArray()).put("status","STOP").put("reason","NOTICE_BLOCKED");j.getJSONObject("stats").put("noticeReason",1).put("noticeModals",1).put("noticeVisible",1)
+        val reply=DesktopProtocol.parse(j,nonce)!!;val report=DesktopSummary.create("NOTICE_BLOCKED",1,reply).report()
+        assertTrue(report.contains("kod 1"));assertTrue(report.contains("Kontekst grupy potwierdzony: 1"));assertTrue(report.contains("Pozostałe liczniki nie zostały pobrane"));assertFalse(report.contains("Żądania danych"));assertFalse(report.contains("nie znaleziono dozwolonego kontenera"))
     }
     @Test fun freshConsentAndOneObjectPerAttempt(){val g=DesktopTrial(target,{0L});assertFalse(g.begin(false));assertFalse(g.begin(true));assertFalse(g.active)}
     @Test fun gateAllowsOnlyOneNativeLoadAndBoundedSameGroupHttpRedirects(){
