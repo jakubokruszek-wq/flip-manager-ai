@@ -121,7 +121,8 @@ function mediaOwners(bindings,allowedIds){
  }
  return {ids,urls};
 }
-function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[]){
+function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null){
+ const count=k=>{if(audit)audit[k]=Math.min(10000,(audit[k]||0)+1);};
  if(!allowedIds||typeof allowedIds.has!=='function')return null;
  const vp=w.visualViewport,width=Number(vp?.width)||w.innerWidth,height=Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight),left=Number(vp?.offsetLeft)||0,top=Number(vp?.offsetTop)||0;
  if(!Number.isFinite(width)||!Number.isFinite(height)||width<100||height<100||width>10000||height>10000)return null;
@@ -131,27 +132,29 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[]){
   const byId=item.mediaId&&lookup.ids.has(item.mediaId)?lookup.ids.get(item.mediaId):undefined;
   const byUrl=item.url&&lookup.urls.has(item.url)?lookup.urls.get(item.url):undefined;
   if(byId===null||byUrl===null||(byId&&byUrl&&byId!==byUrl))return null;
-  return byId||byUrl||null;
+  const owner=byId||byUrl||null;return item.linkedPostId&&item.linkedPostId!==owner?null:owner;
  };
  const exactCards=cards(w,core,group),targets=exactCards.map(p=>({...p,network:false}));
  for(const {card} of scrollCards(w,core,group)){
   if(exactCards.some(p=>p.card===card))continue;
   // Media identity comes from an exact parsed network record, never text, order or an image ID guessed as a post ID.
-  const sources=photoNodes(card,'00000',group,core),ids=new Set(sources.map(p=>identity(p.item,owners)).filter(Boolean));
-  if(ids.size!==1)continue;const id=[...ids][0];targets.push({card,id,network:true});
+  const sources=photoNodes(card,null,group,core),ids=new Set(sources.map(p=>identity(p.item,owners)).filter(Boolean));
+  if(ids.size!==1){if(sources.length)count('photoIdentityRejected');continue;}const id=[...ids][0];targets.push({card,id,network:true});
  }
 
  const result=()=>({width,height,tiles,keys,network,valid:(currentBindings=bindings)=>Math.abs((Number(w.visualViewport?.width)||w.innerWidth)-width)<1&&Math.abs(Math.min(w.innerHeight,Number(w.visualViewport?.height)||w.innerHeight)-height)<1&&Math.abs((Number(w.visualViewport?.offsetLeft)||0)-left)<1&&Math.abs((Number(w.visualViewport?.offsetTop)||0)-top)<1&&checks.every(check=>check(mediaOwners(currentBindings,allowedIds)))});
  for(const {card,id,network:fromNetwork} of targets){
   if(!allowedIds.has(id))continue;
+  count(fromNetwork?'photoNetworkCards':'photoExactCards');
   if(!slots.has(id)){if(slots.size===20)continue;slots.set(id,new Map());}const media=slots.get(id);
   for(const {node,item} of photoNodes(card,id,group,core)){
-   if(fromNetwork&&identity(item,owners)!==id)continue;
-   if(node.tagName==='IMG'&&(node.complete!==true||node.naturalWidth<1))continue;
+   count('photoSources');
+   if(fromNetwork&&identity(item,owners)!==id){count('photoIdentityRejected');continue;}
+   if(node.tagName==='IMG'&&(node.complete!==true||node.naturalWidth<1)){count('photoUnready');continue;}
    const key=item.mediaId||item.url;if(!key)continue;
-   if(media.get(key)?.done)continue;
+   if(media.get(key)?.done){count('photoAlreadyDone');continue;}
    const r=node.getBoundingClientRect(),x=Math.max(0,r.left-left),y=Math.max(0,r.top-top),right=Math.min(width,r.right-left),bottom=Math.min(height,r.bottom-top);
-   if(right-x<60||bottom-y<60||(right-x)*(bottom-y)<r.width*r.height*.6)continue;
+   if(right-x<60||bottom-y<60||(right-x)*(bottom-y)<r.width*r.height*.6){count('photoGeometryRejected');continue;}
    // Occluding headers/dialogs must never become a thumbnail of a post image.
    const points=[[.5,.5],[.1,.1],[.9,.1],[.1,.9],[.9,.9]].map(([px,py])=>[left+x+(right-x)*px,top+y+(bottom-y)*py]);
    const uncovered=()=>points.every(([px,py])=>{
@@ -163,12 +166,12 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[]){
     if(hit.closest?.('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"],[role="menu"],[role="listbox"],[role="complementary"],aside,nav,header'))return false;
     return true;
    });
-   if(!uncovered())continue;
+   if(!uncovered()){count('photoOccluded');continue;}
    // Offscreen/occluded images must not consume the three visible-preview slots.
    if(!media.has(key)){if(media.size===3)continue;media.set(key,{slot:media.size,done:false});}const mark=media.get(key);
    const source=node.currentSrc||node.getAttribute?.('href')||node.getAttribute?.('src');
    checks.push(lookup=>{const after=node.getBoundingClientRect();return node.isConnected!==false&&node.ownerDocument===w.document&&(fromNetwork?scrollCards(w,core,group).some(p=>p.card===card)&&identity(photoNodes(card,id,group,core).find(p=>p.node===node)?.item||{},lookup)===id:cards(w,core,group).some(p=>p.card===card&&p.id===id))&&["left","top","right","bottom"].every(k=>Math.abs(after[k]-r[k])<1)&&source===(node.currentSrc||node.getAttribute?.('href')||node.getAttribute?.('src'))&&uncovered();});
-   network=network||fromNetwork;tiles.push({postId:id,slot:mark.slot,x,y,width:right-x,height:bottom-y});keys.push(mark);
+   count('photoSelected');network=network||fromNetwork;tiles.push({postId:id,slot:mark.slot,x,y,width:right-x,height:bottom-y});keys.push(mark);
    if(tiles.length===3)return result();
   }
  }

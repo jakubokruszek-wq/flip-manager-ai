@@ -6,7 +6,7 @@ import org.json.JSONObject
 class DesktopSummary private constructor(val verdict:String,val reason:String,val offers:Int,val navigations:Int,val stats:Map<String,Int>){
     fun encode():String=JSONObject().put("verdict",verdict).put("reason",reason).put("offers",offers).put("navigations",navigations).put("stats",JSONObject(stats)).toString()
     fun report():String=buildString {
-        appendLine("KOMPUTER 0.5.21 • tylko lokalnie • $verdict")
+        appendLine("KOMPUTER 0.5.22 • tylko lokalnie • $verdict")
         appendLine("Komunikat powiadomień: wykryty ${stats.getValue("noticeDetected")} • zamknięty ${stats.getValue("noticeClosed")} • uprawnienia bez zmian")
         if(reason=="NOTICE_BLOCKED"){
             appendLine("Powód: NOTICE_BLOCKED")
@@ -38,6 +38,10 @@ class DesktopSummary private constructor(val verdict:String,val reason:String,va
         appendLine("Okno przewijania: ${stats.getValue("scrollElapsedMs")} ms / 30000 • próby bez ruchu: ${stats.getValue("scrollStalls")} • oczekiwania bez celu: ${stats.getValue("scrollNoTarget")} • kontenery na końcu: ${stats.getValue("scrollAtEnd")}")
         appendLine("Wyrównanie ostatniego posta: ${stats.getValue("scrollTailMoves")}/${stats.getValue("scrollTailAttempts")} (limit 2, wliczone w ruchy) • fokus widziany: ${stats.getValue("pageFocused")} • widoczność: ${stats.getValue("pageVisible")}")
         appendLine("Przewijanie GeckoView: ${stats.getValue("scrollNativeMoves")}/${stats.getValue("scrollNativeSteps")} • lokalne miniatury: ${stats.getValue("photoPreviews")} / próby klatek: ${stats.getValue("photoPreviewFrames")}")
+        if(stats.getValue("viewportGranted")==1){
+            appendLine("Wybór zdjęć (powtórne obserwacje): karty dokładne ${stats.getValue("photoExactCards")} • sieciowe ${stats.getValue("photoNetworkCards")} • źródła ${stats.getValue("photoSources")} • wybrane ${stats.getValue("photoSelected")}")
+            appendLine("Zdjęcia odrzucone: tożsamość ${stats.getValue("photoIdentityRejected")} • niezaładowane ${stats.getValue("photoUnready")} • geometria ${stats.getValue("photoGeometryRejected")} • zasłonięte ${stats.getValue("photoOccluded")} • już pobrane ${stats.getValue("photoAlreadyDone")}")
+        }
         appendLine("Kanał viewport: moduł ${stats.getValue("viewportModule")} • zgoda ${stats.getValue("viewportGranted")} • gotowy ${stats.getValue("viewportReady")} • kod ${stats.getValue("viewportProbeCode")} (0 OK, 1 gate, 2 widok, 3 fokus okna, 4 brak ACK)")
         appendLine("Żądania wheel: ${stats.getValue("nativeRequests")} • odmowy ${stats.getValue("nativeRejected")} • brak ACK ${stats.getValue("nativeTimeout")} • brak punktu ${stats.getValue("pointMisses")} • posty z dowodem mediów ${stats.getValue("mediaBindingPosts")}")
         if(stats.getValue("viewportGranted")==1&&stats.getValue("viewportReady")==0)appendLine("UWAGA: kanał viewport nie potwierdził gotowości. Podgląd ofert nie potwierdza działania przewijania ani miniatur.")
@@ -68,7 +72,7 @@ class DesktopSummary private constructor(val verdict:String,val reason:String,va
             if(verdict !in setOf("CONDITIONAL_GO","NO_GO")||reason !in DesktopTrial.reasons||j.opt("offers") !is Int||j.opt("navigations") !is Int)return null
             val offers=j.getInt("offers");val nav=j.getInt("navigations");val stored=j.getJSONObject("stats")
             // Read old count-only history without changing/deleting it; fresh protocol stays strict.
-            for(size in listOf(22,30,34,38,45,54,73,80,82))if(stored.keys().asSequence().toSet()==DesktopProtocol.statKeys.take(size).toSet())for(key in DesktopProtocol.statKeys.drop(size))stored.put(key,0)
+            for(size in listOf(22,30,34,38,45,54,73,80,82,86))if(stored.keys().asSequence().toSet()==DesktopProtocol.statKeys.take(size).toSet())for(key in DesktopProtocol.statKeys.drop(size))stored.put(key,0)
             val stats=DesktopProtocol.parseStats(stored)?:return null
             if(verdict=="NO_GO"&&offers!=0)return null
             if(offers !in 0..20||nav !in 0..4||offers>stats.getValue("candidates")||(verdict=="CONDITIONAL_GO")!=(reason=="DONE"&&offers>0))return null

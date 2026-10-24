@@ -49,4 +49,23 @@ class DesktopPresentationTest {
         assertTrue(DesktopPresentation.photos(1).contains("1"));assertTrue(DesktopPresentation.photos(1).contains("pełna liczba zdjęć nieustalona"))
         assertTrue(DesktopPresentation.photos(0).contains("brak rozpoznanego obrazu"));assertTrue(DesktopPresentation.photos(0).contains("nieustalona"))
     }
+    @Test fun version0521HistoryPadsOnlyPhotoCountersWithoutMutatingStoredReport(){
+        val original=org.json.JSONObject(DesktopSummary.create("EMPTY",1).encode())
+        val stats=original.getJSONObject("stats")
+        for(key in DesktopProtocol.statKeys.drop(86))stats.remove(key)
+        val raw=original.toString()
+        val restored=DesktopSummary.decode(raw)!!
+        for(key in DesktopProtocol.statKeys.drop(86))assertEquals(0,restored.stats.getValue(key))
+        assertEquals(raw,original.toString())
+    }
+    @Test fun photoAuditIsCountOnlyBoundedAndRequiresTheFreshExactSchema(){
+        val stats=DesktopProtocol.emptyStats().toMutableMap().apply{put("viewportGranted",1);put("photoOccluded",7)}
+        val report=DesktopSummary.create("DONE",1,DesktopReply("OK","DONE",emptyList(),stats)).report()
+        assertTrue(report.contains("zasłonięte 7"));assertFalse(report.contains("fbcdn"))
+        val json=org.json.JSONObject(stats);json.put("photoSelected",10001)
+        assertNull(DesktopProtocol.parseStats(json))
+        json.put("photoSelected",1);json.remove("photoSources")
+        assertNull(DesktopProtocol.parseStats(json))
+    }
+
 }
