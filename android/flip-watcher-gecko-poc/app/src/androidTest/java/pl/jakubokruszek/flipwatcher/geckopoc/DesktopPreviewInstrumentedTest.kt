@@ -79,7 +79,7 @@ class DesktopPreviewInstrumentedTest {
                     assertTrue(agents.first().contains("Mobile")||agents.first().contains("Android"))
                     val trial=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=trial;assertTrue(trial.begin(true))
                     val startedAt=android.os.SystemClock.elapsedRealtime()
-                    val result=DesktopSessionPreview.run(session,channel,trial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=45_000)
+                    val result=DesktopSessionPreview.run(session,channel,trial,UUID.randomUUID().toString(),target,{current},pageReady={complete},fixture=true,windowMs=45_000)
                     assertTrue("thirty-second scroll window was skipped",android.os.SystemClock.elapsedRealtime()-startedAt>=30_000)
                     assertEquals("DONE",result.reason);assertEquals(1,trial.requests)
                     assertTrue(agents.size>=2);assertFalse(agents.last().contains("Mobile",true));assertFalse(agents.last().contains("Android",true))
@@ -96,7 +96,7 @@ class DesktopPreviewInstrumentedTest {
                     android.util.Log.i("GeckoPocTest","DESKTOP_ACCEPTANCE ${summary.report()}")
                     // A clipped ancestor prevents pagination until the actual bound tail is exposed.
                     clipped.set(true);val tailTrial=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=tailTrial;assertTrue(tailTrial.begin(true))
-                    val tailResult=DesktopSessionPreview.run(session,channel,tailTrial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=15_000)
+                    val tailResult=DesktopSessionPreview.run(session,channel,tailTrial,UUID.randomUUID().toString(),target,{current},pageReady={complete},fixture=true,windowMs=15_000)
                     assertEquals("DONE",tailResult.reason);val tailReply=tailResult.reply!!
                     assertTrue("clipped tail alignment absent",tailReply.stats.getValue("scrollTailAttempts") in 1..2)
                     assertTrue("ancestor did not move",tailReply.stats.getValue("scrollTailMoves")>0)
@@ -106,12 +106,12 @@ class DesktopPreviewInstrumentedTest {
                     clipped.set(false)
                     // HTML owns viewport overflow: hidden BODY must not suppress root scrolling.
                     rootScroll.set(true);val rootTrial=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=rootTrial;assertTrue(rootTrial.begin(true))
-                    val rootResult=DesktopSessionPreview.run(session,channel,rootTrial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=15_000)
+                    val rootResult=DesktopSessionPreview.run(session,channel,rootTrial,UUID.randomUUID().toString(),target,{current},pageReady={complete},fixture=true,windowMs=15_000)
                     assertEquals("DONE",rootResult.reason);assertTrue(rootResult.reply!!.stats.getValue("scrollMoves") in 5..30);assertEquals(2,DesktopSummary.create("DONE",rootTrial.requests,rootResult.reply).offers)
                     // Inner end + already visible exact tail must recover hidden-root scrolling.
                     rootScroll.set(false);hiddenRoot.set(true)
                     val hiddenTrial=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=hiddenTrial;assertTrue(hiddenTrial.begin(true))
-                    val hiddenResult=DesktopSessionPreview.run(session,channel,hiddenTrial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=15_000)
+                    val hiddenResult=DesktopSessionPreview.run(session,channel,hiddenTrial,UUID.randomUUID().toString(),target,{current},pageReady={complete},fixture=true,windowMs=15_000)
                     assertEquals("DONE",hiddenResult.reason);val hiddenReply=hiddenResult.reply!!
                     assertEquals("inner feed must move first",1,hiddenReply.stats.getValue("scrollInner"))
                     assertEquals("hidden root must recover",1,hiddenReply.stats.getValue("scrollRoot"))
@@ -122,7 +122,7 @@ class DesktopPreviewInstrumentedTest {
                     // Same runner and real page: a verification mutation must discard partial results.
                     challenge.set(true);val unsafe=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture=true);gate=unsafe;assertTrue(unsafe.begin(true))
                     val nonce=UUID.randomUUID().toString()
-                    val stopped=DesktopSessionPreview.run(session,channel,unsafe,nonce,target,{current},fixture=true,windowMs=15_000)
+                    val stopped=DesktopSessionPreview.run(session,channel,unsafe,nonce,target,{current},pageReady={complete},fixture=true,windowMs=15_000)
                     assertEquals("CONTEXT",stopped.reason);assertNull(stopped.reply)
                     assertNull(channel.desktopPreview(nonce,System.currentTimeMillis(),1000,FIXTURE_GROUP_ID))
                     assertEquals("NO_GO",DesktopSummary.create(stopped.reason,unsafe.requests).verdict)
@@ -165,7 +165,13 @@ class DesktopPreviewInstrumentedTest {
                 val target=server.url("/groups/$FIXTURE_GROUP_ID/","desktop-start")
                 val session=GeckoSession(GeckoSessionSettings.Builder().build());val images=DesktopThumbnails()
                 var gate:DesktopTrial?=null;var current:String?=null;var loaded=false
-                val channel=CollectorChannel(session,fixtureMode=true,onDesktopStop={gate?.stop("CONTEXT")})
+                var allowPage=!consentWindow;var waiting=false
+                val channel=CollectorChannel(session,fixtureMode=true,onDesktopStop={gate?.stop("CONTEXT")},onDesktopGesture={stage->
+                    if(stage=="WAITING"){
+                        if(consentWindow){assertTrue("gesture hint before native page completion",loaded&&allowPage);assertTrue("gesture hint while another window owns input",host!!.geckoView.hasWindowFocus())}
+                        waiting=true
+                    }
+                })
                 session.navigationDelegate=object:GeckoSession.NavigationDelegate{
                     override fun onLoadRequest(s:GeckoSession,q:GeckoSession.NavigationDelegate.LoadRequest):GeckoResult<AllowOrDeny>{
                         val ok=if(gate==null)q.uri==target else gate!!.request(q.uri,q.isRedirect,q.target==GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW,q.hasUserGesture)
@@ -192,8 +198,21 @@ class DesktopPreviewInstrumentedTest {
                         withTimeout(3000){while(!accepted)delay(20)}
                         assertFalse(dialog.isShowing)
                     }else assertTrue(trial.begin(true))
+                    val generation=channel.connectionGeneration
+                    val readiness=if(consentWindow)launch{
+                        withTimeout(15_000){while(channel.connectionGeneration<=generation||!loaded)delay(50)}
+                        delay(400);assertFalse("prompt consumed operator window before page readiness",waiting)
+                        val blocker=android.app.AlertDialog.Builder(host!!).setMessage("Local focus readiness fixture").create()
+                        blocker.show()
+                        try{
+                            withTimeout(3000){while(host!!.geckoView.hasWindowFocus())delay(20)}
+                            allowPage=true;delay(400)
+                            assertFalse("prompt must not start behind a native window",waiting)
+                            assertEquals(DesktopTrial.Phase.FOCUS,trial.phase)
+                        }finally{blocker.dismiss()}
+                    }else null
                     val operator=if(gesture&&!noGesture)launch{
-                        while(trial.phase!=DesktopTrial.Phase.READING)delay(100)
+                        while(if(consentWindow)!waiting else trial.phase!=DesktopTrial.Phase.READING)delay(100)
                         delay(3000)
                         repeat(3){if(gestureSeen.get())return@launch
                             if(consentWindow){
@@ -204,8 +223,8 @@ class DesktopPreviewInstrumentedTest {
                             delay(500)
                         }
                     }else null
-                    val result=DesktopSessionPreview.run(session,channel,trial,UUID.randomUUID().toString(),target,{current},fixture=true,windowMs=40_000,view=host!!.geckoView,images=images,baseline=baseline,gesture=gesture)
-                    operator?.cancel()
+                    val result=DesktopSessionPreview.run(session,channel,trial,UUID.randomUUID().toString(),target,{current},pageReady={loaded&&allowPage},fixture=true,windowMs=40_000,view=host!!.geckoView,images=images,baseline=baseline,gesture=gesture)
+                    readiness?.join();operator?.cancel()
                     assertEquals("DONE",result.reason);val reply=result.reply!!
                     android.util.Log.i("GeckoPocTest","NATIVE_CAPTURE_COUNTS ${channel.lastViewportCaptureCounts.joinToString(",")}")
                     android.util.Log.i("GeckoPocTest","VIEWPORT_BEFORE_ASSERT deep=$deep networkOnly=$networkOnly delegated=$delegated baseline=$baseline gesture=$gesture pictures=${images.count} newOffer=${reply.rows.any{it.postId=="550000000000096"}} ${DesktopSummary.create("DONE",trial.requests,reply).report()}")

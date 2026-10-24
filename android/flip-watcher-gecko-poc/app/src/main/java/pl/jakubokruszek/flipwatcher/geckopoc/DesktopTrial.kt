@@ -4,7 +4,7 @@ import java.net.URI
 
 /** One newly consented reload of an approved root, desktop settings, no collector or upload. */
 class DesktopTrial(private val target: String, private val now: () -> Long, private val fixture: Boolean = false) {
-    enum class Phase { ARMING, NAVIGATION, LOCATION, PORT, FRESHNESS, READING }
+    enum class Phase { ARMING, NAVIGATION, LOCATION, PORT, FRESHNESS, PAGE, FOCUS, READING }
     var phase=Phase.ARMING; private set
     var active=false; private set
     var reason="NOT_STARTED"; private set

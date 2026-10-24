@@ -11,7 +11,7 @@ import org.mozilla.geckoview.GeckoSessionSettings
 object DesktopSessionPreview {
     data class Outcome(val reason:String,val reply:DesktopReply?,val userAgent:String?)
     suspend fun run(session:GeckoSession,channel:CollectorChannel,gate:DesktopTrial,nonce:String,target:String,
-                    currentUrl:()->String?,fixture:Boolean=false,windowMs:Int=60_000,view:org.mozilla.geckoview.GeckoView?=null,images:DesktopThumbnails?=null,baseline:Boolean=false,gesture:Boolean=false):Outcome=withContext(Dispatchers.Main){
+                    currentUrl:()->String?,pageReady:()->Boolean,fixture:Boolean=false,windowMs:Int=60_000,view:org.mozilla.geckoview.GeckoView?=null,images:DesktopThumbnails?=null,baseline:Boolean=false,gesture:Boolean=false):Outcome=withContext(Dispatchers.Main){
         val group=if(fixture)FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID
         var ua:String?=null
         val start=android.os.SystemClock.elapsedRealtime()
@@ -44,6 +44,17 @@ object DesktopSessionPreview {
                 val expected=currentUrl()
                 if(!gate.located||expected!=gate.requested){gate.waitFor(DesktopTrial.Phase.LOCATION);delay(100);continue}
                 if(!channel.isConnected||channel.connectionGeneration<=portAfter||channel.connectedUrl!=expected){gate.waitFor(DesktopTrial.Phase.PORT);delay(100);continue}
+                // A connected document_idle port is not proof that loading or the
+                // native consent-window transition has completed. Do not start the
+                // operator's 15-second gesture window before the surface owns input.
+                if(!pageReady()){gate.waitFor(DesktopTrial.Phase.PAGE);delay(100);continue}
+                if(view!=null){
+                    if(!view.isAttachedToWindow||!view.isShown||!view.isEnabled||!view.hasWindowFocus()){
+                        gate.waitFor(DesktopTrial.Phase.FOCUS);delay(100);continue
+                    }
+                    if(!view.hasFocus())view.requestFocus()
+                    if(!view.hasFocus()){gate.waitFor(DesktopTrial.Phase.FOCUS);delay(100);continue}
+                }
                 gate.waitFor(DesktopTrial.Phase.READING)
                 val generation=channel.connectionGeneration
                 session.setFocused(true)

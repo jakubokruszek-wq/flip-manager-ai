@@ -27,6 +27,19 @@ class DesktopPreviewTest {
         for(mode in 0..4){val g=DesktopTrial(target,{0L});g.begin(true);g.armed();assertFalse(g.request(if(mode==0)target.replace(group,"other") else if(mode==1)target+"?private=1" else target,false,mode==2,mode==3||mode==4));assertFalse(g.active)}
     }
     @Test fun desktopDeadlineIsSharedAndCannotBeRenewedByPhase(){var clock=0L;val g=DesktopTrial(target,{clock});g.begin(true);g.armed();g.request(target,false,false,false);clock=59_999;g.waitFor(DesktopTrial.Phase.FRESHNESS);assertTrue(g.tick());clock=60_000;assertFalse(g.tick());assertEquals("DEADLINE_FRESHNESS",g.reason);assertFalse(g.location(target));assertFalse(g.complete())}
+    @Test fun pageAndNativeFocusWaitsUseTheOriginalDeadline(){
+        for(phase in listOf(DesktopTrial.Phase.PAGE,DesktopTrial.Phase.FOCUS)){
+            var clock=0L;val g=DesktopTrial(target,{clock});assertTrue(g.begin(true));g.armed();g.request(target,false,false,false);g.location(target)
+            clock=59_900;g.waitFor(phase);assertEquals(100L,g.remainingMs);assertFalse(g.complete())
+            clock=60_000;assertFalse(g.tick());assertEquals("DEADLINE_${phase.name}",g.reason);assertNull(g.requested)
+        }
+    }
+    @Test fun cancelledPageOrFocusWaitCannotResumeFromALateReadyCallback(){
+        for(phase in listOf(DesktopTrial.Phase.PAGE,DesktopTrial.Phase.FOCUS)){
+            val g=DesktopTrial(target,{0L});g.begin(true);g.armed();g.request(target,false,false,false);g.location(target);g.waitFor(phase)
+            g.stop("CANCELLED");g.waitFor(DesktopTrial.Phase.READING);assertFalse(g.complete());assertFalse(g.tick());assertEquals("CANCELLED",g.reason)
+        }
+    }
     @Test fun pausedGateRejectsLateCallbacksAndConfirmation(){val g=DesktopTrial(target,{0L});g.begin(true);g.armed();g.stop("PAUSED");assertFalse(g.request(target,false,false,false));assertFalse(g.location(target));assertFalse(g.complete());assertEquals("PAUSED",g.reason)}
     @Test fun completionRequiresRealRequestLocationAndReadingPhase(){val g=DesktopTrial(target,{0L});g.begin(true);g.armed();assertFalse(g.complete());g.request(target,false,false,false);g.location(target);assertFalse(g.complete());g.waitFor(DesktopTrial.Phase.READING);assertTrue(g.complete());assertEquals("DONE",g.reason)}
     @Test fun exactFieldsSurviveOnlyValidBoundedPrivateProtocol(){val p=DesktopProtocol.parse(message(),nonce)!!;assertEquals(1,p.rows.size);assertEquals(319000.0,p.rows[0].price!!,0.01);assertEquals(42.42,p.rows[0].area!!,0.01);assertEquals(2,p.rows[0].rooms);assertEquals("Retkinia",p.rows[0].neighborhood)}

@@ -66,6 +66,7 @@ class PocActivity : ComponentActivity() {
 
     private var url: String? = null
     private var kind = PageKind.BLANK
+    private var pageLoaded = false
     private var progress = 0
     private var title: String? = null
     private var userAgent: String? = null
@@ -202,7 +203,7 @@ class PocActivity : ComponentActivity() {
                 desktopGesture=guided;desktopGestureStage="LOADING"
                 clearDesktopDetails();geckoView.requestFocus();desktopGate=gate;desktopBusy=true;desktopRows=emptyList();desktopNonce=UUID.randomUUID().toString();render()
                 desktopJob=lifecycleScope.launch{
-                    val result=DesktopSessionPreview.run(currentSession,currentChannel,gate,desktopNonce!!,target,{url},view=geckoView,images=desktopThumbnails,baseline=baseline,gesture=guided)
+                    val result=DesktopSessionPreview.run(currentSession,currentChannel,gate,desktopNonce!!,target,{url},pageReady={pageLoaded&&progress==100},view=geckoView,images=desktopThumbnails,baseline=baseline,gesture=guided)
                     if(desktopGate===gate&&desktopBusy){userAgent=result.userAgent;finishDesktop(result.reason,result.reply)}
                 }
         })
@@ -829,12 +830,14 @@ class PocActivity : ComponentActivity() {
 
     private val progressDelegate = object : GeckoSession.ProgressDelegate {
         override fun onPageStart(session: GeckoSession, url: String) {
+            pageLoaded=false;progress=0
             if (shareBusy) { sharePageLoading = true; progress = 0 }
             onUrl(url)
             lastLoadError = null
         }
 
         override fun onPageStop(session: GeckoSession, success: Boolean) {
+            pageLoaded=success
             if(!success&&desktopBusy)finishDesktop("LOAD_ERROR")
             if (shareBusy) sharePageLoading = false
             if (!success && shareBusy) finishShare("LOAD_ERROR")
@@ -964,7 +967,7 @@ class PocActivity : ComponentActivity() {
         banner.setBackgroundColor(if (stop != null) Color.parseColor("#B3261E") else Color.parseColor("#1E5AA8"))
 
         val canScan = open && !desktopBusy && !shareBusy && !responseBusy && !scanning && stop == null && !preferences.getBoolean(KEY_ONE_SCAN_USED, false) && PocPolicy.canScan(kind) && channel?.isConnected == true
-        buttons["open"]?.text = if (open) "Zamknij sesję" else "Otwórz sesję"
+        buttons["open"]?.text = if(desktopBusy) "Przerwij próbę" else if (open) "Zamknij sesję" else "Otwórz sesję"
         listOf("group", "login", "back").forEach { buttons[it]?.isEnabled = open && !desktopBusy && !scanning }
         listOf("scan", "scan3").forEach { buttons[it]?.isEnabled = canScan }
         buttons["responses"]?.isEnabled = open && !desktopBusy && !responseBusy && !visibleBusy && !scanning && !inspectingDom && kind == PageKind.APPROVED_GROUP && progress == 100 && channel?.isConnected == true
@@ -1111,7 +1114,7 @@ class PocActivity : ComponentActivity() {
             setBackgroundColor(Color.parseColor("#FAFAFC"))
             addView(banner)
             addView(row(
-                button("open", "Otwórz sesję") { if (session == null) askConsentAndOpen() else closeSession() },
+                button("open", "Otwórz sesję") { if(desktopBusy)finishDesktop("CANCELLED",show=false) else if (session == null) askConsentAndOpen() else closeSession() },
                 button("group", "Otwórz grupę") { load(PocPolicy.APPROVED_GROUP_URL, login = false) },
                 button("tools", "Narzędzia / raport") { diagnosticsDialog?.show() },
             ))
