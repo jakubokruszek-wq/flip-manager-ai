@@ -235,7 +235,7 @@ function scrollTrace(w,card){
 }
 function ownMessageText(card){
  const selector='[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="message"]';
- const texts=new Set(Array.from(card.querySelectorAll(selector)).filter(n=>n.closest('[role="article"],article')===card&&!n.closest('[role="comment"],[data-testid*="comment"],[data-ad-rendering-role*="comment"]'))
+ const texts=new Set(Array.from(card.querySelectorAll(selector)).filter(n=>n.closest('[role="article"],article')===card&&!n.closest('[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"]'))
   .map(n=>String(n.innerText||n.textContent||'').replace(/\s+/g,' ').trim()).filter(Boolean));
  // Identical nested markers are one message. Distinct messages stay ambiguous.
  return texts.size===1?[...texts][0].slice(0,12000):'';

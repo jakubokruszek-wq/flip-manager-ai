@@ -294,6 +294,8 @@ class DesktopPreviewInstrumentedTest {
                     assertTrue("red picture missing",colors.any{android.graphics.Color.red(it)>200&&android.graphics.Color.green(it)<40})
                     assertTrue("green picture missing",colors.any{android.graphics.Color.green(it)>200&&android.graphics.Color.red(it)<40})
                     val row=reply.rows.single{it.postId=="550000000000091"}
+                    assertTrue("own post text must survive the post wrapper and remain eligible",DesktopSummary.eligible(row))
+                    assertEquals(319000.0,row.price!!,0.0);assertEquals(42.0,row.area!!,0.0)
                     val panel=OffersPanel(context,{},{});panel.showRows(listOf(row),thumbnails={images.rows(it)})
                     val image=panel.findViewWithTag<android.widget.ImageView>("poc.offer.photo.${row.postId}.0")
                     assertNotNull(image.drawable)
