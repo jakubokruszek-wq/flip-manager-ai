@@ -1,7 +1,7 @@
 /* Isolated/native-consented local projection. No storage, upload or public page bridge. */
 (function(root){
 'use strict';
-const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible','scrollNativeSteps','scrollNativeMoves','photoPreviewFrames','photoPreviews','viewportHeight','visualViewportHeight','rootRemaining','viewportModule','viewportGranted','viewportReady','viewportProbeCode','nativeRequests','nativeRejected','nativeTimeout','pointMisses','mediaBindingPosts','pointProbes','pointEmpty','pointFrame','pointForeign','pointForm','pointDialog','pointComment','pointCommentable','pointChrome','pointUnbound','pointWidget','pointCache','pointCacheCards','pointRects','viewportWidth','visualWidth','visualOffsetX','visualOffsetY','visualScale100','gestureRequested','gestureTouches','gestureAnchored','gestureRejected','gestureWaitMs','gestureScrollSteps','gestureScrollMoves','noticeDetected','noticeClosed','noticeReason','noticeModals','noticeVisible','noticeNameSource','photoExactCards','photoNetworkCards','photoSources','photoIdentityRejected','photoUnready','photoGeometryRejected','photoOccluded','photoAlreadyDone','photoSelected','photoRawImg','photoRawSvg','photoRawCss','photoOwnerRejected','photoScopeRejected','photoAnchorRejected','photoSizeRejected','photoSourceRejected','photoCssUnready','scrollFast','scrollCadenceMs'];
+const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible','scrollNativeSteps','scrollNativeMoves','photoPreviewFrames','photoPreviews','viewportHeight','visualViewportHeight','rootRemaining','viewportModule','viewportGranted','viewportReady','viewportProbeCode','nativeRequests','nativeRejected','nativeTimeout','pointMisses','mediaBindingPosts','pointProbes','pointEmpty','pointFrame','pointForeign','pointForm','pointDialog','pointComment','pointCommentable','pointChrome','pointUnbound','pointWidget','pointCache','pointCacheCards','pointRects','viewportWidth','visualWidth','visualOffsetX','visualOffsetY','visualScale100','gestureRequested','gestureTouches','gestureAnchored','gestureRejected','gestureWaitMs','gestureScrollSteps','gestureScrollMoves','noticeDetected','noticeClosed','noticeReason','noticeModals','noticeVisible','noticeNameSource','photoExactCards','photoNetworkCards','photoSources','photoIdentityRejected','photoUnready','photoGeometryRejected','photoOccluded','photoAlreadyDone','photoSelected','photoRawImg','photoRawSvg','photoRawCss','photoOwnerRejected','photoScopeRejected','photoAnchorRejected','photoSizeRejected','photoSourceRejected','photoCssUnready','scrollFast','scrollCadenceMs','photoNetworkAnchors','photoSvgBounds','photoTinyBound'];
 const zero=()=>Object.fromEntries(statKeys.map(k=>[k,0]));
 function groupURL(raw,group,fixture){try{const u=new URL(raw);return /^[A-Za-z0-9._-]{1,100}$/.test(group)&&!u.username&&!u.password&&!u.hash&&(fixture||!u.search)&&u.pathname.replace(/\/$/,'')==='/groups/'+group&&((u.protocol==='https:'&&!u.port&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))||(fixture===true&&u.protocol==='http:'&&u.hostname==='127.0.0.1'));}catch{return false;}}
 function exact(raw,group){try{const u=new URL(raw);const p=u.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d{5,30})\/?$/);return u.protocol==='https:'&&!u.port&&!u.username&&!u.password&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&p?.[1]===group?p[2]:null;}catch{return null;}}
@@ -29,6 +29,14 @@ function cssPhotoLoaded(node,raw){
  if(Array.from(doc?.images||[]).slice(0,500).some(n=>(n.currentSrc||n.src)===raw&&n.complete===true&&n.naturalWidth>0))return true;
  return (doc?.defaultView?.performance?.getEntriesByName?.(raw)||[]).slice(0,20).some(e=>e.entryType==='resource'&&e.responseEnd>0&&['css','img'].includes(e.initiatorType));
 }
+// An opaque photo route is only a wrapper, never an ID or post association.
+function opaquePhotoLink(raw){try{const u=new URL(raw);return u.protocol==='https:'&&!u.port&&!u.username&&!u.password&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&(/^\/photo(?:\.php)?\/?$/.test(u.pathname)||/^\/(?:[^/]+\/)?photos\//.test(u.pathname));}catch{return false;}}
+function photoSvgRoot(n){
+ if(String(n.tagName).toLowerCase()!=='image')return null;
+ const svg=n.closest?.('svg');
+ if(!svg||svg.ownerDocument!==n.ownerDocument||!svg.contains?.(n)||svg.querySelectorAll('image').length!==1||svg.querySelector('text,foreignObject,path,rect,circle,ellipse,line,polygon,polyline,use'))return null;
+ return svg;
+}
 function photoNodes(card,postId,group,core,audit=null){
  const count=k=>{if(audit)audit[k]=Math.min(10000,(audit[k]||0)+1);};
  const result=[];const video=!!card.querySelector?.('video');
@@ -38,17 +46,23 @@ function photoNodes(card,postId,group,core,audit=null){
   const background=css.includes(n);count(background?'photoRawCss':n.tagName==='IMG'?'photoRawImg':'photoRawSvg');
   if(n.closest('[role="article"],article')!==card){count('photoOwnerRejected');continue;}
   if(n.closest('[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],video')){count('photoScopeRejected');continue;}
-  const rect=n.getBoundingClientRect();const a=n.closest('a[href]');const mediaId=photoLinkId(a?.href);let linkedPostId=null;
-  if(a&&!mediaId){const p=core.parsePostLink(a.href);if(p?.sourceType!=='GROUP'||p.sourceId!==group||(postId!==null&&p.postId!==postId)){count('photoAnchorRejected');continue;}linkedPostId=p.postId;}
-  if(rect.width<80||rect.height<80){count('photoSizeRejected');continue;}
+  const svg=photoSvgRoot(n),renderNode=svg||n;const rect=renderNode.getBoundingClientRect();const a=n.closest('a[href]');const mediaId=photoLinkId(a?.href);let linkedPostId=null,networkAnchor=false;
+  if(a&&!mediaId){const p=core.parsePostLink(a.href);
+   if(p){if(p.sourceType!=='GROUP'||p.sourceId!==group||(postId!==null&&p.postId!==postId)){count('photoAnchorRejected');continue;}linkedPostId=p.postId;}
+   else if(opaquePhotoLink(a.href))networkAnchor=true;
+   else{count('photoAnchorRejected');continue;}
+  }
+  if(rect.width<60||rect.height<60){count('photoSizeRejected');continue;}
   if(!mediaId&&video){count('photoScopeRejected');continue;}
   const source=()=>background?cssPhotoSource(n):n.currentSrc||n.getAttribute?.('src')||n.getAttribute?.('href')||n.getAttributeNS?.('http://www.w3.org/1999/xlink','href');
-  const raw=source(),url=imageURL(raw);if(!mediaId&&!url){count('photoSourceRejected');continue;}
+  const anchorHref=a?.href;const raw=source(),url=imageURL(raw);if(!mediaId&&!url){count('photoSourceRejected');continue;}
   if(background&&(!raw||!cssPhotoLoaded(n,raw))){count('photoCssUnready');continue;}
   // Unlinked small tiles require independent exact network-media ownership.
   // They cannot inflate DOM-only image evidence or adopt an avatar by size.
-  const networkRequired=!mediaId&&!linkedPostId&&(rect.width<200||rect.height<100);
-  result.push({node:n,source,ready:()=>!background||cssPhotoLoaded(n,source()),item:{url,mediaId,linkedPostId,networkRequired,exactPostId:postId,exactAssociation:postId!==null,domPhoto:true}});if(result.length===20)break;
+  const networkRequired=networkAnchor||rect.width<80||rect.height<80||(!mediaId&&!linkedPostId&&(rect.width<200||rect.height<100));
+  if(networkRequired&&!url){count('photoSourceRejected');continue;}
+  if(networkAnchor)count('photoNetworkAnchors');if(svg)count('photoSvgBounds');if(rect.width<80||rect.height<80)count('photoTinyBound');
+  result.push({node:renderNode,source,ready:()=>n.isConnected!==false&&n.closest('[role="article"],article')===card&&n.closest('a[href]')===a&&a?.href===anchorHref&&!n.closest('[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],video')&&(!svg||photoSvgRoot(n)===svg)&&(!background||cssPhotoLoaded(n,source())),item:{url,mediaId,linkedPostId,networkRequired,exactPostId:postId,exactAssociation:postId!==null,domPhoto:true}});if(result.length===20)break;
  }
  return result;
 }
@@ -404,5 +418,5 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
  }catch{return empty('ERROR');}
  finally{noticeDispose?.();gestureWatch?.stop();setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
-const api={imageURL,photoLinkId,cssPhotoSource,cssPhotoLoaded,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
+const api={imageURL,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);

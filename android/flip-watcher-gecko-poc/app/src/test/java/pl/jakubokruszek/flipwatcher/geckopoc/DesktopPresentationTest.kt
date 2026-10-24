@@ -101,4 +101,12 @@ class DesktopPresentationTest {
         assertNull(DesktopProtocol.parseStats(org.json.JSONObject(stats).put("nativeRequests",31)))
     }
 
+    @Test fun version0524HistoryDoesNotInventNetworkAnchorOrSvgEvidence(){
+        val old=org.json.JSONObject(DesktopSummary.create("EMPTY",1).encode())
+        for(key in DesktopProtocol.statKeys.drop(106))old.getJSONObject("stats").remove(key)
+        val raw=old.toString();val restored=DesktopSummary.decode(raw)!!
+        for(key in DesktopProtocol.statKeys.drop(106))assertEquals(0,restored.stats.getValue(key))
+        assertEquals(raw,old.toString())
+    }
+
 }
