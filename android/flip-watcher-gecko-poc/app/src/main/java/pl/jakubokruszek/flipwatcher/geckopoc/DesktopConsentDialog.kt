@@ -25,7 +25,7 @@ class DesktopConsentDialog(private val owner:Activity,uiContext:Context=owner,pr
         val content=LinearLayout(context).apply{orientation=LinearLayout.VERTICAL}
         content.addView(TextView(context).apply{text=SUMMARY;textSize=16f;setPadding(0,dp(8),0,dp(8))})
         val details=TextView(context).apply{text=DETAILS;textSize=16f;visibility=View.GONE;tag="poc.desktop.consentDetails"}
-        val disclosure=Button(context).apply{text="Pełny zakres i prywatność";textSize=16f;tag="poc.desktop.consentDisclosure";setOnClickListener{details.visibility=if(details.visibility==View.GONE)View.VISIBLE else View.GONE;text=if(details.visibility==View.VISIBLE)"Ukryj szczegóły" else "Pełny zakres i prywatność"}}
+        val disclosure=Button(context).apply{text="Szczegóły";textSize=16f;tag="poc.desktop.consentDisclosure";setOnClickListener{details.visibility=if(details.visibility==View.GONE)View.VISIBLE else View.GONE;text=if(details.visibility==View.VISIBLE)"Ukryj" else "Szczegóły"}}
         content.addView(disclosure);content.addView(details)
         body.addView(content,ViewGroup.LayoutParams(-1,-2));root.addView(body,LinearLayout.LayoutParams(-1,0,1f))
         // Footer is outside ScrollView. Full-width buttons also fit large text.
