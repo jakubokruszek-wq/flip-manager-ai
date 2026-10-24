@@ -19,7 +19,7 @@ class DesktopConsentDialog(private val owner:Activity,uiContext:Context=owner,pr
     init {
         setOwnerActivity(owner);setCanceledOnTouchOutside(false)
         val root=LinearLayout(context).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(12),dp(12),dp(12),dp(12))}
-        val title=TextView(context).apply{text="Automatyczny podgląd";textSize=20f;maxLines=2;ellipsize=TextUtils.TruncateAt.END;setTypeface(typeface,android.graphics.Typeface.BOLD)}
+        val title=TextView(context).apply{text="Podgląd auto";textSize=20f;maxLines=2;ellipsize=TextUtils.TruncateAt.END;setTypeface(typeface,android.graphics.Typeface.BOLD)}
         root.addView(title,LinearLayout.LayoutParams(-1,-2))
         val body=ScrollView(context).apply{tag="poc.desktop.consentBody";isFocusableInTouchMode=true}
         val content=LinearLayout(context).apply{orientation=LinearLayout.VERTICAL}
@@ -30,7 +30,7 @@ class DesktopConsentDialog(private val owner:Activity,uiContext:Context=owner,pr
         body.addView(content,ViewGroup.LayoutParams(-1,-2));root.addView(body,LinearLayout.LayoutParams(-1,0,1f))
         // Footer is outside ScrollView. Full-width buttons also fit large text.
         val footer=LinearLayout(context).apply{orientation=LinearLayout.VERTICAL;setPadding(0,dp(8),0,0)}
-        footer.addView(Button(context).apply{text="Zgadzam się i uruchamiam";textSize=16f;minHeight=dp(48);tag="poc.desktop.consentAccept";setOnClickListener{if(!accepted){accepted=true;dismiss();onAccept()}}},LinearLayout.LayoutParams(-1,-2))
+        footer.addView(Button(context).apply{text="Zgadzam się";textSize=16f;minHeight=dp(48);tag="poc.desktop.consentAccept";setOnClickListener{if(!accepted){accepted=true;dismiss();onAccept()}}},LinearLayout.LayoutParams(-1,-2))
         footer.addView(Button(context).apply{text="Anuluj";textSize=16f;minHeight=dp(48);tag="poc.desktop.consentCancel";setOnClickListener{dismiss()}},LinearLayout.LayoutParams(-1,-2))
         root.addView(footer,LinearLayout.LayoutParams(-1,-2));setContentView(root)
     }
