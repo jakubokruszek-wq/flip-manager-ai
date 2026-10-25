@@ -64,3 +64,17 @@ test('colloquial adapter keeps sale and foreign city filters intact and supports
  assert.equal(fields.previewFields({postText:'Kupię mieszkanie. '+colloquialListing}).price,null);
  assert.equal(fields.previewFields({postText:'Warszawa. Sprzedam mieszkanie. '+colloquialListing}).usable,false);
 });
+test('SVGAnimatedString photo anchor is read as an exact URL and revalidated after animation',()=>{
+ const h=photoDOM(),n=h.img('880000000000001',{src:'https://scontent.fbcdn.net/tile.jpg',width:300,height:180});
+ const href={baseVal:'https://www.facebook.com/photo/?fbid=880000000000001',animVal:'https://www.facebook.com/photo/?fbid=880000000000001'},a={href};const old=n.closest;
+ n.closest=s=>s==='a[href]'?a:old(s);h.set([n]);const got=preview.photoNodes(h.card,'550000000000001',group,core);assert.equal(got.length,1);assert.equal(got[0].item.mediaId,'880000000000001');assert(got[0].ready());
+ href.animVal='https://www.facebook.com/profile.php?id=777777';assert.equal(got[0].ready(),false);assert.equal(preview.photoNodes(h.card,'550000000000001',group,core).length,0);
+});
+test('SVG anchor resolution rejects unsafe URLs, blank animation and object coercion',()=>{
+ const a={ownerDocument:{baseURI:'https://www.facebook.com/groups/'+group+'/'},href:{baseVal:'/photo/?fbid=880000000000001',animVal:'/photo/?fbid=880000000000001'}};
+ assert.equal(preview.photoAnchorHref(a),'https://www.facebook.com/photo/?fbid=880000000000001');
+ a.href.animVal='';assert.equal(preview.photoAnchorHref(a),null);
+ a.href={toString(){throw Error('must not coerce')}};assert.equal(preview.photoAnchorHref(a),null);
+ const h=photoDOM(),n=h.img('880000000000001');const old=n.closest;n.closest=s=>s==='a[href]'?a:old(s);h.set([n]);
+ for(const raw of ['javascript:alert(1)','https://evil.test/photo/?fbid=880000000000001','https://www.facebook.com/profile.php?id=880000000000001',`https://www.facebook.com/groups/foreign/posts/550000000000001/`]){a.href={baseVal:raw,animVal:raw};assert.equal(preview.photoNodes(h.card,'550000000000001',group,core).length,0,raw);}
+});

@@ -37,6 +37,14 @@ function photoSvgRoot(n){
  if(!svg||svg.ownerDocument!==n.ownerDocument||!svg.contains?.(n)||svg.querySelectorAll('image').length!==1||svg.querySelector('text,foreignObject,path,rect,circle,ellipse,line,polygon,polyline,use'))return null;
  return svg;
 }
+// SVGAnchorElement.href is SVGAnimatedString, unlike HTMLAnchorElement.href.
+// Use the displayed animated value and resolve relative links without coercing objects.
+function photoAnchorHref(anchor){
+ if(!anchor)return null;
+ try{const value=anchor.href;const raw=typeof value==='string'?value:typeof value?.animVal==='string'?value.animVal:typeof value?.baseVal==='string'?value.baseVal:anchor.getAttribute?.('href');
+  return typeof raw==='string'&&raw.length>0&&raw.length<=8192?new URL(raw,anchor.ownerDocument?.baseURI).href:null;
+ }catch{return null;}
+}
 function photoNodes(card,postId,group,core,audit=null){
  const count=k=>{if(audit)audit[k]=Math.min(10000,(audit[k]||0)+1);};
  const result=[];const video=!!card.querySelector?.('video');
@@ -46,23 +54,23 @@ function photoNodes(card,postId,group,core,audit=null){
   const background=css.includes(n);count(background?'photoRawCss':n.tagName==='IMG'?'photoRawImg':'photoRawSvg');
   if(n.closest('[role="article"],article')!==card){count('photoOwnerRejected');continue;}
   if(n.closest('[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],video')){count('photoScopeRejected');continue;}
-  const svg=photoSvgRoot(n),renderNode=svg||n;const rect=renderNode.getBoundingClientRect();const a=n.closest('a[href]');const mediaId=photoLinkId(a?.href);let linkedPostId=null,networkAnchor=false;
-  if(a&&!mediaId){const p=core.parsePostLink(a.href);
+  const svg=photoSvgRoot(n),renderNode=svg||n;const rect=renderNode.getBoundingClientRect();const a=n.closest('a[href]'),anchorHref=photoAnchorHref(a);const mediaId=photoLinkId(anchorHref);let linkedPostId=null,networkAnchor=false;
+  if(a&&!mediaId){const p=core.parsePostLink(anchorHref);
    if(p){if(p.sourceType!=='GROUP'||p.sourceId!==group||(postId!==null&&p.postId!==postId)){count('photoAnchorRejected');continue;}linkedPostId=p.postId;}
-   else if(opaquePhotoLink(a.href))networkAnchor=true;
+   else if(opaquePhotoLink(anchorHref))networkAnchor=true;
    else{count('photoAnchorRejected');continue;}
   }
   if(rect.width<60||rect.height<60){count('photoSizeRejected');continue;}
   if(!mediaId&&video){count('photoScopeRejected');continue;}
   const source=()=>background?cssPhotoSource(n):n.currentSrc||n.getAttribute?.('src')||n.getAttribute?.('href')||n.getAttributeNS?.('http://www.w3.org/1999/xlink','href');
-  const anchorHref=a?.href;const raw=source(),url=imageURL(raw);if(!mediaId&&!url){count('photoSourceRejected');continue;}
+  const raw=source(),url=imageURL(raw);if(!mediaId&&!url){count('photoSourceRejected');continue;}
   if(background&&(!raw||!cssPhotoLoaded(n,raw))){count('photoCssUnready');continue;}
   // Unlinked small tiles require independent exact network-media ownership.
   // They cannot inflate DOM-only image evidence or adopt an avatar by size.
   const networkRequired=networkAnchor||rect.width<80||rect.height<80||(!mediaId&&!linkedPostId&&(rect.width<200||rect.height<100));
   if(networkRequired&&!url){count('photoSourceRejected');continue;}
   if(networkAnchor)count('photoNetworkAnchors');if(svg)count('photoSvgBounds');if(rect.width<80||rect.height<80)count('photoTinyBound');
-  result.push({node:renderNode,source,ready:()=>n.isConnected!==false&&n.closest('[role="article"],article')===card&&n.closest('a[href]')===a&&a?.href===anchorHref&&!n.closest('[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],video')&&(!svg||photoSvgRoot(n)===svg)&&(!background||cssPhotoLoaded(n,source())),item:{url,mediaId,linkedPostId,networkRequired,exactPostId:postId,exactAssociation:postId!==null,domPhoto:true}});if(result.length===20)break;
+  result.push({node:renderNode,source,ready:()=>n.isConnected!==false&&n.closest('[role="article"],article')===card&&n.closest('a[href]')===a&&photoAnchorHref(a)===anchorHref&&!n.closest('[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],video')&&(!svg||photoSvgRoot(n)===svg)&&(!background||cssPhotoLoaded(n,source())),item:{url,mediaId,linkedPostId,networkRequired,exactPostId:postId,exactAssociation:postId!==null,domPhoto:true}});if(result.length===20)break;
  }
  return result;
 }
@@ -418,5 +426,5 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
  }catch{return empty('ERROR');}
  finally{noticeDispose?.();gestureWatch?.stop();setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
-const api={imageURL,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
+const api={imageURL,photoAnchorHref,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);
