@@ -65,6 +65,19 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
             })
             content.addView(card)
         }
+        val review=rows.filter{DesktopPresentation.reviewable(it)}
+        if(review.isNotEmpty()){
+            content.addView(label("Do ręcznego sprawdzenia (${review.size})",22f).apply{tag="poc.offers.review"})
+            content.addView(label("Te posty mają dokładny link, ale nie zostały rozpoznane jako oferty. Napisy na grafikach mogą być niedostępne jako tekst. Brak OCR; nie dopowiadamy ceny ani metrażu.",14f))
+            for(row in review){
+                content.addView(label(DesktopPresentation.explanation(row),14f))
+                val link=OfferLinks.validatedReview(row)
+                content.addView(label(link?:"Brak bezpiecznego linku",14f).apply{
+                    tag="poc.review.link.${row.postId}";setTextColor(Color.rgb(20,80,180));isClickable=link!=null
+                    if(link!=null)setOnClickListener{onOpen(row)}
+                })
+            }
+        }
         content.addView(label("Link otwiera Facebooka lub przeglądarkę poza POC. Przed otwarciem lista jest czyszczona. Bez skanu i uploadu.",13f))
         content.addView(Button(context).apply{tag="poc.offers.report";text="Raport i powody pozostałych postów";isAllCaps=false;isSaveEnabled=false;setOnClickListener{onReport()}})
         scrollTo(0,0)

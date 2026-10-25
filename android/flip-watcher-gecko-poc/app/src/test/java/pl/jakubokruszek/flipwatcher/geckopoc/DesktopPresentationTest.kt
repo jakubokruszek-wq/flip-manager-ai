@@ -4,6 +4,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DesktopPresentationTest {
+    @Test fun unknownTextPostsRemainReviewableButKnownExcludedIntentsDoNot(){
+        val unknown=row("550000000000091",intent="UNKNOWN",usable=false).copy(price=null,priceSource="NONE",area=null,rooms=null,qualification="NO_TEXT")
+        assertTrue(DesktopPresentation.reviewable(unknown));assertFalse(DesktopSummary.eligible(unknown))
+        assertFalse(DesktopPresentation.reviewable(unknown.copy(qualification="FOREIGN_CITY")))
+        assertFalse(DesktopPresentation.reviewable(unknown.copy(intent="BUY_PROPERTY")))
+        assertFalse(DesktopPresentation.reviewable(unknown.copy(intent="RENT_OFFER")))
+        assertFalse(DesktopPresentation.reviewable(row("550000000000092")))
+    }
+
     @Test fun derivedTotalIsClearlySeparatedFromExplicitAskingPrice(){
         val explicit=row("550000000000091")
         val derived=explicit.copy(price=365400.0,priceSource="DERIVED_FROM_PRICE_PER_M2",area=63.0,rooms=2)

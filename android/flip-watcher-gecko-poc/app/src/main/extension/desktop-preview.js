@@ -103,20 +103,32 @@ function createModel(core,fields,group){
   }
   return Math.min(20,evidence.ids.size+[...evidence.urls.values()].filter(id=>!id).length);
  }
+ function eligible(row){return row.usable===true&&['SELL_PROPERTY','UNKNOWN'].includes(row.intent)&&[row.price,row.area,row.rooms].some(v=>v!==null);}
+ // Keep the bounded preview useful without replacing a retained offer or media evidence.
+ function admit(row){
+  if(rows.has(row.postId)||rows.size<20)return true;
+  const victim=eligible(row)?[...rows.values()].find(old=>!eligible(old)&&old.photos===0):null;
+  if(!victim){stats.rejected++;return false;}
+  rows.delete(victim.postId);blocked.delete(victim.postId);photoEvidence.delete(victim.postId);return true;
+ }
  function project(r,layer){
   if(!r||!/^\d{5,30}$/.test(r.postId)||exact(r.permalink,group)!==r.postId){stats.rejected++;return null;}
-  if(!rows.has(r.postId)&&rows.size>=20){stats.rejected++;return null;}
-  const f=fields.previewFields({postText:typeof r.text==='string'?r.text.slice(0,12000):''});
-  return {postId:r.postId,permalink:'https://www.facebook.com/groups/'+group+'/posts/'+r.postId+'/',layer,
+  // A shared/quoted story's message is not the enclosing post's own message.
+  const path=r.__structuredDiagnostics?.structuredTextPath;
+  const borrowed=layer!=='DOM'&&typeof path==='string'&&/(?:^|\.)(?:[^.]*shared[^.]*|[^.]*quoted[^.]*|crosspost[^.]*|reshare[^.]*|original_story|attached_story)(?:\.|$)/i.test(path);
+  const f=fields.previewFields({postText:!borrowed&&typeof r.text==='string'?r.text.slice(0,12000):''});
+  const row={postId:r.postId,permalink:'https://www.facebook.com/groups/'+group+'/posts/'+r.postId+'/',layer,
    price:bounded(f.price,1,20000000),priceSource:bounded(f.price,1,20000000)!==null?f.priceSource:'NONE',area:bounded(f.area,1,9999),rooms:bounded(f.rooms,1,20),
    district:f.district,neighborhood:f.neighborhood,street:typeof f.street==='string'?f.street.slice(0,80):null,intent:f.intent,usable:f.usable===true,
-   photos:photos(r,layer),qualification:f.qualification};
+   photos:0,qualification:f.qualification};
+  if(!cleanRow(row)){stats.rejected++;return null;}
+  if(!admit(row))return null;row.photos=photos(borrowed?{...r,media:[]}:r,layer);return row;
  }
  function merge(row){
   row=cleanRow(row);
   if(!row||exact(row.permalink,group)!==row.postId){stats.rejected++;return;}
   const old=rows.get(row.postId);
-  if(!old&&rows.size>=20){stats.rejected++;return;}
+  if(!old&&!admit(row))return;
   if(old){stats.duplicates++;const foreign=old.qualification==='FOREIGN_CITY'||row.qualification==='FOREIGN_CITY';if(old.qualification==='NO_TEXT'&&row.qualification!=='NO_TEXT')old.qualification=row.qualification;
    else if(row.qualification!=='NO_TEXT'&&old.qualification!==row.qualification)old.qualification='CLASSIFIER';
    const bad=blocked.get(row.postId)||new Set();if(foreign)bad.add('foreignCity');
@@ -138,7 +150,7 @@ function createModel(core,fields,group){
   }else rows.set(row.postId,{...row});
   stats.candidates=rows.size;
  }
- function add(record,layer){const row=project(record,layer);if(row){stats[layer==='DOM'?'dom':layer==='HYDRATION'?'hydration':'network']++;merge(row);const stored=rows.get(row.postId);if(stored)stored.photos=row.photos;}}
+ function add(record,layer){const row=project(record,layer);if(row){stats[layer==='DOM'?'dom':layer==='HYDRATION'?'hydration':'network']++;merge(row);const stored=rows.get(row.postId);if(stored&&row.photos>0)stored.photos=row.photos;}}
  function hydration(texts){const source={sourceType:'GROUP',sourceId:group,sourceUrl:'https://www.facebook.com/groups/'+group+'/',allowGroupRedirect:false};
   for(const body of texts.slice(0,64)){if(typeof body!=='string'||body.length>524288)continue;stats.scripts++;const ids=explicitIds(body,group);
    let found=[];try{found=core.extractStructuredRecordsFromText(body,'HYDRATION',source,0)||[];}catch{stats.rejected++;}

@@ -4,6 +4,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class OfferLinksTest {
+    @Test fun reviewLinksRequireExactApprovedIdentityAndExplicitUnclassifiedStatus(){
+        val r=row().copy(price=null,priceSource="NONE",area=null,rooms=null,usable=false,intent="UNKNOWN",qualification="NO_TEXT")
+        assertNull(OfferLinks.validated(r));assertEquals(r.permalink,OfferLinks.validatedReview(r))
+        assertNull(OfferLinks.validatedReview(r.copy(permalink=r.permalink+"?private=1")))
+        assertNull(OfferLinks.validatedReview(r.copy(permalink=r.permalink.replace(PocPolicy.APPROVED_GROUP_ID,"foreign"))))
+        assertNull(OfferLinks.validatedReview(r.copy(intent="BUY_PROPERTY")))
+        assertNull(OfferLinks.validatedReview(r.copy(qualification="FOREIGN_CITY")))
+    }
+
     private fun row()=DesktopRow("550000000000001","https://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/posts/550000000000001/","NETWORK",319000.0,"EXPLICIT_TOTAL",42.42,2,null,null,null,"SELL_PROPERTY",true,0,"CANDIDATE")
     @Test fun onlyTheExactEligibleApprovedPostCanOpen(){assertEquals(row().permalink,OfferLinks.validated(row()))}
     @Test fun credentialsForeignHostsGroupsAndQueryOrFragmentAreRejected(){

@@ -6,6 +6,7 @@ import java.util.Locale
 /** Transient presentation only. Clipboard and persistence continue using aggregate report(). */
 object DesktopPresentation {
     fun priceLabel(row:DesktopRow)=if(row.priceSource=="DERIVED_FROM_PRICE_PER_M2")"Cena wyliczona z ceny za m²" else "Cena"
+    fun reviewable(row:DesktopRow)=!DesktopSummary.eligible(row)&&row.intent in setOf("SELL_PROPERTY","UNKNOWN")&&row.qualification in setOf("NO_TEXT","MISSING_FIELDS","NOT_PROPERTY","CLASSIFIER")
     fun photos(count:Int)=if(count==0)"Zdjęcia: brak rozpoznanego obrazu; pełna liczba nieustalona." else "Rozpoznane zdjęcia/miniatury: $count; pełna liczba zdjęć nieustalona."
 
     fun explanation(row:DesktopRow):String=when(row.qualification){

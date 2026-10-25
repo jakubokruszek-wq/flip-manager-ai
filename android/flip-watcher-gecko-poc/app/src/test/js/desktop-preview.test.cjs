@@ -78,3 +78,41 @@ test('SVG anchor resolution rejects unsafe URLs, blank animation and object coer
  const h=photoDOM(),n=h.img('880000000000001');const old=n.closest;n.closest=s=>s==='a[href]'?a:old(s);h.set([n]);
  for(const raw of ['javascript:alert(1)','https://evil.test/photo/?fbid=880000000000001','https://www.facebook.com/profile.php?id=880000000000001',`https://www.facebook.com/groups/foreign/posts/550000000000001/`]){a.href={baseVal:raw,animVal:raw};assert.equal(preview.photoNodes(h.card,'550000000000001',group,core).length,0,raw);}
 });
+test('shared story message cannot become three offers under three root IDs',()=>{
+ const story=(id,extra)=>({__typename:'Story',post_id:id,url:`https://www.facebook.com/groups/${group}/posts/${id}/`,...extra});
+ const original=story('550000000000093',{message:{text:'Sprzedam mieszkanie 42m2 cena 319000 zł'},actors:[{name:'Synthetic author'}]});
+ const body=JSON.stringify({items:[story('550000000000091',{shared_story:original}),story('550000000000092',{shared_story:original})]});
+ const records=core.extractStructuredRecordsFromText(body,'NETWORK',{sourceType:'GROUP',sourceId:group},0);assert.equal(records.length,3);
+ const m=model();for(const r of records)m.add(r,'NETWORK');
+ assert.equal(m.rows().filter(r=>r.qualification==='CANDIDATE').length,1);
+ for(const id of ['550000000000091','550000000000092']){const r=m.rows().find(r=>r.postId===id);assert.equal(r.price,null);assert.equal(r.area,null);assert.equal(r.qualification,'NO_TEXT');}
+ const good=m.rows().find(r=>r.postId===original.post_id);assert.equal(good.price,319000);assert.equal(good.area,42);
+ m.clear();for(const r of records)m.add(r,'HYDRATION');assert.equal(m.rows().filter(r=>r.qualification==='CANDIDATE').length,1);
+});
+test('same parameters on different own posts remain different exact identities',()=>{const m=model();m.add(record('550000000000091'),'DOM');m.add(record('550000000000092'),'DOM');assert.equal(m.rows().length,2);assert(m.rows().every(r=>r.qualification==='CANDIDATE'));});
+test('late eligible offer replaces a fieldless stub at the twenty-ID cap and clears stale evidence',()=>{
+ const m=model();for(let i=0;i<20;i++)m.add({...record(String(550000000000000+i),''),media:[]},'DOM');assert.equal(m.rows().length,20);
+ m.add(record('550000000000099'),'DOM');assert.equal(m.rows().length,20);assert(m.rows().some(r=>r.postId==='550000000000099'&&r.price===319000));assert(!m.rows().some(r=>r.postId==='550000000000000'));
+ m.clear();assert.equal(m.rows().length,0);assert.equal(m.mediaBindings().length,0);
+});
+test('priority admission never evicts a retained offer or a post with exact media evidence',()=>{
+ const m=model();for(let i=0;i<20;i++)m.add(record(String(550000000000000+i)),'DOM');m.add(record('550000000000099'),'DOM');assert.equal(m.rows().length,20);assert(!m.rows().some(r=>r.postId==='550000000000099'));
+ const n=model();for(let i=0;i<20;i++){const id=String(550000000000000+i);n.add({...record(id,''),media:[{...media('880000000000001'),exactPostId:id}]},'NETWORK');}n.add(record('550000000000099'),'DOM');assert.equal(n.rows().length,20);assert(!n.rows().some(r=>r.postId==='550000000000099'));
+});
+test('own parent message and same-ID Comet message remain available despite an embedded share',()=>{
+ const s=(id,extra)=>({__typename:'Story',post_id:id,url:`https://www.facebook.com/groups/${group}/posts/${id}/`,...extra});
+ const child=s('550000000000093',{message:{text:'Sprzedam mieszkanie 42m2 cena319000 zł'}});
+ const parent=s('550000000000091',{message:{text:'Sprzedam mieszkanie 50m2 cena350000 zł'},shared_story:child});
+ const m=model();for(const r of core.extractStructuredRecordsFromText(JSON.stringify(parent),'NETWORK',{sourceType:'GROUP',sourceId:group},0))m.add(r,'NETWORK');
+ assert.equal(m.rows().find(r=>r.postId===parent.post_id).price,350000);assert.equal(m.rows().find(r=>r.postId===child.post_id).price,319000);
+ const own={...record('550000000000095'),__structuredDiagnostics:{structuredTextPath:'comet_sections.content.story.message'}};m.add(own,'NETWORK');assert.equal(m.rows().find(r=>r.postId===own.postId).price,319000);
+});
+test('background snapshot admission replaces only an unclassified no-media row at capacity',()=>{
+ const m=model();for(let i=0;i<20;i++)m.add({...record(String(550000000000000+i),''),media:[]},'DOM');
+ const n=model();n.add(record('550000000000099'),'NETWORK');m.merge(n.rows()[0]);assert.equal(m.rows().length,20);assert(m.rows().some(r=>r.postId==='550000000000099'));assert.equal(m.stats.candidates,20);
+});
+test('empty DOM observation cannot erase network snapshot media proof and make that row evictable',()=>{
+ const m=model(),n=model();n.add({...record('550000000000091',''),media:[{...media('880000000000001'),exactPostId:'550000000000091'}]},'NETWORK');m.merge(n.rows()[0]);
+ m.add({...record('550000000000091',''),media:[]},'DOM');assert.equal(m.rows()[0].photos,1);
+ for(let i=0;i<19;i++)m.add({...record(String(550000000000000+i),''),media:[]},'DOM');m.add(record('550000000000099'),'DOM');assert.equal(m.rows().length,20);assert(m.rows().some(r=>r.postId==='550000000000091'&&r.photos===1));
+});

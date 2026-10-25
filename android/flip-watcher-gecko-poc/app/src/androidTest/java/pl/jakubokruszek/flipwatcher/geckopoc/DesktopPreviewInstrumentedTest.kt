@@ -156,6 +156,23 @@ class DesktopPreviewInstrumentedTest {
     @Test fun fastAutomaticCssPhotosShowEligibleOffersWithoutOperatorGesture()=checkNativeViewport(false,cssPhotos=true,fastScroll=true)
     @Test fun singleRasterSvgPhotosUseVisibleRootAndShowActualOfferImages()=checkNativeViewport(false,fastScroll=true,svgPhotos=true)
     @Test fun coloredTextPostRetainsColloquialAreaAndLabelsDerivedPrice()=checkNativeViewport(false,baseline=true,fastScroll=true,colloquial=true)
+    @Test fun unclassifiedExactPostsHaveSeparateReviewLinksAndClearOnPause(){
+        ActivityScenario.launch(GeckoTestHostActivity::class.java).use{scenario->scenario.onActivity{host->
+            val id="550000000000091"
+            val offer=DesktopRow(id,"https://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/posts/$id/","DOM",319000.0,"EXPLICIT_TOTAL",42.0,2,null,null,null,"SELL_PROPERTY",true,0)
+            val reviewId="550000000000092"
+            val review=offer.copy(postId=reviewId,permalink=offer.permalink.replace(id,reviewId),price=null,priceSource="NONE",area=null,rooms=null,intent="UNKNOWN",usable=false,qualification="NO_TEXT")
+            val buyer=review.copy(postId="550000000000093",permalink=review.permalink.replace(reviewId,"550000000000093"),intent="BUY_PROPERTY")
+            var opened:String?=null;val panel=OffersPanel(host,{opened=it.postId},{})
+            host.setContentView(panel);panel.showRows(listOf(offer,review,buyer))
+            assertNotNull(panel.findViewWithTag<android.view.View>("poc.offer.card.$id"))
+            assertNull(panel.findViewWithTag<android.view.View>("poc.offer.card.$reviewId"))
+            val link=panel.findViewWithTag<android.widget.TextView>("poc.review.link.$reviewId")
+            assertNotNull(link);assertEquals(review.permalink,link.text.toString());assertTrue(link.performClick());assertEquals(reviewId,opened)
+            assertNull(panel.findViewWithTag<android.view.View>("poc.review.link.${buyer.postId}"))
+            panel.showRows(emptyList());assertEquals("",link.text.toString());assertFalse(link.performClick())
+        }}
+    }
     @Test fun actualSvgAnchorLinksCapturePhotosWithoutChangingAutomaticScroll()=checkNativeViewport(false,fastScroll=true,svgPhotos=true,svgAnchor=true)
     private fun checkNativeViewport(deep:Boolean,networkOnly:Boolean=false,cachedFeed:Boolean=false,marginOnly:Boolean=false,delegated:Boolean=false,baseline:Boolean=false,gesture:Boolean=false,noGesture:Boolean=false,consentWindow:Boolean=false,noticeWindow:Boolean=false,unknownNotice:Boolean=false,noticeVariant:Int=0,cssPhotos:Boolean=false,postWrapper:Boolean=false,fastScroll:Boolean=false,svgPhotos:Boolean=false,colloquial:Boolean=false,svgAnchor:Boolean=false){
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use {scenario->

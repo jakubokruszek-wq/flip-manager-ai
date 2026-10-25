@@ -6,7 +6,7 @@ import org.json.JSONObject
 class DesktopSummary private constructor(val verdict:String,val reason:String,val offers:Int,val navigations:Int,val stats:Map<String,Int>){
     fun encode():String=JSONObject().put("verdict",verdict).put("reason",reason).put("offers",offers).put("navigations",navigations).put("stats",JSONObject(stats)).toString()
     fun report():String=buildString {
-        appendLine("KOMPUTER 0.5.27 • tylko lokalnie • $verdict")
+        appendLine("KOMPUTER 0.5.28 • tylko lokalnie • $verdict")
         appendLine("Komunikat powiadomień: wykryty ${stats.getValue("noticeDetected")} • zamknięty ${stats.getValue("noticeClosed")} • uprawnienia bez zmian")
         if(reason=="NOTICE_BLOCKED"){
             appendLine("Powód: NOTICE_BLOCKED")
@@ -57,6 +57,7 @@ class DesktopSummary private constructor(val verdict:String,val reason:String,va
         if(stats.getValue("scrollSteps")==0&&stats.getValue("candidates")<20)appendLine("UWAGA: przewijanie nie rozpoczęło się — nie znaleziono dozwolonego kontenera z dostępnym zakresem przewijania. Wynik nie potwierdza kompletności grupy.")
         if(stats.getValue("scrollSteps")>0&&stats.getValue("scrollMoves")==0)appendLine("UWAGA: próby przewinięcia nie przesunęły kontenera; brak dalszych postów nie jest potwierdzony.")
         if(stats.getValue("limitSkipped")>0)appendLine("UWAGA: limit odpowiedzi wykorzystany; raport nie potwierdza odczytu wszystkich danych grupy.")
+        appendLine("Limit 20 ID: nowe oferty mają pierwszeństwo przed niezakwalifikowanymi rekordami bez mediów. Nieodczytane posty mogą być dostępne w sekcji Do ręcznego sprawdzenia; brak OCR.")
         append("ID i permalink: dokładne. Pola oferty oraz kwalifikacja: heurystyki do sprawdzenia na stronie. CONDITIONAL_GO wymaga porównania przez operatora. Brak ID lub pól nie jest dowodem braku postów. Bez skanu produkcyjnego, uploadu i zapisu treści/ID. Ten raport zawiera tylko liczby. Pauza usuwa podgląd danych.")
     }
     companion object {

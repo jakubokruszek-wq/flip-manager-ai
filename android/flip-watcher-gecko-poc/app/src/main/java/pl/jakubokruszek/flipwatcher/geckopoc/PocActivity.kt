@@ -242,7 +242,7 @@ class PocActivity : ComponentActivity() {
     }
     private fun openOffer(row:DesktopRow){
         if(!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)||busyForTabs()||desktopRows.none{it===row})return
-        val link=OfferLinks.validated(row)?:return
+        val link=OfferLinks.validated(row)?:OfferLinks.validatedReview(row)?:return
         // Explicit user click; clear both UI copies/listeners before leaving the local preview.
         clearDesktopDetails()
         val intent=Intent(Intent.ACTION_VIEW,Uri.parse(link)).addCategory(Intent.CATEGORY_BROWSABLE)
