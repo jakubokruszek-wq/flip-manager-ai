@@ -139,3 +139,9 @@ test('late image-only post with exact media evidence can displace an empty stub 
 test('unverified or foreign media cannot win priority at the twenty-ID cap',()=>{
  for(const extra of [{exactAssociation:false},{exactPostId:'550000000000001'},{url:'https://evil.test/a.jpg'}]){const m=model();for(let i=0;i<20;i++)m.add({...record(String(550000000000000+i),''),media:[]},'NETWORK');const id='550000000000099';m.add({...record(id,''),media:[{...media('880000000000001'),exactPostId:id,...extra}]},'NETWORK');assert.equal(m.rows().length,20);assert(!m.rows().some(r=>r.postId===id));}
 });
+test('priority admission cannot forget a known foreign-city exclusion and later promote that ID',()=>{
+ const m=model(),id='550000000000090',foreign={...record(id,'Sprzedam mieszkanie Warszawa 42m2 cena319000 zł'),media:[]};m.add(foreign,'NETWORK');m.add(foreign,'NETWORK');
+ for(let i=0;i<19;i++)m.add({...record(String(550000000000000+i),''),media:[]},'DOM');m.add(record('550000000000099'),'DOM');
+ assert(m.rows().some(r=>r.postId===id&&r.qualification==='FOREIGN_CITY'));
+ m.add({...record(id),media:[]},'DOM');assert.equal(m.rows().find(r=>r.postId===id).usable,false);assert.equal(m.rows().length,20);
+});

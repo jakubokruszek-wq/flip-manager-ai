@@ -103,12 +103,13 @@ function createModel(core,fields,group){
   }
   return Math.min(20,evidence.ids.size+[...evidence.urls.values()].filter(id=>!id).length);
  }
+ function unresolved(row){return ['SELL_PROPERTY','UNKNOWN'].includes(row.intent)&&['NO_TEXT','MISSING_FIELDS','NOT_PROPERTY','CLASSIFIER'].includes(row.qualification);}
  function eligible(row){return row.usable===true&&['SELL_PROPERTY','UNKNOWN'].includes(row.intent)&&[row.price,row.area,row.rooms].some(v=>v!==null);}
  // Keep the bounded preview useful without replacing a retained offer or media evidence.
  function admit(row){
   if(rows.has(row.postId)||rows.size<20)return true;
-  const review=row.photos>0&&['SELL_PROPERTY','UNKNOWN'].includes(row.intent)&&['NO_TEXT','MISSING_FIELDS','NOT_PROPERTY','CLASSIFIER'].includes(row.qualification);
-  const victim=eligible(row)||review?[...rows.values()].find(old=>!eligible(old)&&old.photos===0):null;
+  const review=row.photos>0&&unresolved(row);
+  const victim=eligible(row)||review?[...rows.values()].find(old=>unresolved(old)&&!eligible(old)&&old.photos===0&&!blocked.get(old.postId)?.size):null;
   if(!victim){stats.rejected++;return false;}
   rows.delete(victim.postId);blocked.delete(victim.postId);photoEvidence.delete(victim.postId);return true;
  }
