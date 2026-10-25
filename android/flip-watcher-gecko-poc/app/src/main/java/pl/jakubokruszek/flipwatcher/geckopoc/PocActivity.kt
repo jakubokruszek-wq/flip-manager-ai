@@ -196,7 +196,7 @@ class PocActivity : ComponentActivity() {
                 stopVisiblePosts();finishShare("CANCELLED",clear=true);clearDesktopDetails()
                 val gate=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()})
                 if(!gate.begin(true)){publishDesktop(DesktopSummary.create("NO_CONSENT_OR_CONTEXT",0),emptyList());return@accept}
-                clearDesktopDetails();geckoView.requestFocus();desktopGate=gate;desktopBusy=true;desktopRows=emptyList();desktopNonce=UUID.randomUUID().toString();render()
+                clearDesktopDetails();geckoView.requestFocus();DesktopKeyboard.dismiss(geckoView);desktopGate=gate;desktopBusy=true;desktopRows=emptyList();desktopNonce=UUID.randomUUID().toString();render()
                 desktopJob=lifecycleScope.launch{
                     val result=DesktopSessionPreview.run(currentSession,currentChannel,gate,desktopNonce!!,target,{url},pageReady={pageLoaded&&progress==100},view=geckoView,images=desktopThumbnails,baseline=false,gesture=false,fastScroll=true)
                     if(desktopGate===gate&&desktopBusy){userAgent=result.userAgent;finishDesktop(result.reason,result.reply)}
