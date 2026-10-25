@@ -151,7 +151,7 @@ jobs:
           script: |
             adb logcat -c || true
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.DesktopConsentInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ReviewDataInstrumentedTest#batchOpensExactReviewLinksReadsFullMessageWithoutCommentsAndRestoresGroup || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ReviewDataInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ReviewReportInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#loadMeasurementCountsTheWholeApprovedGroupLoad || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             # Independent instrumentation invocations use independent disposable emulator profiles.
             # The full suite still checks persistence across pause/recreate within each test.

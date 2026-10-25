@@ -17,26 +17,28 @@ class ReviewDataInstrumentedTest{
  @Test fun batchOpensExactReviewLinksReadsFullMessageWithoutCommentsAndRestoresGroup()=runCase("normal")
  @Test fun noNewConsentDoesNotNavigateOrReadAnyPost()=runCase("consent")
  @Test fun foreignRedirectAndVerificationStopWithoutPublishingPartialRows(){runCase("foreign");runCase("login")}
+ @Test fun failureAfterOneReadKeepsNumericProgressButPublishesNoPartialRows()=runCase("lateforeign")
  @Test fun cancellationClosesTemporarySessionAndRestoresOriginalWithoutPublishing()=runCase("cancel")
  private fun runCase(mode:String){
   ActivityScenario.launch(GeckoTestHostActivity::class.java).use{scenario->var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it}
    runBlocking{withTimeout(60_000){withContext(Dispatchers.Main){
     val pathA="/groups/$FIXTURE_GROUP_ID/posts/$a/";val pathB="/groups/$FIXTURE_GROUP_ID/posts/$b/"
-    val server=LoopbackFixtureServer(redirects=if(mode=="foreign")mapOf(pathA to "/groups/foreign/posts/$a/")else emptyMap(),pages=mapOf(pathA to "review-full",pathB to "review-empty")){name->when(name){"fixtures/review-home.html"->"<!doctype html><title>Original group</title><p>Original group unchanged</p>";"fixtures/review-full.html"->if(mode=="login")"<!doctype html><title>Logowanie</title><input type=password>"else html(a,true);"fixtures/review-empty.html"->html(b,false);else->null}}
+    val server=LoopbackFixtureServer(redirects=when(mode){"foreign"->mapOf(pathA to "/groups/foreign/posts/$a/");"lateforeign"->mapOf(pathB to "/groups/foreign/posts/$b/");else->emptyMap()},pages=mapOf(pathA to "review-full",pathB to "review-empty")){name->when(name){"fixtures/review-home.html"->"<!doctype html><title>Original group</title><p>Original group unchanged</p>";"fixtures/review-full.html"->if(mode=="login")"<!doctype html><title>Logowanie</title><input type=password>"else html(a,true);"fixtures/review-empty.html"->html(b,false);else->null}}
     val original=GeckoSession(GeckoSessionSettings.Builder().userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP).viewportMode(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP).build())
     val channel=CollectorChannel(original,fixtureMode=true);var loaded=false
     original.progressDelegate=object:GeckoSession.ProgressDelegate{override fun onPageStop(s:GeckoSession,success:Boolean){loaded=success}}
     try{
      channel.attach(GeckoHost.collectorExtension(host!!));original.open(GeckoHost.runtime(host!!));host!!.geckoView.setSession(original);original.setActive(true);original.setFocused(true);host!!.geckoView.requestFocus()
      val home=server.url("/groups/$FIXTURE_GROUP_ID/","review-home");original.loadUri(home);assertTrue(channel.awaitPort(15_000));withTimeout(10_000){while(!loaded||!host!!.geckoView.hasWindowFocus())delay(50)}
-     val rows=listOf(row(a),row(b));var outcome:ReviewDataRunner.Outcome?=null
+     val snapshots=mutableListOf<ReviewDataSummary>();val rows=listOf(row(a),row(b));var outcome:ReviewDataRunner.Outcome?=null
      if(mode=="cancel"){
-      var begun=false;val job=launch{outcome=ReviewDataRunner.run(host!!.geckoView,original,rows,true,alive={true},progress={_,_->begun=true},fixtureOrigin="http://127.0.0.1:${server.port}")}
-      withTimeout(10_000){while(!begun)delay(20)};job.cancelAndJoin();assertNull(outcome)
+      var begun=false;val job=launch{outcome=ReviewDataRunner.run(host!!.geckoView,original,rows,true,alive={true},progress={_,_->begun=true},fixtureOrigin="http://127.0.0.1:${server.port}",snapshot={snapshots.add(it)})}
+      withTimeout(10_000){while(!begun)delay(20)};job.cancelAndJoin();assertNull(outcome);assertTrue(snapshots.isNotEmpty());assertNotNull(ReviewDataSummary.decode(snapshots.last().stopped("CANCELLED").encode()))
      }else{
-      val trace=mutableListOf<String>();val result=ReviewDataRunner.run(host!!.geckoView,original,rows,mode!="consent",alive={true},fixtureOrigin="http://127.0.0.1:${server.port}",observe={trace.add(it)})
+      val trace=mutableListOf<String>();val result=ReviewDataRunner.run(host!!.geckoView,original,rows,mode!="consent",alive={true},fixtureOrigin="http://127.0.0.1:${server.port}",observe={trace.add(it)},snapshot={snapshots.add(it)})
       when(mode){
        "normal"->{assertEquals(result.summary.report()+" trace="+trace.joinToString(","),"DONE",result.summary.reason);assertEquals(2,result.summary.opened);assertEquals(1,result.summary.enriched);assertEquals(1,result.summary.unresolved);val actual=result.rows.single{it.postId==a};assertEquals(319000.0,actual.price!!,0.0);assertEquals(42.0,actual.area!!,0.0);assertEquals(2,actual.rooms);assertEquals("Testowa 12",actual.street);assertTrue(DesktopSummary.eligible(actual));assertNull(result.rows.single{it.postId==b}.price)}
+       "lateforeign"->{assertNotEquals("DONE",result.summary.reason);assertTrue(result.rows.isEmpty());assertEquals(2,result.summary.opened);assertEquals(1,result.summary.enriched);assertTrue(snapshots.any{it.textRead==1&&it.enriched==1});assertEquals(result.summary,ReviewDataSummary.decode(result.summary.encode()))}
        "consent"->{assertEquals("NO_CONSENT_OR_INPUT",result.summary.reason);assertEquals(0,result.summary.opened);assertTrue(result.rows.isEmpty())}
        else->{assertNotEquals("DONE",result.summary.reason);assertTrue(result.rows.isEmpty())}
       }

@@ -87,6 +87,8 @@ class PocActivity : ComponentActivity() {
     private var reviewPosition=0
     private var reviewTotal=0
     private var reviewLast:ReviewDataSummary?=null
+    private var reviewSnapshot:ReviewDataSummary?=null
+    private var reviewReportPending=false
     private val reviewPrefs by lazy {getSharedPreferences("review_data_counts_v1",MODE_PRIVATE)}
     private var desktopBusy=false
     private var desktopGate:DesktopTrial?=null
@@ -143,7 +145,7 @@ class PocActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    override fun onResume(){super.onResume();if(!reviewWorking())runCatching{session?.setActive(true)}}
+    override fun onResume(){super.onResume();if(!reviewWorking())runCatching{session?.setActive(true)};window.decorView.post{showPendingReviewReport()}}
 
     override fun onPause() {
         reviewConsentDialog?.dismiss();reviewConsentDialog=null;cancelReview("PAUSED")
@@ -254,13 +256,35 @@ class PocActivity : ComponentActivity() {
     }
     private fun cancelReview(code:String){
         if(!reviewBusy)return
+        saveReviewResult((reviewSnapshot?:ReviewDataSummary("INTERRUPTED",reviewTotal,0,0,0,0,0,0,0)).stopped(code));reviewReportPending=true
         reviewBusy=false;reviewClosing=true;reviewJob?.cancel();clearDesktopDetails()
         output.text="Uzupełnianie zatrzymane: $code. Podgląd wyczyszczony; brak skanu i uploadu.";render()
     }
+    private fun saveReviewResult(value:ReviewDataSummary){
+        reviewSnapshot=value;reviewLast=value
+        runCatching{reviewPrefs.edit().putString("last",value.encode()).commit()}
+    }
+    internal fun publishReviewFailure(value:ReviewDataSummary){
+        require(value.reason!="DONE");clearDesktopDetails();saveReviewResult(value);reviewReportPending=true;render();showPendingReviewReport()
+    }
+    private fun showReviewResult(){
+        val result=reviewLast?:ReviewDataSummary.decode(reviewPrefs.getString("last",null))
+        reviewReportPending=false;desktopResultDialog?.dismiss()
+        desktopResultDialog=AlertDialog.Builder(this).setTitle("Wynik uzupełniania — lokalnie")
+            .setMessage(result?.report()?:"Brak zapisanej próby uzupełniania. Raport przeglądania grupy jest osobnym wynikiem.")
+            .setPositiveButton("OK",null).create().also{it.show()}
+    }
+    private fun showPendingReviewReport(){
+        if(!reviewReportPending||reviewWorking()||isFinishing||isDestroyed||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
+        val result=reviewLast?:return
+        if(result.reason!="DONE"){
+            offersPanel.showRows(emptyList(),result.explanation()+" Podgląd wyczyszczono ochronnie — to nie wynik zero ofert. Raport pozostaje w Narzędzia / raport.")
+            selectContentTab(true)
+        }
+        showReviewResult()
+    }
     private fun showReviewOrDesktopResult(){
-        val result=reviewLast?:if(desktopRows.isEmpty())ReviewDataSummary.decode(reviewPrefs.getString("last",null))else null
-        if(result==null)return showDesktopResult()
-        desktopResultDialog=AlertDialog.Builder(this).setTitle("Ostatni wynik uzupełniania — lokalnie").setMessage(result.report()).setPositiveButton("OK",null).create().also{it.show()}
+        if(reviewLast!=null||desktopRows.isEmpty()&&ReviewDataSummary.decode(reviewPrefs.getString("last",null))!=null)showReviewResult() else showDesktopResult()
     }
     private fun askReviewData(){
         val original=session?:return;val snapshot=desktopRows
@@ -272,22 +296,21 @@ class PocActivity : ComponentActivity() {
             .setNegativeButton("Anuluj",null).setPositiveButton("Zgadzam się"){_,_->
                 reviewConsentDialog=null
                 if(busyForTabs()||session!==original||desktopRows!==snapshot||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return@setPositiveButton
-                stopVisiblePosts();selectContentTab(false);reviewLast=null;reviewTotal=queue.size;reviewPosition=0;reviewBusy=true;render()
+                stopVisiblePosts();selectContentTab(false);reviewLast=null;reviewTotal=queue.size;reviewPosition=0;reviewReportPending=false;saveReviewResult(ReviewDataSummary("INTERRUPTED",queue.size,0,0,0,0,0,0,0));reviewBusy=true;render()
                 reviewJob=lifecycleScope.launch{
                     try{
                         delay(200)
-                        val outcome=ReviewDataRunner.run(geckoView,original,snapshot,true,alive={reviewBusy&&session===original&&desktopRows===snapshot&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&geckoView.isAttachedToWindow},progress={index,total->reviewPosition=index;reviewTotal=total;render()},restoreActive={session===original&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)})
+                        val outcome=ReviewDataRunner.run(geckoView,original,snapshot,true,alive={reviewBusy&&session===original&&desktopRows===snapshot&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&geckoView.isAttachedToWindow},progress={index,total->reviewPosition=index;reviewTotal=total;render()},restoreActive={session===original&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)},snapshot={if(reviewBusy)saveReviewResult(it.copy(reason="INTERRUPTED"))})
                         if(!reviewBusy)return@launch
-                        reviewBusy=false;reviewJob=null;reviewLast=outcome.summary
-                        runCatching{reviewPrefs.edit().putString("last",outcome.summary.encode()).commit()}
+                        reviewBusy=false;reviewJob=null;saveReviewResult(outcome.summary);reviewReportPending=true
                         if(outcome.summary.reason=="DONE"){
                             desktopRows=outcome.rows.take(20);desktopThumbnails.retain(desktopRows.map{it.postId}.toSet())
                             offersPanel.showRows(desktopRows,"Uzupełniono: ${outcome.summary.enriched} • bez potwierdzonego odczytu: ${outcome.summary.unresolved}",thumbnails={desktopThumbnails.rows(it)})
                             output.text=outcome.summary.report();selectContentTab(true);render()
-                        }else{clearDesktopDetails();output.text=outcome.summary.report();render()}
+                        }else{publishReviewFailure(outcome.summary);output.text=outcome.summary.report();render()}
                     }catch(e:kotlinx.coroutines.CancellationException){throw e}
                     catch(_:Exception){if(reviewBusy)cancelReview("ERROR")}
-                    finally{reviewClosing=false;if(!reviewBusy)reviewJob=null;render()}
+                    finally{reviewClosing=false;if(!reviewBusy)reviewJob=null;render();showPendingReviewReport()}
                 }
             }.create().also{it.setCanceledOnTouchOutside(false);it.show()}
     }
@@ -1064,7 +1087,7 @@ class PocActivity : ComponentActivity() {
             setOnClickListener {
                 if (key in setOf("open", "group", "tools")) onClick()
                 else { diagnosticsDialog?.dismiss(); window.decorView.post { if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
-                    if(key !in setOf("desktopResult","lastShareLinkResult","results","beaconNoGo"))selectContentTab(false)
+                    if(key !in setOf("desktopResult","reviewResult","lastShareLinkResult","results","beaconNoGo"))selectContentTab(false)
                     onClick()
                 } } }
             }
@@ -1152,6 +1175,7 @@ class PocActivity : ComponentActivity() {
             orientation=LinearLayout.VERTICAL
             addView(row(button("desktopPreview","Automatyczny podgląd • 30 s"){startDesktopPreview()}))
             addView(row(button("desktopResult","Oferty"){selectContentTab(true)}))
+            addView(row(button("reviewResult","Ostatni wynik uzupełniania"){showReviewResult()}))
             addView(row(Button(this@PocActivity).apply{text="Archiwum narzędzi";setOnClickListener{toolPanel.visibility=if(toolPanel.visibility==View.VISIBLE)View.GONE else View.VISIBLE}}))
             addView(toolPanel)
         }

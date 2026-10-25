@@ -44,4 +44,13 @@ class ReviewDataTest{
   assertNull(ReviewDataSummary.decode(org.json.JSONObject(summary.encode()).put("reason",url).toString()));assertNull(ReviewDataSummary.decode(org.json.JSONObject(summary.encode()).put("opened",21).toString()));assertNull(ReviewDataSummary.decode(org.json.JSONObject(summary.encode()).put("textRead",2).toString()))
  }
  @Test fun reportsPersistCountsOnly(){val report=ReviewDataSummary("DONE",2,2,1,1,1,0,1,0);assertFalse(report.encode().contains(id));assertFalse(report.encode().contains("http"));assertTrue(report.report().contains("nie dowodzi braku"));assertEquals(0,ReviewDataSummary.fields(row()))}
+ @Test fun abortReasonsAndPartialCountsSurviveWithoutBusinessData(){
+  val partial=ReviewDataSummary("INTERRUPTED",13,4,3,2,1,1,1,0)
+  for(reason in listOf("PAUSED","CANCELLED","ERROR","SESSION_CLOSED","unexpected")){
+   val stopped=partial.stopped(reason);assertEquals(stopped,ReviewDataSummary.decode(stopped.encode()))
+   assertEquals(4,stopped.opened);assertEquals(1,stopped.enriched);assertTrue(stopped.report().contains("nie oznacza"))
+   assertFalse(stopped.encode().contains(id));assertFalse(stopped.encode().contains("http"))
+  }
+ }
+
 }

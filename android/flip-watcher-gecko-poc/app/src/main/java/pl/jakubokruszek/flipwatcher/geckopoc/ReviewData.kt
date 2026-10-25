@@ -56,12 +56,26 @@ object ReviewDataProtocol{
 
 data class ReviewDataSummary(val reason:String,val selected:Int,val opened:Int,val bound:Int,val textRead:Int,val enriched:Int,val unchanged:Int,val unresolved:Int,val filtered:Int){
     fun encode()=JSONObject().put("reason",reason).put("selected",selected).put("opened",opened).put("bound",bound).put("textRead",textRead).put("enriched",enriched).put("unchanged",unchanged).put("unresolved",unresolved).put("filtered",filtered).toString()
-    fun report()="UZUPEŁNIANIE 0.5.34 • tylko lokalnie • $reason\nWybrano $selected • otwarto $opened • potwierdzono w DOM/danych strony $bound • odczytano tekst $textRead\nUzupełniono $enriched • bez nowych pól $unchanged • brak potwierdzonego odczytu $unresolved • poza filtrem $filtered\nBrak odczytu nie dowodzi braku danych w poście. Tylko dokładne ID tej grupy; pola heurystyczne. Bez odczytu odpowiedzi sieciowych, OCR, uploadu i kolektora. Pauza usuwa dane."
+    fun stopped(code:String)=copy(reason=if(code in setOf("PAUSED","CANCELLED","ERROR","SESSION_CLOSED"))code else "INTERRUPTED")
+    fun explanation()=when(reason){
+        "DONE"->"Zakończono kolejkę."
+        "NAVIGATION","CONTEXT"->"Zatrzymano: adres lub kontekst posta nie przeszedł weryfikacji."
+        "PAGE_TIMEOUT","DEADLINE"->"Zatrzymano: upłynął limit czasu otwarcia posta lub kolejki."
+        "LOAD_ERROR"->"Zatrzymano: błąd ładowania strony posta."
+        "PROTOCOL","PORT_LOST"->"Zatrzymano: brak poprawnej odpowiedzi rozszerzenia lub utrata połączenia."
+        "VERIFICATION_OR_LOGIN"->"Zatrzymano: logowanie lub weryfikacja Facebooka."
+        "PAUSED","PAUSED_OR_CONTEXT"->"Zatrzymano: aplikacja utraciła aktywny widok lub poprawny kontekst."
+        "CANCELLED"->"Przerwano przyciskiem operatora."
+        "SESSION_CLOSED","ENGINE_LOST","CLOSED"->"Zatrzymano: zamknięcie lub utrata sesji."
+        "ERROR"->"Zatrzymano: nieoczekiwany błąd aplikacji."
+        else->"Próba nie ma potwierdzonego zakończenia."
+    }
+    fun report()="UZUPEŁNIANIE 0.5.35 • tylko lokalnie • $reason\n${explanation()}${if(reason!="DONE") " Podgląd wyczyszczono ochronnie; nie oznacza to znalezienia zera ofert." else ""}\nWybrano $selected • otwarto $opened • potwierdzono w DOM/danych strony $bound • odczytano tekst $textRead\nUzupełniono $enriched • bez nowych pól $unchanged • brak potwierdzonego odczytu $unresolved • poza filtrem $filtered\nBrak odczytu nie dowodzi braku danych w poście. Tylko dokładne ID tej grupy; pola heurystyczne. Bez odczytu odpowiedzi sieciowych, OCR, uploadu i kolektora. Pauza usuwa dane."
     companion object{
         fun decode(raw:String?):ReviewDataSummary?=runCatching{
             if(raw==null||raw.length>2000)return null
             val j=JSONObject(raw);val keys=setOf("reason","selected","opened","bound","textRead","enriched","unchanged","unresolved","filtered")
-            if(j.keys().asSequence().toSet()!=keys||j.optString("reason") !in setOf("DONE","NO_CONSENT_OR_INPUT","INPUT","DEADLINE","NAVIGATION","CONTEXT","PAUSED_OR_CONTEXT","PORT_LOST","LOAD_ERROR","VERIFICATION_OR_LOGIN","ENGINE_LOST","PAGE_TIMEOUT","PROTOCOL","CLOSED"))return null
+            if(j.keys().asSequence().toSet()!=keys||j.optString("reason") !in setOf("DONE","NO_CONSENT_OR_INPUT","INPUT","DEADLINE","NAVIGATION","CONTEXT","PAUSED_OR_CONTEXT","PORT_LOST","LOAD_ERROR","VERIFICATION_OR_LOGIN","ENGINE_LOST","PAGE_TIMEOUT","PROTOCOL","CLOSED","INTERRUPTED","PAUSED","CANCELLED","ERROR","SESSION_CLOSED"))return null
             val counts=(keys-"reason").associateWith{k->val v=j.opt(k);if(v !is Int||v !in 0..20)return null;v}
             if(counts.getValue("opened")>counts.getValue("selected")||counts.getValue("bound")>counts.getValue("opened")||counts.getValue("textRead")>counts.getValue("bound"))return null
             ReviewDataSummary(j.getString("reason"),counts.getValue("selected"),counts.getValue("opened"),counts.getValue("bound"),counts.getValue("textRead"),counts.getValue("enriched"),counts.getValue("unchanged"),counts.getValue("unresolved"),counts.getValue("filtered"))
