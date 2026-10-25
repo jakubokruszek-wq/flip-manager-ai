@@ -13,10 +13,10 @@ import org.mozilla.geckoview.WebRequestError
 /** Foreground temporary session shares the existing runtime, not a background/screen-off browser. */
 object ReviewDataRunner{
     data class Outcome(val summary:ReviewDataSummary,val rows:List<DesktopRow>)
-    suspend fun run(view:GeckoView,original:GeckoSession,rows:List<DesktopRow>,consent:Boolean,alive:()->Boolean,progress:(Int,Int)->Unit={_,_->},restoreActive:()->Boolean=alive,fixtureOrigin:String?=null):Outcome=withContext(Dispatchers.Main){
+    suspend fun run(view:GeckoView,original:GeckoSession,rows:List<DesktopRow>,consent:Boolean,alive:()->Boolean,progress:(Int,Int)->Unit={_,_->},restoreActive:()->Boolean=alive,fixtureOrigin:String?=null,observe:(String)->Unit={}):Outcome=withContext(Dispatchers.Main){
         val fixture=fixtureOrigin!=null;val group=if(fixture)FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID
         val queue=ReviewDataGate.queue(rows,group);var opened=0;var bound=0;var text=0;var enriched=0;var unchanged=0;var unresolved=0;var filtered=0
-        fun outcome(reason:String,result:List<DesktopRow> = emptyList())=Outcome(ReviewDataSummary(reason,queue.size,opened,bound,text,enriched,unchanged,unresolved,filtered),result)
+        fun outcome(reason:String,result:List<DesktopRow> = emptyList()):Outcome{observe("END_"+reason);return Outcome(ReviewDataSummary(reason,queue.size,opened,bound,text,enriched,unchanged,unresolved,filtered),result)}
         if(!consent||queue.isEmpty()||rows.size>20||rows.map{it.postId}.distinct().size!=rows.size||!alive())return@withContext outcome("NO_CONSENT_OR_INPUT")
         val gate=ReviewDataGate(group,fixture){android.os.SystemClock.elapsedRealtime()}
         val settings=GeckoSessionSettings.Builder().userAgentMode(original.settings.userAgentMode).viewportMode(original.settings.viewportMode).build()
@@ -25,7 +25,7 @@ object ReviewDataRunner{
         fun live():Boolean{if(!alive()||attached&&(!view.isShown||!view.hasWindowFocus()))gate.stop("PAUSED_OR_CONTEXT");return gate.tick()}
         browser.navigationDelegate=object:GeckoSession.NavigationDelegate{
             override fun onLoadRequest(s:GeckoSession,q:GeckoSession.NavigationDelegate.LoadRequest)=GeckoResult.fromValue(if(gate.request(q.uri,q.target==GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW,q.hasUserGesture))AllowOrDeny.ALLOW else AllowOrDeny.DENY)
-            override fun onLocationChange(s:GeckoSession,u:String?,p:MutableList<GeckoSession.PermissionDelegate.ContentPermission>,gesture:Boolean){if(gesture)gate.stop("NAVIGATION") else gate.location(u)}
+            override fun onLocationChange(s:GeckoSession,u:String?,p:MutableList<GeckoSession.PermissionDelegate.ContentPermission>,gesture:Boolean){if(gesture)gate.stop("NAVIGATION") else {val accepted=gate.location(u);observe(if(accepted)"LOCATION_OK" else "LOCATION_STOP")}}
             override fun onLoadError(s:GeckoSession,u:String?,e:WebRequestError):GeckoResult<String>?{gate.stop("LOAD_ERROR");return null}
         }
         browser.progressDelegate=object:GeckoSession.ProgressDelegate{
@@ -55,9 +55,10 @@ object ReviewDataRunner{
                 for(attempt in 0..2){
                     delay(500);if(!live()||channel.connectionGeneration!=portGeneration)return@withContext outcome(if(gate.active)"PORT_LOST" else gate.reason)
                     val current=gate.currentUrl?:return@withContext outcome("CONTEXT")
-                    reply=channel.reviewPost(previous,current,true,group)
+                    reply=channel.reviewPost(previous,current,true,group,observe)
                     if(!live()||channel.connectionGeneration!=portGeneration)return@withContext outcome(if(gate.active)"PORT_LOST" else gate.reason)
-                    if(reply?.safe!=true)return@withContext outcome("CONTEXT")
+                    if(reply==null)return@withContext outcome("PROTOCOL")
+                    if(reply.safe!=true)return@withContext outcome("CONTEXT")
                     if(reply.textRead)break
                 }
                 val result=reply?:return@withContext outcome("PROTOCOL");val updated=result.row?:return@withContext outcome("PROTOCOL")

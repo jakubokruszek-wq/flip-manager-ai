@@ -117,11 +117,12 @@ class CollectorChannel(
     }
     fun abortDesktop(){viewportBridge?.let{it.close();lastViewportCaptureCounts=it.captureCounts.toList()};viewportBridge=null;desktopNonce=null;runCatching{port?.postMessage(JSONObject().put("type","abortDesktopPreview").put("nonce",UUID.randomUUID().toString()))}}
 
-    suspend fun reviewPost(row:DesktopRow,expectedUrl:String,consent:Boolean=false,group:String=PocPolicy.APPROVED_GROUP_ID):ReviewPostReply?{
+    suspend fun reviewPost(row:DesktopRow,expectedUrl:String,consent:Boolean=false,group:String=PocPolicy.APPROVED_GROUP_ID,observe:(String)->Unit={}):ReviewPostReply?{
         if(!consent||!ReviewDataGate.matches(expectedUrl,group,row.postId,fixtureMode))return null
         val nonce=UUID.randomUUID().toString()
         val reply=request(nonce,JSONObject().put("type","reviewPost").put("nonce",nonce).put("consent",true).put("reviewConsent",true).put("groupId",group).put("postId",row.postId).put("expectedUrl",expectedUrl).put("fixture",fixtureMode).put("previousRow",ReviewDataProtocol.row(row)),2_000)
-        return ReviewDataProtocol.parse(reply,nonce,row.postId,group)
+        observe(if(reply==null)"NO_REPLY" else if(reply.optString("status")=="OK")"REPLY_OK" else "REPLY_STOP")
+        val parsed=ReviewDataProtocol.parse(reply,nonce,row.postId,group);observe(if(parsed==null)"PARSE_STOP" else "PARSE_OK");return parsed
     }
 
     suspend fun shareLinkProof(expectedUrl: String, consent: Boolean, newDocumentAfter: Long? = null): ShareContextReply {
