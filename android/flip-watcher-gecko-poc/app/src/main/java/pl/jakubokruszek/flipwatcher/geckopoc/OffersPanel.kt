@@ -42,7 +42,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
                 layoutParams=LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT).apply{bottomMargin=(12*dp).toInt()}
             }
             card.addView(label("Oferta ${i+1}",18f).apply{setTypeface(null,Typeface.BOLD)})
-            card.addView(label("Cena: ${number(row.price)} zł",22f))
+            card.addView(label("${DesktopPresentation.priceLabel(row)}: ${number(row.price)} zł",22f).apply{tag="poc.offer.price.${row.postId}"})
             card.addView(label("${number(row.area)} m² • pokoje: ${number(row.rooms)}"))
             card.addView(label(listOfNotNull(row.district,row.neighborhood,row.street).joinToString(" / ").ifEmpty{"Lokalizacja: —"}))
             card.addView(label(DesktopPresentation.photos(row.photos),14f))

@@ -382,8 +382,23 @@ function classifyFacebookConditionFromText(text        )                        
 }
 
 
+function normalizePreviewArea(text) {
+ if(typeof text!=='string'||text.length>12000)return typeof text==='string'?text:'';
+ const normalized=text.normalize('NFKD').replace(/\p{M}/gu,'').toLocaleLowerCase('pl-PL').replace(/ł/g,'l');
+ if(!/\b(?:zl|pln)\s*\/\s*m2\b/u.test(normalized)||!/\b[1-9]\d?\s*(?:pokoje|pokoi|pokoj|pokojowe)\b/u.test(normalized))return text;
+ // Never override an explicit square-metre value or resolve a conflict by order.
+ if(/\d\s*m(?:2|²)(?![\p{L}\d])/iu.test(text))return text;
+ const candidates=[...text.matchAll(/(?<![\p{L}\d.,])(\d{1,3}(?:[.,]\d{1,2})?)\s+metr(?:y|ów|ow)\b(?=\s*(?:[·•;|,\n]|$))/giu)];
+ if(candidates.length!==1)return text;
+ const m=candidates[0],value=Number(m[1].replace(',','.'));
+ if(!Number.isFinite(value)||value<10||value>300)return text;
+ const prefix=normalized.slice(Math.max(0,m.index-64),m.index);
+ if(/odleglos|dystans|przystan|autobus|tramwaj|ogrodzeni|odcinek|drogi|chodnik/u.test(prefix))return text;
+ return text.slice(0,m.index)+m[1]+' m2'+text.slice(m.index+m[0].length);
+}
+
 function previewFields(input) {
-  const text = input.postText ?? "";
+  const text = normalizePreviewArea(input.postText ?? "");
   const lower = text.toLocaleLowerCase("pl-PL");
   const normalizedText = text.normalize("NFKD").replace(/\p{M}/gu, "").toLocaleLowerCase("pl-PL").replace(/ł/g, "l");
   const place = PLACES.find(([needle]) => lower.includes(needle));

@@ -5,6 +5,7 @@ import java.util.Locale
 
 /** Transient presentation only. Clipboard and persistence continue using aggregate report(). */
 object DesktopPresentation {
+    fun priceLabel(row:DesktopRow)=if(row.priceSource=="DERIVED_FROM_PRICE_PER_M2")"Cena wyliczona z ceny za m²" else "Cena"
     fun photos(count:Int)=if(count==0)"Zdjęcia: brak rozpoznanego obrazu; pełna liczba nieustalona." else "Rozpoznane zdjęcia/miniatury: $count; pełna liczba zdjęć nieustalona."
 
     fun explanation(row:DesktopRow):String=when(row.qualification){
@@ -32,7 +33,7 @@ object DesktopPresentation {
             appendLine("Pola są heurystyczne. Podgląd tylko w RAM; pauza usuwa szczegóły.")
             for((i,row) in offers.withIndex()){
                 appendLine("\nKANDYDAT ${i+1}")
-                appendLine("Cena: ${number(row.price)} zł • ${number(row.area)} m² • pokoje: ${number(row.rooms)}")
+                appendLine("${priceLabel(row)}: ${number(row.price)} zł • ${number(row.area)} m² • pokoje: ${number(row.rooms)}")
                 appendLine("${row.district?:"—"} / ${row.neighborhood?:"—"} / ${row.street?:"—"} • ${photos(row.photos)}")
                 appendLine("ID: ${row.postId}\n${row.permalink}")
             }

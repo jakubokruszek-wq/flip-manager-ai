@@ -4,6 +4,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DesktopPresentationTest {
+    @Test fun derivedTotalIsClearlySeparatedFromExplicitAskingPrice(){
+        val explicit=row("550000000000091")
+        val derived=explicit.copy(price=365400.0,priceSource="DERIVED_FROM_PRICE_PER_M2",area=63.0,rooms=2)
+        assertEquals("Cena",DesktopPresentation.priceLabel(explicit))
+        assertEquals("Cena wyliczona z ceny za m²",DesktopPresentation.priceLabel(derived))
+        val text=DesktopPresentation.preview("AGGREGATE",listOf(derived),true)
+        assertTrue(text.contains("Cena wyliczona z ceny za m²:"));assertTrue(text.contains("63 m²"))
+    }
+
     private fun row(id:String,intent:String="SELL_PROPERTY",usable:Boolean=true)=DesktopRow(id,"https://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/posts/$id/","DOM",319000.0,"EXPLICIT_TOTAL",42.42,2,"Polesie","Retkinia",null,intent,usable,1)
     @Test fun candidateIsShownFirstEvenWhenNonOfferWasDiscoveredFirst(){
         val text=DesktopPresentation.preview("AGGREGATE",listOf(row("550000000000001","BUY_PROPERTY",false),row("550000000000002")),true)
