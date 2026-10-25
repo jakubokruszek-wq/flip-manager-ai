@@ -15,7 +15,7 @@ import java.text.NumberFormat
 import java.util.Locale
 
 /** Cards are RAM-only. Erase text and listeners even from detached views held by old callbacks. */
-class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private val onReport:()->Unit):ScrollView(context){
+class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private val onReport:()->Unit,private val onEnrich:(()->Unit)?=null):ScrollView(context){
     private val content=LinearLayout(context).apply{orientation=LinearLayout.VERTICAL;isSaveEnabled=false}
     init{tag="poc.offers";isSaveEnabled=false;addView(content)}
     private fun erase(view:View){
@@ -31,6 +31,11 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
         fun label(text:String,size:Float=16f)=TextView(context).apply{this.text=text;textSize=size;isSaveEnabled=false;setPadding(0,6,0,6)}
         val offers=rows.filter{DesktopSummary.eligible(it)}
         content.addView(label("Oferty (${offers.size})",22f).apply{setTypeface(null,Typeface.BOLD)})
+        val reviewCount=rows.count{DesktopPresentation.reviewable(it)}
+        if(onEnrich!=null&&reviewCount>0)content.addView(Button(context).apply{
+            tag="poc.review.enrich";text="Uzupełnij do ręcznego sprawdzenia ($reviewCount)";isAllCaps=false;isSaveEnabled=false;setOnClickListener{onEnrich.invoke()}
+        })
+        if(notice!=null&&offers.isNotEmpty())content.addView(label(notice,14f))
         content.addView(label("Kandydaci do porównania z postem. Lista tylko w pamięci; opuszczenie aplikacji usuwa szczegóły.",14f))
         if(offers.isEmpty())content.addView(label(notice?:if(rows.any{DesktopPresentation.reviewable(it)})"Brak automatycznie rozpoznanych ofert. Posty do ręcznego sprawdzenia znajdują się poniżej." else "Brak ofert w pamięci. Uruchom nową próbę komputerową z nową zgodą. Zapisany raport zawiera tylko liczby."))
         val format=NumberFormat.getNumberInstance(Locale.forLanguageTag("pl-PL")).apply{maximumFractionDigits=2}

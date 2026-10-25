@@ -79,6 +79,15 @@ class PocActivity : ComponentActivity() {
     private var visibleEpoch = 0L
     private var visibleBusy = false
     internal val desktopThumbnails=DesktopThumbnails()
+    private var reviewClosing=false
+    private fun reviewWorking()=reviewBusy||reviewClosing
+    private var reviewBusy=false
+    private var reviewJob:Job?=null
+    private var reviewConsentDialog:AlertDialog?=null
+    private var reviewPosition=0
+    private var reviewTotal=0
+    private var reviewLast:ReviewDataSummary?=null
+    private val reviewPrefs by lazy {getSharedPreferences("review_data_counts_v1",MODE_PRIVATE)}
     private var desktopBusy=false
     private var desktopGate:DesktopTrial?=null
     private var desktopNonce:String?=null
@@ -134,7 +143,10 @@ class PocActivity : ComponentActivity() {
         super.onDestroy()
     }
 
+    override fun onResume(){super.onResume();if(!reviewWorking())runCatching{session?.setActive(true)}}
+
     override fun onPause() {
+        reviewConsentDialog?.dismiss();reviewConsentDialog=null;cancelReview("PAUSED")
         desktopConsentDialog?.dismiss();desktopConsentDialog=null
         finishDesktop("PAUSED",show=false);clearDesktopDetails()
         shareDialog?.dismiss(); shareDialog = null
@@ -189,11 +201,11 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun startDesktopPreview(){
-        if(desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||kind!=PageKind.APPROVED_GROUP||progress!=100||channel?.isConnected!=true)return
+        if(reviewWorking()||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||kind!=PageKind.APPROVED_GROUP||progress!=100||channel?.isConnected!=true)return
         val currentSession=session?:return;val currentChannel=channel?:return;val target=url?:return
         desktopConsentDialog=DesktopConsentDialog(this,onAccept=accept@{
-                if(!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)||session!==currentSession||channel!==currentChannel||url!=target||kind!=PageKind.APPROVED_GROUP||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||progress!=100||!currentChannel.isConnected)return@accept
-                stopVisiblePosts();finishShare("CANCELLED",clear=true);clearDesktopDetails()
+                if(reviewWorking()||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)||session!==currentSession||channel!==currentChannel||url!=target||kind!=PageKind.APPROVED_GROUP||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||progress!=100||!currentChannel.isConnected)return@accept
+                reviewLast=null;stopVisiblePosts();finishShare("CANCELLED",clear=true);clearDesktopDetails()
                 val gate=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()})
                 if(!gate.begin(true)){publishDesktop(DesktopSummary.create("NO_CONSENT_OR_CONTEXT",0),emptyList());return@accept}
                 clearDesktopDetails();geckoView.requestFocus();DesktopKeyboard.dismiss(geckoView);desktopGate=gate;desktopBusy=true;desktopRows=emptyList();desktopNonce=UUID.randomUUID().toString();render()
@@ -230,7 +242,7 @@ class PocActivity : ComponentActivity() {
         desktopThumbnails.clear()
         if(::offersTab.isInitialized)offersTab.text="Oferty (0)"
     }
-    private fun busyForTabs()=desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad
+    private fun busyForTabs()=reviewWorking()||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad
     private fun selectContentTab(offers:Boolean){
         if(busyForTabs()||!::offersPanel.isInitialized)return
         geckoView.visibility=if(offers)View.GONE else View.VISIBLE
@@ -240,6 +252,46 @@ class PocActivity : ComponentActivity() {
         offersTab.setTypeface(null,if(offers)Typeface.BOLD else Typeface.NORMAL)
         if(offers)geckoView.clearFocus()
     }
+    private fun cancelReview(code:String){
+        if(!reviewBusy)return
+        reviewBusy=false;reviewClosing=true;reviewJob?.cancel();clearDesktopDetails()
+        output.text="Uzupełnianie zatrzymane: $code. Podgląd wyczyszczony; brak skanu i uploadu.";render()
+    }
+    private fun showReviewOrDesktopResult(){
+        val result=reviewLast?:if(desktopRows.isEmpty())ReviewDataSummary.decode(reviewPrefs.getString("last",null))else null
+        if(result==null)return showDesktopResult()
+        desktopResultDialog=AlertDialog.Builder(this).setTitle("Ostatni wynik uzupełniania — lokalnie").setMessage(result.report()).setPositiveButton("OK",null).create().also{it.show()}
+    }
+    private fun askReviewData(){
+        val original=session?:return;val snapshot=desktopRows
+        val queue=ReviewDataGate.queue(snapshot)
+        if(busyForTabs()||queue.isEmpty()||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
+        reviewConsentDialog?.dismiss()
+        reviewConsentDialog=AlertDialog.Builder(this).setTitle("Uzupełnij dane — nowa zgoda")
+            .setMessage("Jednorazowo otworzyć kolejno ${queue.size} dokładnych linków z Do ręcznego sprawdzenia? Jedna zatwierdzona grupa, maks. 20 postów i 3 minuty. Widoczna karta GeckoView odczyta treść DOM i osadzone dane tych stron, bez odczytu odpowiedzi sieciowych i bez klikania reakcji, komentarzy lub udostępniania.\n\nTylko potwierdzone ID; pola są heurystyczne. Komentarze, cytaty i cudze posty nie uzupełniają oferty. Dane pozostają w RAM; lokalnie zapisują się tylko liczniki. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu, pauza lub wygaszenie: STOP i wyczyszczenie podglądu. Bez OCR, skanu i uploadu. To nowa zgoda, niezależna od poprzedniego skanu.")
+            .setNegativeButton("Anuluj",null).setPositiveButton("Zgadzam się"){_,_->
+                reviewConsentDialog=null
+                if(busyForTabs()||session!==original||desktopRows!==snapshot||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return@setPositiveButton
+                stopVisiblePosts();selectContentTab(false);reviewLast=null;reviewTotal=queue.size;reviewPosition=0;reviewBusy=true;render()
+                reviewJob=lifecycleScope.launch{
+                    try{
+                        delay(200)
+                        val outcome=ReviewDataRunner.run(geckoView,original,snapshot,true,alive={reviewBusy&&session===original&&desktopRows===snapshot&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&geckoView.isAttachedToWindow},progress={index,total->reviewPosition=index;reviewTotal=total;render()},restoreActive={session===original&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)})
+                        if(!reviewBusy)return@launch
+                        reviewBusy=false;reviewJob=null;reviewLast=outcome.summary
+                        runCatching{reviewPrefs.edit().putString("last",outcome.summary.encode()).commit()}
+                        if(outcome.summary.reason=="DONE"){
+                            desktopRows=outcome.rows.take(20);desktopThumbnails.retain(desktopRows.map{it.postId}.toSet())
+                            offersPanel.showRows(desktopRows,"Uzupełniono: ${outcome.summary.enriched} • bez potwierdzonego odczytu: ${outcome.summary.unresolved}",thumbnails={desktopThumbnails.rows(it)})
+                            output.text=outcome.summary.report();selectContentTab(true);render()
+                        }else{clearDesktopDetails();output.text=outcome.summary.report();render()}
+                    }catch(e:kotlinx.coroutines.CancellationException){throw e}
+                    catch(_:Exception){if(reviewBusy)cancelReview("ERROR")}
+                    finally{reviewClosing=false;if(!reviewBusy)reviewJob=null;render()}
+                }
+            }.create().also{it.setCanceledOnTouchOutside(false);it.show()}
+    }
+
     private fun openOffer(row:DesktopRow){
         if(!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)||busyForTabs()||desktopRows.none{it===row})return
         val link=OfferLinks.validated(row)?:OfferLinks.validatedReview(row)?:return
@@ -443,7 +495,7 @@ class PocActivity : ComponentActivity() {
         val ext = extension ?: run { output.text = "Rozszerzenie kolektora nie jest gotowe: ${extensionError ?: "instalacja w toku"}"; return }
         // Default settings: normal mobile Firefox user agent, JavaScript and cookies as in the browser. No override, no spoofing.
         val newSession = GeckoSession(GeckoSessionSettings.Builder().build())
-        val newChannel = CollectorChannel(newSession, fixtureMode = false, onVisibleStop = { stopVisiblePosts() }, onPageDisconnect = { if(!desktopBusy&&desktopRows.isNotEmpty())clearDesktopDetails(); if(desktopBusy&&desktopGate?.phase==DesktopTrial.Phase.READING)finishDesktop("PORT_LOST"); shareResolver?.disconnected(); if (!responseReloadGate.allowOldDisconnect()) stopVisiblePosts(); if (shareBusy && shareResolver?.active != true) finishShare() }, onPageConnected = { responseReloadGate.connected() }, onShareStop = { if (shareBusy) finishShare("UNSAFE_DOCUMENT") }, onDesktopStop={if(desktopBusy)finishDesktop("CONTEXT")}) { value -> probe = value; render() }
+        val newChannel = CollectorChannel(newSession, fixtureMode = false, onVisibleStop = { stopVisiblePosts() }, onPageDisconnect = { if(!reviewWorking()&&!desktopBusy&&desktopRows.isNotEmpty())clearDesktopDetails(); if(desktopBusy&&desktopGate?.phase==DesktopTrial.Phase.READING)finishDesktop("PORT_LOST"); shareResolver?.disconnected(); if (!responseReloadGate.allowOldDisconnect()) stopVisiblePosts(); if (shareBusy && shareResolver?.active != true) finishShare() }, onPageConnected = { responseReloadGate.connected() }, onShareStop = { if (shareBusy) finishShare("UNSAFE_DOCUMENT") }, onDesktopStop={if(desktopBusy)finishDesktop("CONTEXT")}) { value -> probe = value; render() }
         newChannel.attach(ext)
         newSession.progressDelegate = progressDelegate
         newSession.contentDelegate = contentDelegate
@@ -459,6 +511,7 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun closeSession() {
+        reviewConsentDialog?.dismiss();reviewConsentDialog=null;cancelReview("SESSION_CLOSED")
         finishDesktop("CANCELLED",show=false);clearDesktopDetails()
         finishShare("SESSION_CLOSED", clear = true)
         stopVisiblePosts()
@@ -902,7 +955,7 @@ class PocActivity : ComponentActivity() {
 
     private fun onUrl(value: String?, hasUserGesture: Boolean = false) {
         if(desktopBusy&&(hasUserGesture||desktopGate?.location(value)!=true))finishDesktop("NAVIGATION")
-        if(!desktopBusy&&value!=url)clearDesktopDetails()
+        if(!reviewWorking()&&!desktopBusy&&value!=url)clearDesktopDetails()
         if (!shareBusy && shareResolver != null && value != url) shareResolver = null
         val shareFailed = shareBusy && shareResolver?.location(value, hasUserGesture) != true
         if (!responseReloadGate.allowLocation(value)) stopVisiblePosts()
@@ -944,11 +997,12 @@ class PocActivity : ComponentActivity() {
     private fun render() {
         if (!::banner.isInitialized) return
         val open = session != null
-        val stop = haltMessage ?: if (open && !desktopBusy && !shareBusy && shareResolver?.status != ShareLinkResolver.Status.CONFIRMED) PocPolicy.stopMessage(kind, loginRequested) else null
+        val stop = haltMessage ?: if (open && !reviewWorking() && !desktopBusy && !shareBusy && shareResolver?.status != ShareLinkResolver.Status.CONFIRMED) PocPolicy.stopMessage(kind, loginRequested) else null
         banner.text = when {
             stop != null -> stop
             !open -> "Sesja zamknięta. „Otwórz sesję” uruchamia przeglądarkę tylko dla grupy ${PocPolicy.APPROVED_GROUP_ID}."
             loginRequested && kind == PageKind.LOGIN -> "Logowanie ręczne na stronie Facebooka. Po zalogowaniu użyj „Wróć do grupy”."
+            reviewBusy -> "Odczyt postów do sprawdzenia: $reviewPosition/$reviewTotal • tylko lokalnie"
             desktopBusy -> if(desktopGate?.phase==DesktopTrial.Phase.READING)"Automatyczne przewijanie • do 30 s • tylko lokalnie" else "Ładowanie grupy • automatyczny podgląd • tylko lokalnie"
             shareBusy -> "Sprawdzanie jednego linku: do 20 s. Bez skanu."
             responseBusy -> if (responseReloadGate.active) "Trwa diagnostyka od otwarcia (25 s)." else "Trwa lokalna diagnostyka odpowiedzi (15 s)."
@@ -961,11 +1015,11 @@ class PocActivity : ComponentActivity() {
         }
         banner.setBackgroundColor(if (stop != null) Color.parseColor("#B3261E") else Color.parseColor("#1E5AA8"))
 
-        val canScan = open && !desktopBusy && !shareBusy && !responseBusy && !scanning && stop == null && !preferences.getBoolean(KEY_ONE_SCAN_USED, false) && PocPolicy.canScan(kind) && channel?.isConnected == true
-        buttons["open"]?.text = if(desktopBusy) "Przerwij próbę" else if (open) "Zamknij sesję" else "Otwórz sesję"
-        listOf("group", "login", "back").forEach { buttons[it]?.isEnabled = open && !desktopBusy && !scanning }
+        val canScan = open && !reviewWorking() && !desktopBusy && !shareBusy && !responseBusy && !scanning && stop == null && !preferences.getBoolean(KEY_ONE_SCAN_USED, false) && PocPolicy.canScan(kind) && channel?.isConnected == true
+        buttons["open"]?.text = if(reviewClosing) "Kończenie uzupełniania" else if(reviewBusy) "Przerwij uzupełnianie" else if(desktopBusy) "Przerwij próbę" else if (open) "Zamknij sesję" else "Otwórz sesję"
+        listOf("group", "login", "back").forEach { buttons[it]?.isEnabled = open && !reviewWorking() && !desktopBusy && !scanning }
         listOf("scan", "scan3").forEach { buttons[it]?.isEnabled = canScan }
-        buttons["responses"]?.isEnabled = open && !desktopBusy && !responseBusy && !visibleBusy && !scanning && !inspectingDom && kind == PageKind.APPROVED_GROUP && progress == 100 && channel?.isConnected == true
+        buttons["responses"]?.isEnabled = open && !reviewWorking() && !desktopBusy && !responseBusy && !visibleBusy && !scanning && !inspectingDom && kind == PageKind.APPROVED_GROUP && progress == 100 && channel?.isConnected == true
         buttons["mainTransport"]?.isEnabled = buttons["responses"]?.isEnabled == true
         buttons["document"]?.isEnabled = buttons["responses"]?.isEnabled == true
         buttons["responseLoad"]?.isEnabled = buttons["responses"]?.isEnabled == true
@@ -976,12 +1030,13 @@ class PocActivity : ComponentActivity() {
 
         buttons["sharedLink"]?.isEnabled = buttons["responses"]?.isEnabled == true
         buttons["desktopPreview"]?.isEnabled = buttons["responses"]?.isEnabled == true
-        buttons["tools"]?.isEnabled = !desktopBusy && !shareBusy && !responseBusy && !visibleBusy && !scanning && !inspectingDom && !measuringLoad
+        buttons["tools"]?.isEnabled = !reviewWorking() && !desktopBusy && !shareBusy && !responseBusy && !visibleBusy && !scanning && !inspectingDom && !measuringLoad
         if(::offersTab.isInitialized){
             val enabled=!busyForTabs()
             facebookTab.isEnabled=enabled;offersTab.isEnabled=enabled
             offersTab.text="Oferty (${desktopRows.count{DesktopSummary.eligible(it)}})"
         }
+        if(reviewWorking())buttons.filterKeys{it!="open"}.values.forEach{it.isEnabled=false}
         val p = probe
         diagnostics.text = buildString {
             appendLine("STAN: ${banner.text}")
@@ -1109,7 +1164,7 @@ class PocActivity : ComponentActivity() {
             setBackgroundColor(Color.parseColor("#FAFAFC"))
             addView(banner)
             addView(row(
-                button("open", "Otwórz sesję") { if(desktopBusy)finishDesktop("CANCELLED",show=false) else if (session == null) askConsentAndOpen() else closeSession() },
+                button("open", "Otwórz sesję") { if(reviewClosing)Unit else if(reviewBusy)cancelReview("CANCELLED") else if(desktopBusy)finishDesktop("CANCELLED",show=false) else if (session == null) askConsentAndOpen() else closeSession() },
                 button("group", "Otwórz grupę") { load(PocPolicy.APPROVED_GROUP_URL, login = false) },
                 button("tools", "Narzędzia / raport") { diagnosticsDialog?.show() },
             ))
@@ -1125,7 +1180,7 @@ class PocActivity : ComponentActivity() {
                     layoutParams=LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,0,1f)
                     geckoView.layoutParams=FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT)
                     addView(geckoView)
-                    offersPanel=OffersPanel(this@PocActivity,{openOffer(it)},{showDesktopResult()}).apply{
+                    offersPanel=OffersPanel(this@PocActivity,{openOffer(it)},{showReviewOrDesktopResult()},onEnrich={askReviewData()}).apply{
                         layoutParams=FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT)
                         visibility=View.GONE
                         showRows(emptyList())

@@ -54,7 +54,7 @@ class CollectorChannel(
                 "shareLinkStop" -> if (json.optString("nonce") == shareNonce) onShareStop()
                 "visiblePostsStop" -> onVisibleStop()
                 "ready" -> ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
-                "desktopDocumentProof", "desktopArmed", "desktopPreviewResult", "shareLinkContextResult", "mainTransportResult", "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
+                "reviewPostResult", "desktopDocumentProof", "desktopArmed", "desktopPreviewResult", "shareLinkContextResult", "mainTransportResult", "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                     pending.remove(json.optString("nonce"))?.complete(json)
                 }
@@ -116,6 +116,13 @@ class CollectorChannel(
         return DesktopProtocol.parse(result,nonce,group)
     }
     fun abortDesktop(){viewportBridge?.let{it.close();lastViewportCaptureCounts=it.captureCounts.toList()};viewportBridge=null;desktopNonce=null;runCatching{port?.postMessage(JSONObject().put("type","abortDesktopPreview").put("nonce",UUID.randomUUID().toString()))}}
+
+    suspend fun reviewPost(row:DesktopRow,expectedUrl:String,consent:Boolean=false,group:String=PocPolicy.APPROVED_GROUP_ID):ReviewPostReply?{
+        if(!consent||!ReviewDataGate.matches(expectedUrl,group,row.postId,fixtureMode))return null
+        val nonce=UUID.randomUUID().toString()
+        val reply=request(nonce,JSONObject().put("type","reviewPost").put("nonce",nonce).put("consent",true).put("reviewConsent",true).put("groupId",group).put("postId",row.postId).put("expectedUrl",expectedUrl).put("fixture",fixtureMode).put("previousRow",ReviewDataProtocol.row(row)),2_000)
+        return ReviewDataProtocol.parse(reply,nonce,row.postId,group)
+    }
 
     suspend fun shareLinkProof(expectedUrl: String, consent: Boolean, newDocumentAfter: Long? = null): ShareContextReply {
         if (!consent) return ShareContextReply.ABSENT

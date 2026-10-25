@@ -1,0 +1,49 @@
+package pl.jakubokruszek.flipwatcher.geckopoc
+
+import androidx.test.core.app.ActivityScenario
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.*
+import org.junit.Assert.*
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSessionSettings
+
+@RunWith(AndroidJUnit4::class)
+class ReviewDataInstrumentedTest{
+ private val a="550000000000091";private val b="550000000000092"
+ private fun row(id:String)=DesktopRow(id,"https://www.facebook.com/groups/$FIXTURE_GROUP_ID/posts/$id/","DOM",null,"NONE",null,null,null,null,null,"UNKNOWN",false,0,"NO_TEXT")
+ private fun html(id:String,full:Boolean)=if(!full)"""<!doctype html><title>Exact empty marker</title><article role="article"><a href="https://www.facebook.com/groups/$FIXTURE_GROUP_ID/posts/$id/">Post</a><div data-ad-preview="message"></div></article>""" else """<!doctype html><title>Exact full post</title><div role="dialog"><article role="article"><a href="https://www.facebook.com/groups/$FIXTURE_GROUP_ID/posts/$id/">Post</a></article><div data-ad-preview="message">Sprzedam mieszkanie 42m2. Cena 319000 zł. 2 pokoje. ul. Testowa 12.<div role="comment"><div data-ad-preview="message">Sprzedam inne mieszkanie 999m2 za 9000000 zł</div></div><form><textarea>PRIVATE_DRAFT 999999 zł</textarea></form><blockquote>9999999 zł</blockquote></div></div>"""
+ @Test fun batchOpensExactReviewLinksReadsFullMessageWithoutCommentsAndRestoresGroup()=runCase("normal")
+ @Test fun noNewConsentDoesNotNavigateOrReadAnyPost()=runCase("consent")
+ @Test fun foreignRedirectAndVerificationStopWithoutPublishingPartialRows(){runCase("foreign");runCase("login")}
+ @Test fun cancellationClosesTemporarySessionAndRestoresOriginalWithoutPublishing()=runCase("cancel")
+ private fun runCase(mode:String){
+  ActivityScenario.launch(GeckoTestHostActivity::class.java).use{scenario->var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it}
+   runBlocking{withTimeout(60_000){withContext(Dispatchers.Main){
+    val pathA="/groups/$FIXTURE_GROUP_ID/posts/$a/";val pathB="/groups/$FIXTURE_GROUP_ID/posts/$b/"
+    val server=LoopbackFixtureServer(redirects=if(mode=="foreign")mapOf(pathA to "/groups/foreign/posts/$a/")else emptyMap(),pages=mapOf(pathA to "review-full",pathB to "review-empty")){name->when(name){"fixtures/review-home.html"->"<!doctype html><title>Original group</title><p>Original group unchanged</p>";"fixtures/review-full.html"->if(mode=="login")"<!doctype html><title>Logowanie</title><input type=password>"else html(a,true);"fixtures/review-empty.html"->html(b,false);else->null}}
+    val original=GeckoSession(GeckoSessionSettings.Builder().userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP).viewportMode(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP).build())
+    val channel=CollectorChannel(original,fixtureMode=true);var loaded=false
+    original.progressDelegate=object:GeckoSession.ProgressDelegate{override fun onPageStop(s:GeckoSession,success:Boolean){loaded=success}}
+    try{
+     channel.attach(GeckoHost.collectorExtension(host!!));original.open(GeckoHost.runtime(host!!));host!!.geckoView.setSession(original);original.setActive(true);original.setFocused(true);host!!.geckoView.requestFocus()
+     val home=server.url("/groups/$FIXTURE_GROUP_ID/","review-home");original.loadUri(home);assertTrue(channel.awaitPort(15_000));withTimeout(10_000){while(!loaded||!host!!.geckoView.hasWindowFocus())delay(50)}
+     val rows=listOf(row(a),row(b));var outcome:ReviewDataRunner.Outcome?=null
+     if(mode=="cancel"){
+      var begun=false;val job=launch{outcome=ReviewDataRunner.run(host!!.geckoView,original,rows,true,alive={true},progress={_,_->begun=true},fixtureOrigin="http://127.0.0.1:${server.port}")}
+      withTimeout(10_000){while(!begun)delay(20)};job.cancelAndJoin();assertNull(outcome)
+     }else{
+      val result=ReviewDataRunner.run(host!!.geckoView,original,rows,mode!="consent",alive={true},fixtureOrigin="http://127.0.0.1:${server.port}")
+      when(mode){
+       "normal"->{assertEquals("DONE",result.summary.reason);assertEquals(2,result.summary.opened);assertEquals(1,result.summary.enriched);assertEquals(1,result.summary.unresolved);val actual=result.rows.single{it.postId==a};assertEquals(319000.0,actual.price!!,0.0);assertEquals(42.0,actual.area!!,0.0);assertEquals(2,actual.rooms);assertEquals("Testowa 12",actual.street);assertTrue(DesktopSummary.eligible(actual));assertNull(result.rows.single{it.postId==b}.price)}
+       "consent"->{assertEquals("NO_CONSENT_OR_INPUT",result.summary.reason);assertEquals(0,result.summary.opened);assertTrue(result.rows.isEmpty())}
+       else->{assertNotEquals("DONE",result.summary.reason);assertTrue(result.rows.isEmpty())}
+      }
+     }
+     assertSame(original,host!!.geckoView.session);assertEquals("/groups/$FIXTURE_GROUP_ID/",channel.probe()!!.path)
+    }finally{channel.close();runCatching{host!!.geckoView.releaseSession()};original.close();server.close()}
+   }}}
+  }
+ }
+}
