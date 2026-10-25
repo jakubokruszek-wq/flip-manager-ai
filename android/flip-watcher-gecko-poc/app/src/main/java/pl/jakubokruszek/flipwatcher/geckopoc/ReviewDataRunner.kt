@@ -13,7 +13,7 @@ import org.mozilla.geckoview.WebRequestError
 /** Foreground temporary session shares the existing runtime, not a background/screen-off browser. */
 object ReviewDataRunner{
     data class Outcome(val summary:ReviewDataSummary,val rows:List<DesktopRow>)
-    suspend fun run(view:GeckoView,original:GeckoSession,rows:List<DesktopRow>,consent:Boolean,alive:()->Boolean,progress:(Int,Int)->Unit={},restoreActive:()->Boolean=alive,fixtureOrigin:String?=null):Outcome=withContext(Dispatchers.Main){
+    suspend fun run(view:GeckoView,original:GeckoSession,rows:List<DesktopRow>,consent:Boolean,alive:()->Boolean,progress:(Int,Int)->Unit={_,_->},restoreActive:()->Boolean=alive,fixtureOrigin:String?=null):Outcome=withContext(Dispatchers.Main){
         val fixture=fixtureOrigin!=null;val group=if(fixture)FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID
         val queue=ReviewDataGate.queue(rows,group);var opened=0;var bound=0;var text=0;var enriched=0;var unchanged=0;var unresolved=0;var filtered=0
         fun outcome(reason:String,result:List<DesktopRow> = emptyList())=Outcome(ReviewDataSummary(reason,queue.size,opened,bound,text,enriched,unchanged,unresolved,filtered),result)
