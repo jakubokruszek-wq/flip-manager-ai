@@ -22,14 +22,15 @@ function networkMedia(records,body,source,core){
  const rootId=n=>digits(n.post_id)||digits(n.postId)||digits(n.story_fbid)||digits(n.story_id)||digits(n.storyId)||(/^(?:Story|Post)$/.test(kind(n))?digits(n.id):null);
  const excluded=key=>/(?:shared|quoted|crosspost|reshare|original_story|attached_story|actor|author|owner|profile|avatar|comment|feedback|video)/i.test(key);
  let visited=0;
- function walk(n,depth,owner=null,attachment=false){
+ function walk(n,depth,owner=null,attachment=false,storyBoundary=false){
   if(!n||typeof n!=='object'||depth>20||++visited>10000)return;
-  if(Array.isArray(n)){for(const child of n.slice(0,100))walk(child,depth+1,owner,attachment);return;}
-  if(/^(?:Video|User|Page|Comment|Feedback|Actor|Profile)/i.test(kind(n)))return;
+  if(Array.isArray(n)){for(const child of n.slice(0,100))walk(child,depth+1,owner,attachment,storyBoundary);return;}
+  if(/(?:Video|User|Page|Comment|Feedback|Actor|Profile|shared|quoted|crosspost|reshare)/i.test(kind(n)))return;
   const storyIds=['post_id','postId','story_fbid','story_id','storyId'].map(k=>digits(n[k])).filter(Boolean);
+  if(/^(?:Story|Post)$/.test(kind(n))&&digits(n.id))storyIds.push(digits(n.id));
   if(new Set(storyIds).size>1)return;
   const rid=rootId(n);
-  if(/^(?:Story|Post)$/.test(kind(n))&&!rid)return;
+  if((storyBoundary||/^(?:Story|Post)$/.test(kind(n)))&&!rid)return;
   const directLinks=['url','permalink','permalink_url'].filter(k=>typeof n[k]==='string').map(k=>core.parsePostLink(n[k])).filter(Boolean);
   if(owner&&directLinks.some(p=>p.sourceType!=='GROUP'||p.sourceId!==source.sourceId||p.postId!==owner))return;
   if(rid){
@@ -54,7 +55,7 @@ function networkMedia(records,body,source,core){
     extras.set(owner,list);
    }
   }
-  for(const [key,child] of Object.entries(n).slice(0,100))if(!excluded(key))walk(child,depth+1,owner,attachment||/^(?:attachments|attachment|all_subattachments|subattachments|media|photo)$/.test(key));
+  for(const [key,child] of Object.entries(n).slice(0,100))if(!excluded(key))walk(child,depth+1,owner,attachment||/^(?:attachments|attachment|all_subattachments|subattachments|media|photo)$/.test(key),/^(?:story|post|stories|posts)$/.test(key));
  }
  for(const root of roots)walk(root,0);
  return records.map(r=>extras.has(r.postId)?{...r,media:[...(r.media||[]).slice(0,100),...extras.get(r.postId)]}:r);

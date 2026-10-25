@@ -44,3 +44,9 @@ test('opaque or missing nested story identity and generic foreign permalinks can
  const n=story([{target:child}]);const records=[{postId:id,permalink:link(id),media:[]}];assert.equal(p.networkMedia(records,JSON.stringify(n),source,core)[0].media.length,0);
  }
 });
+
+test('typed story id conflicts and explicit unbound story boundaries cannot inherit media',()=>{
+ const records=[{postId:id,permalink:link(id),media:[]}];
+ const conflict=story([{media:photo()}]);conflict.post_id=id;conflict.id=other;assert.equal(p.networkMedia(records,JSON.stringify(conflict),source,core)[0].media.length,0);
+ for(const attachment of [{story:{attachments:[{media:photo()}]}},{target:{__typename:'SharedStory',attachments:[{media:photo()}]}},{media:{__typename:'CometVideo',child:photo()}}])assert.equal(p.networkMedia(records,JSON.stringify(story([attachment])),source,core)[0].media.length,0);
+});
