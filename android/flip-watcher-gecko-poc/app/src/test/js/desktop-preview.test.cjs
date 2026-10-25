@@ -116,3 +116,12 @@ test('empty DOM observation cannot erase network snapshot media proof and make t
  m.add({...record('550000000000091',''),media:[]},'DOM');assert.equal(m.rows()[0].photos,1);
  for(let i=0;i<19;i++)m.add({...record(String(550000000000000+i),''),media:[]},'DOM');m.add(record('550000000000099'),'DOM');assert.equal(m.rows().length,20);assert(m.rows().some(r=>r.postId==='550000000000091'&&r.photos===1));
 });
+test('snapshot signature cache cannot retain evicted post IDs while late candidates replace empty rows',()=>{
+ const m=model(),cache=new Map();for(let i=0;i<20;i++){const n=model();n.add({...record(String(550000000000000+i),''),media:[]},'DOM');preview.mergeSnapshot(m,cache,n.rows()[0]);}
+ assert.equal(cache.size,20);
+ for(let i=0;i<20;i++){const n=model();n.add(record(String(550000000001000+i)),'NETWORK');preview.mergeSnapshot(m,cache,n.rows()[0]);const ids=new Set(m.rows().map(r=>r.postId));assert.equal(cache.size,20);assert([...cache.keys()].every(id=>ids.has(id)));assert.equal(ids.size,20);}
+});
+test('rejected snapshot extras cannot enter signature memory for an already retained ID',()=>{
+ const m=model(),cache=new Map(),n=model();n.add(record(),'NETWORK');const row=n.rows()[0];preview.mergeSnapshot(m,cache,row);const before=cache.get(row.postId);
+ preview.mergeSnapshot(m,cache,{...row,text:'PRIVATE_RAW_TEXT'});assert.equal(cache.get(row.postId),before);assert.equal(JSON.stringify([...cache.values()]).includes('PRIVATE_RAW_TEXT'),false);
+});

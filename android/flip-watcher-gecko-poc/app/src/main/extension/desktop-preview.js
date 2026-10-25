@@ -126,9 +126,9 @@ function createModel(core,fields,group){
  }
  function merge(row){
   row=cleanRow(row);
-  if(!row||exact(row.permalink,group)!==row.postId){stats.rejected++;return;}
+  if(!row||exact(row.permalink,group)!==row.postId){stats.rejected++;return false;}
   const old=rows.get(row.postId);
-  if(!old&&!admit(row))return;
+  if(!old&&!admit(row))return false;
   if(old){stats.duplicates++;const foreign=old.qualification==='FOREIGN_CITY'||row.qualification==='FOREIGN_CITY';if(old.qualification==='NO_TEXT'&&row.qualification!=='NO_TEXT')old.qualification=row.qualification;
    else if(row.qualification!=='NO_TEXT'&&old.qualification!==row.qualification)old.qualification='CLASSIFIER';
    const bad=blocked.get(row.postId)||new Set();if(foreign)bad.add('foreignCity');
@@ -148,7 +148,7 @@ function createModel(core,fields,group){
    else if(['CANDIDATE','MISSING_FIELDS','CLASSIFIER'].includes(old.qualification)&&[old.price,old.area,old.rooms].every(v=>v===null))old.qualification='MISSING_FIELDS';
    old.photos=Math.max(old.photos,row.photos);if(old.layer!==row.layer)old.layer='MIXED';blocked.set(row.postId,bad);
   }else rows.set(row.postId,{...row});
-  stats.candidates=rows.size;
+  stats.candidates=rows.size;return true;
  }
  function add(record,layer){const row=project(record,layer);if(row){stats[layer==='DOM'?'dom':layer==='HYDRATION'?'hydration':'network']++;merge(row);const stored=rows.get(row.postId);if(stored&&row.photos>0)stored.photos=row.photos;}}
  function hydration(texts){const source={sourceType:'GROUP',sourceId:group,sourceUrl:'https://www.facebook.com/groups/'+group+'/',allowGroupRedirect:false};
@@ -163,6 +163,14 @@ function createModel(core,fields,group){
   return result;
  }
  return {add,merge,hydration,mediaBindings,stats,rows:()=>[...rows.values()].map(r=>({...r})),clear(){rows.clear();blocked.clear();photoEvidence.clear();Object.assign(stats,zero());}};
+}
+// Snapshot signatures belong only to the currently retained bounded rows.
+function mergeSnapshot(model,cache,row){
+ const signature=JSON.stringify(row);
+ if(cache.get(row.postId)!==signature&&model.merge(row)!==true)return;
+ const ids=new Set(model.rows().map(r=>r.postId));
+ for(const id of cache.keys())if(!ids.has(id))cache.delete(id);
+ if(ids.has(row.postId))cache.set(row.postId,signature);
 }
 // Same semantic feed candidates as the desktop extension, plus their bounded ancestors.
 // Never scroll dialogs, comments or an arbitrary overflow widget.
@@ -357,7 +365,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
     const snapshot=await send({type:'desktopSnapshot',nonce:m.nonce});
     if(invalid||!safe(m))return empty('CONTEXT');
     mediaBindings=snapshot?.status==='OK'&&Array.isArray(snapshot.media)?snapshot.media:[];model.stats.mediaBindingPosts=Math.max(model.stats.mediaBindingPosts,mediaBindings.filter(b=>b.ids?.length||b.urls?.length).length);
-    for(const row of snapshot?.status==='OK'?snapshot.rows||[]:[]){const signature=JSON.stringify(row);if(snapshots.get(row.postId)!==signature){model.merge(row);snapshots.set(row.postId,signature);}}
+    for(const row of snapshot?.status==='OK'?snapshot.rows||[]:[])mergeSnapshot(model,snapshots,row);
 
     // A cold or still-changing first frame must not be lost by scrolling away.
     // One bounded retry, still inside the original capture/time budgets.
@@ -430,7 +438,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   model.stats.scrollElapsedMs=Math.min(30000,Math.max(0,Math.floor(w.performance.now()-scrollStart)));
   await pause(700);if(!await active())return empty('CONTEXT');readDOM(w,model,core,m.groupId);
   const result=await send({type:'readDesktop',nonce:m.nonce});if(invalid||!safe(m)||result?.status!=='OK')return empty('CONTEXT');
-  for(const row of result.rows||[])if(snapshots.get(row.postId)!==JSON.stringify(row))model.merge(row);
+  for(const row of result.rows||[])mergeSnapshot(model,snapshots,row);
   for(const k of ['network','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped'])model.stats[k]=result.stats?.[k]||0;
   model.stats.desktop=w.innerWidth>=900?1:0;
   for(const k of statKeys)model.stats[k]=Math.max(0,Math.min(k==='bytes'?4194304:k==='scrollElapsedMs'?30000:k==='gestureWaitMs'?15000:10000,Math.floor(model.stats[k])));
@@ -438,5 +446,5 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
  }catch{return empty('ERROR');}
  finally{noticeDispose?.();gestureWatch?.stop();setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
-const api={imageURL,photoAnchorHref,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
+const api={imageURL,photoAnchorHref,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,mergeSnapshot,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);
