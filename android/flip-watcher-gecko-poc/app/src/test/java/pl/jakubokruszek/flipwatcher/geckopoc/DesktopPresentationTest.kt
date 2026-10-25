@@ -4,6 +4,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DesktopPresentationTest {
+    @Test fun version0532HistoryPadsCoverageAndRejectsImpossibleCounts(){
+        val original=org.json.JSONObject(DesktopSummary.create("EMPTY",1).encode());for(key in DesktopProtocol.statKeys.drop(116))original.getJSONObject("stats").remove(key)
+        val raw=original.toString();val restored=DesktopSummary.decode(raw)!!;for(key in DesktopProtocol.statKeys.drop(116))assertEquals(0,restored.stats.getValue(key));assertEquals(raw,original.toString())
+        val stats=org.json.JSONObject(DesktopProtocol.emptyStats()).put("dataPrice",1);assertNull(DesktopProtocol.parseStats(stats));stats.put("candidates",1);assertNotNull(DesktopProtocol.parseStats(stats));stats.put("textExpandArmed",2);assertNull(DesktopProtocol.parseStats(stats))
+    }
+
     @Test fun missingFieldsAndSourcesAreExplicitForPartialRows(){
         val partial=row("550000000000091").copy(price=null,priceSource="NONE",area=null,rooms=null,district=null,neighborhood=null,street=null)
         assertEquals(listOf("cena","metraż","pokoje","lokalizacja"),DesktopPresentation.missing(partial))

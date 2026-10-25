@@ -6,7 +6,7 @@ import org.json.JSONObject
 class DesktopSummary private constructor(val verdict:String,val reason:String,val offers:Int,val navigations:Int,val stats:Map<String,Int>){
     fun encode():String=JSONObject().put("verdict",verdict).put("reason",reason).put("offers",offers).put("navigations",navigations).put("stats",JSONObject(stats)).toString()
     fun report():String=buildString {
-        appendLine("KOMPUTER 0.5.32 • tylko lokalnie • $verdict")
+        appendLine("KOMPUTER 0.5.33 • tylko lokalnie • $verdict")
         appendLine("Komunikat powiadomień: wykryty ${stats.getValue("noticeDetected")} • zamknięty ${stats.getValue("noticeClosed")} • uprawnienia bez zmian")
         if(reason=="NOTICE_BLOCKED"){
             appendLine("Powód: NOTICE_BLOCKED")
@@ -34,6 +34,8 @@ class DesktopSummary private constructor(val verdict:String,val reason:String,va
             appendLine("Wybór przewijania (liczby bez DOM): sprawdzone ${stats.getValue("scrollSeen")} • bez zakresu ${stats.getValue("scrollNoRange")} • ukryte/niedozwolone ${stats.getValue("scrollHidden")} • poza ekranem ${stats.getValue("scrollOffscreen")} • niepowiązane ${stats.getValue("scrollUnbound")}")
             appendLine("Źródło: punkty ekranu ${stats.getValue("scrollHit")} • wybrano okno ${stats.getValue("scrollRoot")} / kontener ${stats.getValue("scrollInner")}")
         }
+        appendLine("Pokrycie pól w zachowanych postach (maks. 20): cena ${stats.getValue("dataPrice")} • metraż ${stats.getValue("dataArea")} • pokoje ${stats.getValue("dataRooms")} • lokalizacja ${stats.getValue("dataLocation")} • bez tekstu ${stats.getValue("dataNoText")}")
+        appendLine("Rozwijanie: uzbrojone ${stats.getValue("textExpandArmed")} (0: nie lub starszy raport) • obserwacje kart ${stats.getValue("textCardsBound")} / wiadomości ${stats.getValue("textMessageNodes")} / kontrolek ${stats.getValue("textControlNodes")} / rozpoznanych ${stats.getValue("textRecognized")} (powtórzenia, nie posty)")
         appendLine("Pełna treść: rozwinięto ${stats.getValue("textExpanded")} / próby ${stats.getValue("textExpandAttempts")} (maks. 20) • odmowy ${stats.getValue("textExpandRejected")} • pełniejsze rekordy sieciowe ${stats.getValue("textFullRecords")}")
         appendLine("Przewinięcia: ${stats.getValue("scrollMoves")}/${stats.getValue("scrollSteps")} • odczyty skryptów: ${stats.getValue("scripts")}")
         appendLine("Okno przewijania: ${stats.getValue("scrollElapsedMs")} ms / 30000 • próby bez ruchu: ${stats.getValue("scrollStalls")} • oczekiwania bez celu: ${stats.getValue("scrollNoTarget")} • kontenery na końcu: ${stats.getValue("scrollAtEnd")}")
@@ -78,7 +80,7 @@ class DesktopSummary private constructor(val verdict:String,val reason:String,va
             if(verdict !in setOf("CONDITIONAL_GO","NO_GO")||reason !in DesktopTrial.reasons||j.opt("offers") !is Int||j.opt("navigations") !is Int)return null
             val offers=j.getInt("offers");val nav=j.getInt("navigations");val stored=j.getJSONObject("stats")
             // Read old count-only history without changing/deleting it; fresh protocol stays strict.
-            for(size in listOf(22,30,34,38,45,54,73,80,82,86,95,104,106,109,112))if(stored.keys().asSequence().toSet()==DesktopProtocol.statKeys.take(size).toSet())for(key in DesktopProtocol.statKeys.drop(size))stored.put(key,0)
+            for(size in listOf(22,30,34,38,45,54,73,80,82,86,95,104,106,109,112,116))if(stored.keys().asSequence().toSet()==DesktopProtocol.statKeys.take(size).toSet())for(key in DesktopProtocol.statKeys.drop(size))stored.put(key,0)
             val stats=DesktopProtocol.parseStats(stored)?:return null
             if(verdict=="NO_GO"&&offers!=0)return null
             if(offers !in 0..20||nav !in 0..4||offers>stats.getValue("candidates")||(verdict=="CONDITIONAL_GO")!=(reason=="DONE"&&offers>0))return null

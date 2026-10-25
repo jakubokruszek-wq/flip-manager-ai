@@ -1,7 +1,7 @@
 /* Isolated/native-consented local projection. No storage, upload or public page bridge. */
 (function(root){
 'use strict';
-const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible','scrollNativeSteps','scrollNativeMoves','photoPreviewFrames','photoPreviews','viewportHeight','visualViewportHeight','rootRemaining','viewportModule','viewportGranted','viewportReady','viewportProbeCode','nativeRequests','nativeRejected','nativeTimeout','pointMisses','mediaBindingPosts','pointProbes','pointEmpty','pointFrame','pointForeign','pointForm','pointDialog','pointComment','pointCommentable','pointChrome','pointUnbound','pointWidget','pointCache','pointCacheCards','pointRects','viewportWidth','visualWidth','visualOffsetX','visualOffsetY','visualScale100','gestureRequested','gestureTouches','gestureAnchored','gestureRejected','gestureWaitMs','gestureScrollSteps','gestureScrollMoves','noticeDetected','noticeClosed','noticeReason','noticeModals','noticeVisible','noticeNameSource','photoExactCards','photoNetworkCards','photoSources','photoIdentityRejected','photoUnready','photoGeometryRejected','photoOccluded','photoAlreadyDone','photoSelected','photoRawImg','photoRawSvg','photoRawCss','photoOwnerRejected','photoScopeRejected','photoAnchorRejected','photoSizeRejected','photoSourceRejected','photoCssUnready','scrollFast','scrollCadenceMs','photoNetworkAnchors','photoSvgBounds','photoTinyBound','photoDocumentNodes','photoDocumentBound','photoDocumentSelected','textExpandAttempts','textExpanded','textExpandRejected','textFullRecords'];
+const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible','scrollNativeSteps','scrollNativeMoves','photoPreviewFrames','photoPreviews','viewportHeight','visualViewportHeight','rootRemaining','viewportModule','viewportGranted','viewportReady','viewportProbeCode','nativeRequests','nativeRejected','nativeTimeout','pointMisses','mediaBindingPosts','pointProbes','pointEmpty','pointFrame','pointForeign','pointForm','pointDialog','pointComment','pointCommentable','pointChrome','pointUnbound','pointWidget','pointCache','pointCacheCards','pointRects','viewportWidth','visualWidth','visualOffsetX','visualOffsetY','visualScale100','gestureRequested','gestureTouches','gestureAnchored','gestureRejected','gestureWaitMs','gestureScrollSteps','gestureScrollMoves','noticeDetected','noticeClosed','noticeReason','noticeModals','noticeVisible','noticeNameSource','photoExactCards','photoNetworkCards','photoSources','photoIdentityRejected','photoUnready','photoGeometryRejected','photoOccluded','photoAlreadyDone','photoSelected','photoRawImg','photoRawSvg','photoRawCss','photoOwnerRejected','photoScopeRejected','photoAnchorRejected','photoSizeRejected','photoSourceRejected','photoCssUnready','scrollFast','scrollCadenceMs','photoNetworkAnchors','photoSvgBounds','photoTinyBound','photoDocumentNodes','photoDocumentBound','photoDocumentSelected','textExpandAttempts','textExpanded','textExpandRejected','textFullRecords','textExpandArmed','textCardsBound','textMessageNodes','textControlNodes','textRecognized','dataPrice','dataArea','dataRooms','dataLocation','dataNoText'];
 const zero=()=>Object.fromEntries(statKeys.map(k=>[k,0]));
 function groupURL(raw,group,fixture){try{const u=new URL(raw);return /^[A-Za-z0-9._-]{1,100}$/.test(group)&&!u.username&&!u.password&&!u.hash&&(fixture||!u.search)&&u.pathname.replace(/\/$/,'')==='/groups/'+group&&((u.protocol==='https:'&&!u.port&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))||(fixture===true&&u.protocol==='http:'&&u.hostname==='127.0.0.1'));}catch{return false;}}
 function exact(raw,group){try{const u=new URL(raw);const p=u.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d{5,30})\/?$/);return u.protocol==='https:'&&!u.port&&!u.username&&!u.password&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&p?.[1]===group?p[2]:null;}catch{return null;}}
@@ -179,7 +179,8 @@ function createModel(core,fields,group){
  function admit(row){
   if(rows.has(row.postId)||rows.size<20)return true;
   const review=row.photos>0&&unresolved(row);
-  const victim=eligible(row)||review?[...rows.values()].find(old=>unresolved(old)&&!eligible(old)&&old.photos===0&&!blocked.get(old.postId)?.size):null;
+  const partial=row.layer==='DOM'&&row.usable===true&&row.intent==='SELL_PROPERTY'&&row.qualification==='MISSING_FIELDS';
+  const victim=eligible(row)||review||partial?[...rows.values()].find(old=>unresolved(old)&&!eligible(old)&&old.photos===0&&!blocked.get(old.postId)?.size&&(!partial||old.qualification==='NO_TEXT')):null;
   if(!victim){stats.rejected++;return false;}
   rows.delete(victim.postId);blocked.delete(victim.postId);photoEvidence.delete(victim.postId);return true;
  }
@@ -370,23 +371,42 @@ function ownCardId(card,core,group){
  const anchors=Array.from(nodes).filter(a=>a.closest('[role="article"],article')===card);const links=anchors.map(a=>core.parsePostLink(a.href)).filter(Boolean);
  const ids=new Set(links.map(p=>p.postId));return links.length&&ids.size===1&&links.every(p=>p.sourceType==='GROUP'&&p.sourceId===group)&&anchors.some(a=>exact(a.href,group)===links[0].postId)?links[0].postId:null;
 }
+function disclosureLabel(raw){return messageText(raw).replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069]/gu,'').replace(/^(?:\.{3}|…)\s*|\s*(?:\.{3}|…)$/gu,'').trim().toLocaleLowerCase('pl-PL');}
+function disclosureBinding(button,message,card){
+ const visible=disclosureLabel(button.innerText||button.textContent||''),aria=disclosureLabel(button.getAttribute?.('aria-label')||'');
+ const long=v=>/^(?:zobacz więcej|wyświetl więcej|see more)$/u.test(v),short=v=>/^(?:więcej|more|rozwiń)$/u.test(v);
+ if(visible&&!long(visible)&&!short(visible)||aria&&!long(aria)&&!short(aria))return false;
+ if(![visible,aria].some(v=>long(v)||short(v)))return false;
+ const inside=message.contains(button),target=button.getAttribute?.('aria-controls'),messageId=message.getAttribute?.('id')||message.id;
+ const linked=typeof target==='string'&&/^[A-Za-z0-9_:.-]{1,100}$/.test(target)&&target===messageId&&message.ownerDocument?.getElementById?.(target)===message&&card.contains(button)&&!button.contains(message);
+ if(!inside&&!linked)return false;
+ const declared=button.getAttribute?.('aria-expanded')==='false';
+ if(!inside&&!declared)return false;
+ const truncated=/(?:\.{3}|…)\s*(?:(?:więcej|more|rozwiń)\s*)?$/iu.test(messageText(message.innerText||message.textContent||''));
+ return long(visible)||long(aria)||declared||inside&&truncated;
+}
 // Only an explicitly consented in-place message disclosure; never follow links.
 async function expandOwnMessage(w,core,group,allowed,state,stats,active,safe){
  if(state.size>=20)return 'NONE';const nodes=w.document.querySelectorAll('[role="article"],article');if(nodes.length>100)return 'NONE';
  for(const card of Array.from(nodes)){
   if(card.parentElement?.closest('[role="article"],article')||card.ownerDocument!==w.document||card.isConnected===false||card.closest(textForbidden))continue;
   const id=ownCardId(card,core,group);if(!id||!allowed.has(id)||state.has(id))continue;
-  const candidates=[];
-  for(const message of ownMessageNodes(card)){
-   const buttons=message.querySelectorAll('button,[role="button"]');if(buttons.length>30)continue;
-   for(const button of Array.from(buttons))if(/^(?:zobacz więcej|wyświetl więcej|see more)$/iu.test(messageText(button.innerText||button.textContent)))candidates.push({button,message});
+  stats.textCardsBound=Math.min(10000,stats.textCardsBound+1);
+  const candidates=[],messages=ownMessageNodes(card);
+  stats.textMessageNodes=Math.min(10000,stats.textMessageNodes+messages.length);
+  const linkedControls=card.querySelectorAll('[aria-controls]');
+  for(const message of messages){
+   const buttons=message.querySelectorAll('button,[role="button"]');if(buttons.length>30||linkedControls.length>30)continue;
+   const controls=[...new Set([...Array.from(buttons),...Array.from(linkedControls).filter(n=>n.matches?.('button,[role="button"]')===true)])];
+   stats.textControlNodes=Math.min(10000,stats.textControlNodes+controls.length);
+   for(const button of controls)if(disclosureBinding(button,message,card)){stats.textRecognized=Math.min(10000,stats.textRecognized+1);candidates.push({button,message});}
   }
   const unique=[...new Map(candidates.map(x=>[x.button,x])).values()];if(!unique.length)continue;
   const reject=()=>{stats.textExpandRejected=Math.min(10000,stats.textExpandRejected+1);};
   if(unique.length!==1){reject();continue;}const {button,message}=unique[0];
   const valid=()=>{
-   if(typeof button.click!=='function'||!safe()||w.document.hidden===true||w.document.visibilityState!=='visible'||w.document.hasFocus?.()!==true||button.isConnected===false||button.ownerDocument!==w.document||button.disabled||String(button.getAttribute?.('aria-disabled')||'').toLowerCase()==='true'||button.closest('a[href]')||button.hasAttribute?.('href')||button.closest(textForbidden)||button.closest('[role="article"],article')!==card||!message.contains(button)||!ownMessageNodes(card).includes(message)||ownCardId(card,core,group)!==id)return false;
-   if(!/^(?:zobacz więcej|wyświetl więcej|see more)$/iu.test(messageText(button.innerText||button.textContent)))return false;
+   if(typeof button.click!=='function'||!safe()||w.document.hidden===true||w.document.visibilityState!=='visible'||w.document.hasFocus?.()!==true||button.isConnected===false||button.ownerDocument!==w.document||button.disabled||String(button.getAttribute?.('aria-disabled')||'').toLowerCase()==='true'||button.closest('a[href]')||button.hasAttribute?.('href')||button.closest(textForbidden)||button.closest('[role="article"],article')!==card||!disclosureBinding(button,message,card)||!ownMessageNodes(card).includes(message)||ownCardId(card,core,group)!==id)return false;
+   if(!disclosureBinding(button,message,card))return false;
    const style=w.getComputedStyle(button),r=button.getBoundingClientRect(),vp=w.visualViewport,left=vp?.offsetLeft||0,top=vp?.offsetTop||0,width=vp?.width||w.innerWidth,height=Math.min(w.innerHeight,vp?.height||w.innerHeight);
    if(style.display==='none'||/hidden|collapse/.test(style.visibility)||Number(style.opacity??1)<=0||r.width<=0||r.height<=0||r.left<left||r.top<top||r.right>left+width||r.bottom>top+height)return false;
    const hit=w.document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return hit===button||button.contains(hit);
@@ -475,6 +495,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
     await pause(200);
    }
   }
+  model.stats.textExpandArmed=Number(m.messageConsent===true);
   model.stats.scrollFast=Number(fast);model.stats.scrollCadenceMs=cadence;
   for(let step=0;step<=maxSteps;step++){
    if(!await active())return empty('CONTEXT');
@@ -576,10 +597,14 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   for(const row of result.rows||[])mergeSnapshot(model,snapshots,row);
   for(const k of ['network','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','textFullRecords'])model.stats[k]=result.stats?.[k]||0;
   model.stats.desktop=w.innerWidth>=900?1:0;
+  const finalRows=model.rows();
+  for(const [stat,field] of [['dataPrice','price'],['dataArea','area'],['dataRooms','rooms']])model.stats[stat]=finalRows.filter(r=>r[field]!==null).length;
+  model.stats.dataLocation=finalRows.filter(r=>[r.district,r.neighborhood,r.street].some(v=>v!==null)).length;
+  model.stats.dataNoText=finalRows.filter(r=>r.qualification==='NO_TEXT').length;
   for(const k of statKeys)model.stats[k]=Math.max(0,Math.min(k==='bytes'?4194304:k==='scrollElapsedMs'?30000:k==='gestureWaitMs'?15000:10000,Math.floor(model.stats[k])));
   return {status:'OK',reason:'DONE',rows:model.rows(),stats:{...model.stats}};
  }catch{return empty('ERROR');}
  finally{noticeDispose?.();gestureWatch?.stop();setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
-const api={expandOwnMessage,ownCardId,messageText,networkMedia,imageURL,photoAnchorHref,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,mergeSnapshot,viewportMetrics,scrollDistance,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
+const api={disclosureBinding,disclosureLabel,expandOwnMessage,ownCardId,messageText,networkMedia,imageURL,photoAnchorHref,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,mergeSnapshot,viewportMetrics,scrollDistance,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);
