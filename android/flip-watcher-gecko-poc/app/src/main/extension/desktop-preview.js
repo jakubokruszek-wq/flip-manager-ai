@@ -9,6 +9,53 @@ function explicitIds(body,group){const ids=new Set();let n=0;for(const m of body
 const bounded=(v,min,max)=>typeof v==='number'&&Number.isFinite(v)&&v>=min&&v<=max?v:null;
 // Private bounded image evidence. No URL/media key leaves the extension model.
 function imageURL(raw){try{const u=new URL(raw);if(u.protocol!=='https:'||u.port||u.username||u.password||!['facebook.com','fbcdn.net'].some(h=>u.hostname===h||u.hostname.endsWith('.'+h))||/\.(?:mp4|webm|m3u8)(?:$|\/)/i.test(u.pathname)||u.pathname.length>2048)return null;return u.origin+u.pathname;}catch{return null;}}
+// POC-only supplement: keep typed Photo IDs and rendition URLs within an
+// independently accepted story's own attachment boundary. Never derive post IDs.
+function networkMedia(records,body,source,core){
+ if(!Array.isArray(records)||typeof body!=='string'||body.length>2097152||typeof source?.sourceId!=='string')return records;
+ const accepted=new Map(records.slice(0,100).filter(r=>exact(r.permalink,source.sourceId)===r.postId).map(r=>[r.postId,r]));
+ if(!accepted.size)return records;
+ const roots=[];const clean=body.replace(/^\s*for\s*\(;;\);?/, '').trim();
+ try{roots.push(JSON.parse(clean));}catch{let lines=0;for(const line of clean.split('\n')){if(++lines>256||roots.length===64)break;try{roots.push(JSON.parse(line));}catch{}}}
+ const extras=new Map(),digits=v=>typeof v==='string'&&/^\d{5,30}$/.test(v)?v:null;
+ const kind=n=>typeof n.__typename==='string'?n.__typename:typeof n.typename==='string'?n.typename:'';
+ const rootId=n=>digits(n.post_id)||digits(n.postId)||digits(n.story_fbid)||digits(n.story_id)||digits(n.storyId)||(/^(?:Story|Post)$/.test(kind(n))?digits(n.id):null);
+ const excluded=key=>/(?:shared|quoted|crosspost|reshare|original_story|attached_story|actor|author|owner|profile|avatar|comment|feedback|video)/i.test(key);
+ let visited=0;
+ function walk(n,depth,owner=null,attachment=false){
+  if(!n||typeof n!=='object'||depth>20||++visited>10000)return;
+  if(Array.isArray(n)){for(const child of n.slice(0,100))walk(child,depth+1,owner,attachment);return;}
+  if(/^(?:Video|User|Page|Comment|Feedback|Actor|Profile)/i.test(kind(n)))return;
+  const storyIds=['post_id','postId','story_fbid','story_id','storyId'].map(k=>digits(n[k])).filter(Boolean);
+  if(new Set(storyIds).size>1)return;
+  const rid=rootId(n);
+  if(rid){
+   // Every nested story needs its own direct, exact group link. A foreign or
+   // unbound story terminates ancestry; it cannot inherit its parent's owner.
+   const links=['url','permalink','permalink_url'].filter(k=>typeof n[k]==='string').map(k=>core.parsePostLink(n[k])).filter(Boolean);
+   const own=accepted.has(rid)&&links.length>0&&links.every(p=>p.sourceType==='GROUP'&&p.sourceId===source.sourceId&&p.postId===rid);
+   if(owner&&rid!==owner)return;
+   owner=own?rid:null;attachment=false;
+  }
+  if(owner&&attachment&&/^(?:Photo|Image)$/.test(kind(n))){
+   const mediaIds=['photo_id','photoId','media_id','mediaId','id'].map(k=>digits(n[k])).filter(Boolean);
+   const mediaId=new Set(mediaIds).size===1?mediaIds[0]:null;
+   if(mediaId){
+    const list=extras.get(owner)||[];
+    for(const [key,value] of Object.entries(n).slice(0,100)){
+     if(!/^(?:image(?:_[a-z0-9_]+)?|photo_image|viewer_image|preview_image|large_share_image|full_image|uri|url|src)$/i.test(key))continue;
+     const raw=typeof value==='string'?value:value&&typeof value==='object'?(value.uri||value.url||value.src):null;
+     const url=imageURL(raw);if(!url||list.length>=60||list.some(x=>x.mediaId===mediaId&&x.url===url))continue;
+     list.push({url,mediaId,exactPostId:owner,exactAssociation:true,discoveryLayers:['NETWORK']});
+    }
+    extras.set(owner,list);
+   }
+  }
+  for(const [key,child] of Object.entries(n).slice(0,100))if(!excluded(key))walk(child,depth+1,owner,attachment||/^(?:attachments|attachment|all_subattachments|subattachments|media|photo)$/.test(key));
+ }
+ for(const root of roots)walk(root,0);
+ return records.map(r=>extras.has(r.postId)?{...r,media:[...(r.media||[]).slice(0,100),...extras.get(r.postId)]}:r);
+}
 function photoLinkId(raw){try{const u=new URL(raw);if(u.protocol!=='https:'||u.port||u.username||u.password||!['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))return null;
  const id=/^\/photo(?:\.php)?\/?$/.test(u.pathname)?u.searchParams.get('fbid'):u.pathname.match(/^\/(?:[^/]+\/)?photos\/(?:(?:a|pcb)\.\d{5,30}\/)?(\d{5,30})\/?$/)?.[1];return /^\d{5,30}$/.test(id||'')?id:null;}catch{return null;}}
 // Discovery uses null, never a fabricated post ID. A permalink wrapper remains
@@ -456,5 +503,5 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
  }catch{return empty('ERROR');}
  finally{noticeDispose?.();gestureWatch?.stop();setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
-const api={imageURL,photoAnchorHref,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,mergeSnapshot,viewportMetrics,scrollDistance,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
+const api={networkMedia,imageURL,photoAnchorHref,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,mergeSnapshot,viewportMetrics,scrollDistance,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);

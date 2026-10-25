@@ -95,6 +95,7 @@
       const explicit=explicitIds(body,s.group);
       let records=[];
       try {records=core.extractStructuredRecordsFromText(body,"NETWORK",source,0)||[];}catch{inc(s,"responseDecodeErrors");return;}
+      if(options.desktop===true&&scope.FlipDesktopPreview?.networkMedia)records=scope.FlipDesktopPreview.networkMedia(records,body,source,core);
       for(const r of records.slice(0,100)) {
         if(!explicit.has(r.postId) || !/^\d{5,30}$/.test(r.postId) || r.sourceType!=="GROUP" || r.sourceId!==s.group || core.parsePostLink(r.permalink,source)?.postId!==r.postId) continue;
         if(options.desktop===true && typeof options.onRecord==='function')options.onRecord(r);
