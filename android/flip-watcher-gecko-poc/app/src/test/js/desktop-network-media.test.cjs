@@ -23,7 +23,7 @@ test('supplement refuses borrowed stories profiles comments video and foreign ow
  for(const child of [{__typename:'Story',id:other,url:link(other),attachments:[{media:photo()}]},{__typename:'Story',id,url:`https://www.facebook.com/groups/foreign/posts/${id}/`,attachments:[{media:photo()}]}])assert(!supplement(story([child]))[0].media.some(m=>m.mediaId===mid));
 });
 test('no direct exact permalink or Photo type means no supplementary ownership',()=>{
- for(const change of [n=>delete n.url,n=>n.url=`https://www.facebook.com/groups/foreign/posts/${id}/`,n=>n.attachments[0].media.__typename='User',n=>n.attachments[0].media.id='pfbidNOT_EXACT']){
+ for(const change of [n=>n.url=n.url.replace('https:','http:'),n=>n.url=n.url.replace('www.facebook.com','www.facebook.com:444'),n=>n.url=n.url.replace('www.facebook.com','operator@www.facebook.com'),n=>delete n.url,n=>n.url=`https://www.facebook.com/groups/foreign/posts/${id}/`,n=>n.attachments[0].media.__typename='User',n=>n.attachments[0].media.id='pfbidNOT_EXACT']){
   const n=story([{media:photo()}]);change(n);const records=[{postId:id,permalink:link(id),media:[]}];assert.equal(p.networkMedia(records,JSON.stringify(n),source,core)[0].media.length,0);
  }
 });

@@ -37,7 +37,7 @@ function networkMedia(records,body,source,core){
    // Every nested story needs its own direct, exact group link. A foreign or
    // unbound story terminates ancestry; it cannot inherit its parent's owner.
    const links=directLinks;
-   const own=accepted.has(rid)&&links.length>0&&links.every(p=>p.sourceType==='GROUP'&&p.sourceId===source.sourceId&&p.postId===rid);
+   const own=accepted.has(rid)&&links.length>0&&links.every(p=>p.sourceType==='GROUP'&&p.sourceId===source.sourceId&&p.postId===rid)&&['url','permalink','permalink_url'].some(k=>exact(n[k],source.sourceId)===rid);
    if(owner&&rid!==owner)return;
    owner=own?rid:null;attachment=false;
   }
