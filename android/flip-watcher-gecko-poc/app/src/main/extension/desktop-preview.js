@@ -353,17 +353,34 @@ function scrollTrace(w,card){
  const before=Number(w.scrollY)||0;
  return ()=>Number(w.scrollY)>before+1||nodes.some(([n,y])=>n.isConnected!==false&&(Number(n.scrollTop)||0)>y+1);
 }
-const messageSelector='[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="message"]';
+const messageSelector='[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="message"],[data-ad-rendering-role="story_message"]';
 const textForbidden='[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],[data-ad-rendering-role*="shared"],[data-testid*="shared"],blockquote,form,input,textarea,[contenteditable="true"]';
 function messageText(value){return typeof value==='string'?value.replace(/\r\n?/g,'\n').replace(/[^\S\n]+/gu,' ').replace(/ *\n */g,'\n').trim():'';}
 function ownMessageNodes(card){
  const nodes=card.querySelectorAll(messageSelector);if(nodes.length>30)return[];
- return Array.from(nodes).filter(n=>n.closest('[role="article"],article')===card&&!n.closest(textForbidden)&&!n.querySelector?.('[role="article"],article,'+textForbidden));
+ return Array.from(nodes).filter(n=>n.closest('[role="article"],article')===card&&!n.closest(textForbidden));
+}
+function ownMessageNodeText(n,card){
+ const doc=n.ownerDocument,w=doc?.defaultView;
+ // Test harnesses without DOM traversal retain the strict old fallback.
+ if(typeof doc?.createTreeWalker!=='function')return n.querySelector?.('[role="article"],article,'+textForbidden)?'':messageText(typeof n.innerText==='string'?n.innerText:n.textContent);
+ if(n.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})===false||n.closest('[hidden],[aria-hidden="true"]'))return '';
+ const rootStyle=w.getComputedStyle(n);if(rootStyle.display==='none'||/hidden|collapse/.test(rootStyle.visibility)||Number(rootStyle.opacity??1)<=0)return '';
+ const walker=doc.createTreeWalker(n,5,{acceptNode(node){
+  if(node.nodeType===1){
+   if(node.closest(textForbidden)||node.matches('script,style,noscript,button,[role="button"],[role="article"],article')||node.closest('[hidden],[aria-hidden="true"]'))return 2;
+   const style=w.getComputedStyle(node);if(style.display==='none'||/hidden|collapse/.test(style.visibility)||Number(style.opacity??1)<=0)return 2;
+  }return 1;
+ }});
+ let node,out='',count=0;while((node=walker.nextNode())&&count++<3000&&out.length<12000){
+  if(node.nodeType===3)out+=node.textContent||'';else if(/^(?:BR|DIV|P|LI|SECTION)$/.test(node.tagName))out+='\n';
+ }
+ return messageText(out.slice(0,12000));
 }
 function ownMessageText(card){
  const nodes=ownMessageNodes(card);
  const top=nodes.filter(n=>!nodes.some(other=>other!==n&&other.contains?.(n)));
- const texts=new Set(top.map(n=>messageText(typeof n.innerText==='string'?n.innerText:n.textContent).replace(/\s*(?:zobacz więcej|wyświetl więcej|see more)\s*$/iu,'').trim()).filter(Boolean));
+ const texts=new Set(top.map(n=>ownMessageNodeText(n,card).replace(/\s*(?:zobacz więcej|wyświetl więcej|see more)\s*$/iu,'').trim()).filter(Boolean));
  return texts.size===1?[...texts][0].slice(0,12000):'';
 }
 function ownCardId(card,core,group){

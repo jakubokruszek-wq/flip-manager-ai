@@ -63,3 +63,13 @@ test('foreign missing multi-target and changed ARIA owners never get clicked',as
 });
 test('empty visible labels use exact accessibility names and reject conflicting action labels',async()=>{const h=env();h.button.innerText='';h.button.getAttribute=k=>k==='aria-label'?'Zobacz więcej':null;assert.equal((await h.run()).id,id);const b=env();b.button.getAttribute=k=>k==='aria-label'?'Zobacz komentarze':null;assert.equal(await b.run(),'NONE');assert.equal(b.calls(),0);});
 test('an exact truncated sale message can replace only an empty unprotected no-media slot',()=>{const m=p.createModel(core,fields,group);for(let i=0;i<20;i++){const key=String(550000000000100+i);m.add({postId:key,permalink:url.replace(id,key),text:'',media:[]},'DOM');}const key='550000000000999';m.add({postId:key,permalink:url.replace(id,key),text:'Sprzedam mieszkanie…',media:[]},'DOM');assert.equal(m.rows().length,20);assert(m.rows().some(r=>r.postId===key&&r.qualification==='MISSING_FIELDS'));const other='550000000000998';m.add({postId:other,permalink:url.replace(id,other),text:'Szukam mieszkania…',media:[]},'DOM');assert(!m.rows().some(r=>r.postId===other));});
+
+test('operator examples remain candidates once their own visible message reaches the parser',()=>{
+ const examples=[['Na sprzedaż 3 pokoje z osobną kuchnią 57m2 na Bałutach!\nInflancka\nCena 379 000 zł (6649 zł/m2)\nPiętro 2/10\nDo remontu',379000,57,3],['Na sprzedaż kawalerka inwestycyjna z garażem.\n26,32m2\n2 piętro z windą\nbalkon\n379 000 zł',379000,26.32,null],['Sprzedam 3-pokojowe M6 65m2 + Balkon w Centrum Łodzi!!\n64,98m² + Balkon\nPełen Rozkład: 3 pokoje, oddzielna Kuchnia, Łazienka i osobne WC',null,64.98,3]];
+ for(const [text,price,area,rooms]of examples){const model=p.createModel(core,fields,group);model.add({postId:id,permalink:url,text,media:[]},'DOM');const row=model.rows()[0];assert.equal(row.qualification,'CANDIDATE');assert.equal(row.price,price);assert.equal(row.area,area);assert.equal(row.rooms,rooms);assert(!JSON.stringify(row).includes(text));}
+});
+test('story_message is scoped to the exact card and unmarked or borrowed text is never a fallback',()=>{
+ const card={querySelectorAll:s=>{assert(s.includes('[data-ad-rendering-role="story_message"]'));return [message]}};
+ const message={innerText:'Na sprzedaż mieszkanie 57m2 za 379000 zł',closest:s=>s==='[role="article"],article'?card:null};
+ assert.equal(p.ownMessageText(card),message.innerText);message.closest=s=>s==='[role="article"],article'?{}:null;assert.equal(p.ownMessageText(card),'');
+});
