@@ -167,10 +167,10 @@ function createModel(core,fields,group){
 // Snapshot signatures belong only to the currently retained bounded rows.
 function mergeSnapshot(model,cache,row){
  const signature=JSON.stringify(row);
- if(cache.get(row.postId)!==signature&&model.merge(row)!==true)return;
+ const accepted=cache.get(row.postId)===signature||model.merge(row)===true;
  const ids=new Set(model.rows().map(r=>r.postId));
  for(const id of cache.keys())if(!ids.has(id))cache.delete(id);
- if(ids.has(row.postId))cache.set(row.postId,signature);
+ if(accepted&&ids.has(row.postId))cache.set(row.postId,signature);
 }
 // Same semantic feed candidates as the desktop extension, plus their bounded ancestors.
 // Never scroll dialogs, comments or an arbitrary overflow widget.

@@ -125,3 +125,9 @@ test('rejected snapshot extras cannot enter signature memory for an already reta
  const m=model(),cache=new Map(),n=model();n.add(record(),'NETWORK');const row=n.rows()[0];preview.mergeSnapshot(m,cache,row);const before=cache.get(row.postId);
  preview.mergeSnapshot(m,cache,{...row,text:'PRIVATE_RAW_TEXT'});assert.equal(cache.get(row.postId),before);assert.equal(JSON.stringify([...cache.values()]).includes('PRIVATE_RAW_TEXT'),false);
 });
+test('rejected changed background row still prunes signatures evicted by DOM admission',()=>{
+ const m=model(),cache=new Map(),old=[];
+ for(let i=0;i<20;i++){const n=model();n.add({...record(String(550000000000000+i),''),media:[]},'NETWORK');const row=n.rows()[0];old.push(row);preview.mergeSnapshot(m,cache,row);}
+ for(let i=0;i<20;i++)m.add(record(String(550000000001000+i)),'DOM');
+ preview.mergeSnapshot(m,cache,{...old[0],photos:1});const ids=new Set(m.rows().map(r=>r.postId));assert([...cache.keys()].every(id=>ids.has(id)));assert.equal(m.rows().length,20);
+});
