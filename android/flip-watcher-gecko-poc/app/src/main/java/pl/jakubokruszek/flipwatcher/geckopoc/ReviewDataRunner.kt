@@ -47,7 +47,9 @@ object ReviewDataRunner{
                 if(!ReviewDataGate.matches(target,group,previous.postId,fixture)){gate.stop("INPUT");return@withContext outcome(gate.reason)}
                 navigating=true;loaded=false;gate.expect(previous.postId);val generation=channel.connectionGeneration
                 progress(index+1,queue.size);if(!live())return@withContext outcome(gate.reason);opened++;val deadline=android.os.SystemClock.elapsedRealtime()+10_000
-                browser.loadUri(target)
+                // Native loadUri need not emit onLoadRequest; authorize this exact native request first.
+                if(!gate.request(target))return@withContext outcome(gate.reason)
+                observe("NATIVE_REQUEST_OK");browser.loadUri(target)
                 while(live()&&android.os.SystemClock.elapsedRealtime()<deadline&&(!loaded||gate.currentUrl==null||!channel.isConnected||channel.connectionGeneration<=generation||!ReviewDataGate.matches(channel.connectedUrl,group,previous.postId,fixture)||!view.hasWindowFocus()||!view.hasFocus()))delay(100)
                 if(!live())return@withContext outcome(gate.reason)
                 if(!loaded||gate.currentUrl==null||!channel.isConnected||channel.connectionGeneration<=generation||!view.hasWindowFocus()||!view.hasFocus()){gate.stop("PAGE_TIMEOUT");return@withContext outcome(gate.reason)}
