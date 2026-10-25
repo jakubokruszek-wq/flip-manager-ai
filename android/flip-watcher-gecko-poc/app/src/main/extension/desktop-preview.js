@@ -29,10 +29,13 @@ function networkMedia(records,body,source,core){
   const storyIds=['post_id','postId','story_fbid','story_id','storyId'].map(k=>digits(n[k])).filter(Boolean);
   if(new Set(storyIds).size>1)return;
   const rid=rootId(n);
+  if(/^(?:Story|Post)$/.test(kind(n))&&!rid)return;
+  const directLinks=['url','permalink','permalink_url'].filter(k=>typeof n[k]==='string').map(k=>core.parsePostLink(n[k])).filter(Boolean);
+  if(owner&&directLinks.some(p=>p.sourceType!=='GROUP'||p.sourceId!==source.sourceId||p.postId!==owner))return;
   if(rid){
    // Every nested story needs its own direct, exact group link. A foreign or
    // unbound story terminates ancestry; it cannot inherit its parent's owner.
-   const links=['url','permalink','permalink_url'].filter(k=>typeof n[k]==='string').map(k=>core.parsePostLink(n[k])).filter(Boolean);
+   const links=directLinks;
    const own=accepted.has(rid)&&links.length>0&&links.every(p=>p.sourceType==='GROUP'&&p.sourceId===source.sourceId&&p.postId===rid);
    if(owner&&rid!==owner)return;
    owner=own?rid:null;attachment=false;

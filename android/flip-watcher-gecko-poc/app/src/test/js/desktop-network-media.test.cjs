@@ -38,3 +38,9 @@ test('conflicting IDs and typed video or profile ancestry fail closed',()=>{
  for(const media of [{...photo(),photo_id:'880000000000002'},{__typename:'Video',child:photo()},{__typename:'User',child:photo()}])assert(!supplement(story([{media}]))[0].media.some(m=>m.mediaId===mid));
  const n=story([{media:photo()}]);n.story_id=other;const records=[{postId:id,permalink:link(id),media:[]}];assert.equal(p.networkMedia(records,JSON.stringify(n),source,core)[0].media.length,0);
 });
+
+test('opaque or missing nested story identity and generic foreign permalinks cannot inherit an owner',()=>{
+ for(const child of [{__typename:'Story',id:'opaque',url:link(other),attachments:[{media:photo()}]},{__typename:'Story',attachments:[{media:photo()}]},{url:`https://www.facebook.com/groups/foreign/posts/${other}/`,media:photo()},{url:link(other),media:photo()}]){
+ const n=story([{target:child}]);const records=[{postId:id,permalink:link(id),media:[]}];assert.equal(p.networkMedia(records,JSON.stringify(n),source,core)[0].media.length,0);
+ }
+});
