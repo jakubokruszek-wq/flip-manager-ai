@@ -12,6 +12,7 @@ class ReviewDataGate(private val group:String,private val fixture:Boolean=false,
     var currentUrl:String?=null;private set
     var requests=0;private set
     private var seenRequest=false
+    private var hasBoundDocument=false
     fun stop(code:String){if(active){active=false;reason=code}}
     fun tick():Boolean{if(active&&now()-started>=180_000)stop("DEADLINE");return active}
     fun expect(id:String){if(!tick()||!Regex("^[0-9]{5,30}$").matches(id)){stop("INPUT");return};expectedId=id;currentUrl=null;requests=0;seenRequest=false}
@@ -22,9 +23,11 @@ class ReviewDataGate(private val group:String,private val fixture:Boolean=false,
         seenRequest=true;return true
     }
     fun location(raw:String?):Boolean{
-        if(raw=="about:blank"&&!seenRequest)return tick()
+        // Gecko reports the initial empty document asynchronously, even after native loadUri.
+        // It cannot establish context and is ignored only before the first exact document.
+        if((raw==null||raw=="about:blank")&&!hasBoundDocument)return tick()
         if(!tick()||!seenRequest||expectedId==null||!matches(raw,group,expectedId!!,fixture)){stop("CONTEXT");return false}
-        currentUrl=raw;return true
+        hasBoundDocument=true;currentUrl=raw;return true
     }
     companion object{
         fun matches(raw:String?,group:String,id:String,fixture:Boolean=false):Boolean=runCatching{

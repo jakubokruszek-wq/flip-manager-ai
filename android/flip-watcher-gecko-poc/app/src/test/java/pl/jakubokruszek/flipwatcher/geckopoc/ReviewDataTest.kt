@@ -13,6 +13,11 @@ class ReviewDataTest{
   val g=ReviewDataGate(PocPolicy.APPROVED_GROUP_ID){0};g.expect(id);assertFalse(g.location(url));assertFalse(g.active)
   val ok=ReviewDataGate(PocPolicy.APPROVED_GROUP_ID){0};ok.expect(id);assertTrue(ok.request(url));assertTrue(ok.location(url));ok.expect("550000000000092");assertFalse(ok.request(url));assertFalse(ok.active)
  }
+ @Test fun asynchronousInitialBlankCannotBindOrReplaceAnExactDocument(){
+  val g=ReviewDataGate(PocPolicy.APPROVED_GROUP_ID){0};g.expect(id);assertTrue(g.request(url))
+  assertTrue(g.location("about:blank"));assertTrue(g.location(null));assertNull(g.currentUrl)
+  assertTrue(g.location(url));assertEquals(url,g.currentUrl);assertFalse(g.location("about:blank"));assertFalse(g.active)
+ }
  @Test fun redirectsCannotSwitchGroupPopupOrManualNavigation(){
   for(kind in listOf("group","popup","gesture")){val g=ReviewDataGate(PocPolicy.APPROVED_GROUP_ID){0};g.expect(id);assertFalse(g.request(if(kind=="group")url.replace(PocPolicy.APPROVED_GROUP_ID,"foreign")else url,newWindow=kind=="popup",userGesture=kind=="gesture"));assertFalse(g.active)}
  }

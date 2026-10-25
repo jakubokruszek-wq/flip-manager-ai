@@ -25,7 +25,7 @@ object ReviewDataRunner{
         fun live():Boolean{if(!alive()||attached&&(!view.isShown||!view.hasWindowFocus()))gate.stop("PAUSED_OR_CONTEXT");return gate.tick()}
         browser.navigationDelegate=object:GeckoSession.NavigationDelegate{
             override fun onLoadRequest(s:GeckoSession,q:GeckoSession.NavigationDelegate.LoadRequest)=GeckoResult.fromValue(if(gate.request(q.uri,q.target==GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW,q.hasUserGesture))AllowOrDeny.ALLOW else AllowOrDeny.DENY)
-            override fun onLocationChange(s:GeckoSession,u:String?,p:MutableList<GeckoSession.PermissionDelegate.ContentPermission>,gesture:Boolean){if(gesture)gate.stop("NAVIGATION") else {val accepted=gate.location(u);observe(if(accepted)"LOCATION_OK" else "LOCATION_STOP")}}
+            override fun onLocationChange(s:GeckoSession,u:String?,p:MutableList<GeckoSession.PermissionDelegate.ContentPermission>,gesture:Boolean){if(gesture)gate.stop("NAVIGATION") else {observe(if(u==null)"LOCATION_NULL" else if(u=="about:blank")"LOCATION_BLANK" else if(ReviewDataGate.matches(u,group,gate.expectedId.orEmpty(),fixture))"LOCATION_EXACT" else "LOCATION_FOREIGN");val accepted=gate.location(u);observe(if(accepted)"LOCATION_OK" else "LOCATION_STOP")}}
             override fun onLoadError(s:GeckoSession,u:String?,e:WebRequestError):GeckoResult<String>?{gate.stop("LOAD_ERROR");return null}
         }
         browser.progressDelegate=object:GeckoSession.ProgressDelegate{
