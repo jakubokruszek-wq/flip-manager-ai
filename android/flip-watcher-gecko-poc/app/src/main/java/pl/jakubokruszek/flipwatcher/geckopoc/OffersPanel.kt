@@ -32,7 +32,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
         val offers=rows.filter{DesktopSummary.eligible(it)}
         content.addView(label("Oferty (${offers.size})",22f).apply{setTypeface(null,Typeface.BOLD)})
         content.addView(label("Kandydaci do porównania z postem. Lista tylko w pamięci; opuszczenie aplikacji usuwa szczegóły.",14f))
-        if(offers.isEmpty())content.addView(label(notice?:"Brak ofert w pamięci. Uruchom nową próbę komputerową z nową zgodą. Zapisany raport zawiera tylko liczby."))
+        if(offers.isEmpty())content.addView(label(notice?:if(rows.any{DesktopPresentation.reviewable(it)})"Brak automatycznie rozpoznanych ofert. Posty do ręcznego sprawdzenia znajdują się poniżej." else "Brak ofert w pamięci. Uruchom nową próbę komputerową z nową zgodą. Zapisany raport zawiera tylko liczby."))
         val format=NumberFormat.getNumberInstance(Locale.forLanguageTag("pl-PL")).apply{maximumFractionDigits=2}
         fun number(n:Number?)=n?.let{format.format(it)}?:"—"
         for((i,row) in offers.withIndex()){

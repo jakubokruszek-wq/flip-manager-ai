@@ -107,7 +107,8 @@ function createModel(core,fields,group){
  // Keep the bounded preview useful without replacing a retained offer or media evidence.
  function admit(row){
   if(rows.has(row.postId)||rows.size<20)return true;
-  const victim=eligible(row)?[...rows.values()].find(old=>!eligible(old)&&old.photos===0):null;
+  const review=row.photos>0&&['SELL_PROPERTY','UNKNOWN'].includes(row.intent)&&['NO_TEXT','MISSING_FIELDS','NOT_PROPERTY','CLASSIFIER'].includes(row.qualification);
+  const victim=eligible(row)||review?[...rows.values()].find(old=>!eligible(old)&&old.photos===0):null;
   if(!victim){stats.rejected++;return false;}
   rows.delete(victim.postId);blocked.delete(victim.postId);photoEvidence.delete(victim.postId);return true;
  }
@@ -120,7 +121,7 @@ function createModel(core,fields,group){
   const row={postId:r.postId,permalink:'https://www.facebook.com/groups/'+group+'/posts/'+r.postId+'/',layer,
    price:bounded(f.price,1,20000000),priceSource:bounded(f.price,1,20000000)!==null?f.priceSource:'NONE',area:bounded(f.area,1,9999),rooms:bounded(f.rooms,1,20),
    district:f.district,neighborhood:f.neighborhood,street:typeof f.street==='string'?f.street.slice(0,80):null,intent:f.intent,usable:f.usable===true,
-   photos:0,qualification:f.qualification};
+   photos:Number(!borrowed&&(Array.isArray(r.media)?r.media:[]).slice(0,100).some(item=>item?.exactAssociation===true&&item.exactPostId===r.postId&&(imageURL(item.url)||(layer==='DOM'&&item.domPhoto===true&&typeof item.mediaId==='string'&&/^\d{5,30}$/.test(item.mediaId))))),qualification:f.qualification};
   if(!cleanRow(row)){stats.rejected++;return null;}
   if(!admit(row))return null;row.photos=photos(borrowed?{...r,media:[]}:r,layer);return row;
  }

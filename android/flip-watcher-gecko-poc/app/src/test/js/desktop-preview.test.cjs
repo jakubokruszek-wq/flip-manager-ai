@@ -131,3 +131,11 @@ test('rejected changed background row still prunes signatures evicted by DOM adm
  for(let i=0;i<20;i++)m.add(record(String(550000000001000+i)),'DOM');
  preview.mergeSnapshot(m,cache,{...old[0],photos:1});const ids=new Set(m.rows().map(r=>r.postId));assert([...cache.keys()].every(id=>ids.has(id)));assert.equal(m.rows().length,20);
 });
+test('late image-only post with exact media evidence can displace an empty stub for manual review',()=>{
+ const m=model();for(let i=0;i<20;i++)m.add({...record(String(550000000000000+i),''),media:[]},'NETWORK');
+ const id='550000000000099';m.add({...record(id,''),media:[{...media('880000000000001'),exactPostId:id}]},'NETWORK');
+ assert.equal(m.rows().length,20);const row=m.rows().find(r=>r.postId===id);assert.equal(row.qualification,'NO_TEXT');assert.equal(row.price,null);assert.equal(row.photos,1);assert.equal(m.mediaBindings().find(r=>r.postId===id).ids.length,1);
+});
+test('unverified or foreign media cannot win priority at the twenty-ID cap',()=>{
+ for(const extra of [{exactAssociation:false},{exactPostId:'550000000000001'},{url:'https://evil.test/a.jpg'}]){const m=model();for(let i=0;i<20;i++)m.add({...record(String(550000000000000+i),''),media:[]},'NETWORK');const id='550000000000099';m.add({...record(id,''),media:[{...media('880000000000001'),exactPostId:id,...extra}]},'NETWORK');assert.equal(m.rows().length,20);assert(!m.rows().some(r=>r.postId===id));}
+});
