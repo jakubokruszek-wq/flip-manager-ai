@@ -4,6 +4,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DesktopPresentationTest {
+    @Test fun version0529HistoryPadsDocumentCountersInRamAndBoundsTheirRelationship(){
+        val original=org.json.JSONObject(DesktopSummary.create("EMPTY",1).encode())
+        for(key in DesktopProtocol.statKeys.drop(109))original.getJSONObject("stats").remove(key)
+        val raw=original.toString();val restored=DesktopSummary.decode(raw)!!
+        for(key in DesktopProtocol.statKeys.drop(109))assertEquals(0,restored.stats.getValue(key))
+        assertEquals(raw,original.toString())
+        val stats=org.json.JSONObject(DesktopProtocol.emptyStats()).put("photoDocumentBound",1)
+        assertNull(DesktopProtocol.parseStats(stats));stats.put("photoDocumentNodes",1).put("photoDocumentSelected",1);assertNotNull(DesktopProtocol.parseStats(stats))
+        stats.put("photoDocumentSelected",2);assertNull(DesktopProtocol.parseStats(stats))
+    }
+
     @Test fun unknownTextPostsRemainReviewableButKnownExcludedIntentsDoNot(){
         val unknown=row("550000000000091",intent="UNKNOWN",usable=false).copy(price=null,priceSource="NONE",area=null,rooms=null,qualification="NO_TEXT")
         assertTrue(DesktopPresentation.reviewable(unknown));assertFalse(DesktopSummary.eligible(unknown))

@@ -71,6 +71,11 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
             content.addView(label("Te posty mają dokładny link, ale nie zostały rozpoznane jako oferty. Napisy na grafikach mogą być niedostępne jako tekst. Brak OCR; nie dopowiadamy ceny ani metrażu.",14f))
             for(row in review){
                 content.addView(label(DesktopPresentation.explanation(row),14f))
+                for((index,image) in thumbnails(row.postId).filter{!it.isRecycled}.take(3).withIndex())content.addView(ImageView(context).apply{
+                    tag="poc.review.photo.${row.postId}.$index";isSaveEnabled=false;adjustViewBounds=true;scaleType=ImageView.ScaleType.FIT_CENTER
+                    contentDescription="Lokalna miniatura nieocenionego posta ${index+1}";setImageBitmap(image)
+                    layoutParams=LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,(180*dp).toInt())
+                })
                 val link=OfferLinks.validatedReview(row)
                 content.addView(label(link?:"Brak bezpiecznego linku",14f).apply{
                     tag="poc.review.link.${row.postId}";setTextColor(Color.rgb(20,80,180));isClickable=link!=null

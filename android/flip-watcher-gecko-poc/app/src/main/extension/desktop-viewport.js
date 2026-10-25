@@ -1,4 +1,4 @@
-/* Official native-view requests only. No media URLs, fetch, persistence or public bridge. */
+/* Official native-view requests only. Media URLs stay inside the extension; no fetch, persistence or public bridge. */
 (function(root){'use strict';
 const uuid=/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
 function transport(port,w){
@@ -121,19 +121,52 @@ function mediaOwners(bindings,allowedIds){
  }
  return {ids,urls};
 }
-function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null){
+// A rendered IMG outside semantic articles can still belong to a retained post.
+// Its owner must come from an unambiguous attachment ID/URL in the network snapshot.
+function mediaOwner(item,lookup){
+ const byId=item.mediaId&&lookup.ids.has(item.mediaId)?lookup.ids.get(item.mediaId):undefined;
+ const byUrl=item.url&&lookup.urls.has(item.url)?lookup.urls.get(item.url):undefined;
+ if(byId===null||byUrl===null||(byId&&byUrl&&byId!==byUrl))return null;
+ const owner=byId||byUrl||null;return item.linkedPostId&&item.linkedPostId!==owner?null:owner;
+}
+function documentImages(w,core,group,helpers,owners,allowedIds,audit){
+ if(!helpers?.imageURL||!helpers.photoAnchorHref||(!owners.ids.size&&!owners.urls.size))return[];
+ const count=k=>{if(audit)audit[k]=Math.min(10000,(audit[k]||0)+1);},doc=w.document,result=[];
+ const forbidden='[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],form,input,textarea,[contenteditable="true"],video,[role="menu"],[role="listbox"],[role="complementary"],aside,nav,header';
+ const images=doc.querySelectorAll('img');
+ for(let index=0;index<Math.min(500,images.length);index++){const node=images[index];
+  count('photoDocumentNodes');
+  if(node.tagName!=='IMG'||node.ownerDocument!==doc||node.isConnected===false||node.closest('[role="article"],article')||node.closest(forbidden))continue;
+  const region=node.closest('[role="feed"],[data-pagelet*="Feed"],main,[role="main"]');if(!region)continue;
+  const anchor=node.closest('a[href]'),href=helpers.photoAnchorHref(anchor),mediaId=helpers.photoLinkId(href);
+  let linkedPostId=null;
+  if(anchor&&!mediaId){const p=core.parsePostLink(href);
+   if(p){if(p.sourceType!=='GROUP'||p.sourceId!==group)continue;linkedPostId=p.postId;}
+   else if(!helpers.opaquePhotoLink(href))continue;
+  }
+  const source=()=>node.currentSrc||node.src||node.getAttribute?.('src');const raw=source();
+  if(typeof raw!=='string'||raw.length>8192)continue;
+  const url=helpers.imageURL(raw);
+  if(!url&&!(mediaId&&/^data:image\/(?:png|jpeg|webp|gif|svg\+xml)[;,]/i.test(raw)))continue;
+  const item={url,mediaId,linkedPostId,networkRequired:true},id=mediaOwner(item,owners);
+  if(!id||!allowedIds.has(id)){count('photoIdentityRejected');continue;}
+  const unit=node.closest('[data-pagelet*="FeedUnit"],[data-testid="post_container"]');
+  const ownUnit=()=>{if(!unit)return true;const nodes=unit.querySelectorAll('a[href]');if(nodes.length>100)return false;const links=Array.from(nodes);return !links.map(a=>core.parsePostLink(helpers.photoAnchorHref(a))).filter(Boolean).some(p=>p.sourceType!=='GROUP'||p.sourceId!==group||p.postId!==id);};
+  if(!ownUnit())continue;
+  const rect=node.getBoundingClientRect();if(rect.width<200||rect.height<100){count('photoSizeRejected');continue;}
+  const ready=()=>node.isConnected!==false&&node.ownerDocument===doc&&!node.closest('[role="article"],article')&&!node.closest(forbidden)&&node.closest('[role="feed"],[data-pagelet*="Feed"],main,[role="main"]')===region&&node.closest('[data-pagelet*="FeedUnit"],[data-testid="post_container"]')===unit&&node.closest('a[href]')===anchor&&helpers.photoAnchorHref(anchor)===href&&ownUnit()&&node.complete===true&&node.naturalWidth>0;
+  count('photoDocumentBound');result.push({node,item,source,ready,container:region,id});
+ }
+ return result;
+}
+function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null,helpers=null){
  const count=k=>{if(audit)audit[k]=Math.min(10000,(audit[k]||0)+1);};
  if(!allowedIds||typeof allowedIds.has!=='function')return null;
  const vp=w.visualViewport,width=Number(vp?.width)||w.innerWidth,height=Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight),left=Number(vp?.offsetLeft)||0,top=Number(vp?.offsetTop)||0;
  if(!Number.isFinite(width)||!Number.isFinite(height)||width<100||height<100||width>10000||height>10000)return null;
  const tiles=[],keys=[],checks=[];let network=false;
  const owners=mediaOwners(bindings,allowedIds);
- const identity=(item,lookup)=>{
-  const byId=item.mediaId&&lookup.ids.has(item.mediaId)?lookup.ids.get(item.mediaId):undefined;
-  const byUrl=item.url&&lookup.urls.has(item.url)?lookup.urls.get(item.url):undefined;
-  if(byId===null||byUrl===null||(byId&&byUrl&&byId!==byUrl))return null;
-  const owner=byId||byUrl||null;return item.linkedPostId&&item.linkedPostId!==owner?null:owner;
- };
+ const identity=mediaOwner;
  const exactCards=cards(w,core,group),targets=exactCards.map(p=>({...p,network:false}));
  for(const {card} of scrollCards(w,core,group)){
   if(exactCards.some(p=>p.card===card))continue;
@@ -142,18 +175,19 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null)
   if(ids.size!==1){if(sources.length)count('photoIdentityRejected');continue;}const id=[...ids][0];targets.push({card,id,network:true});
  }
 
+ for(const p of documentImages(w,core,group,helpers,owners,allowedIds,audit))targets.push({card:p.container,id:p.id,network:true,documentSource:p});
  const result=()=>({width,height,tiles,keys,network,valid:(currentBindings=bindings)=>Math.abs((Number(w.visualViewport?.width)||w.innerWidth)-width)<1&&Math.abs(Math.min(w.innerHeight,Number(w.visualViewport?.height)||w.innerHeight)-height)<1&&Math.abs((Number(w.visualViewport?.offsetLeft)||0)-left)<1&&Math.abs((Number(w.visualViewport?.offsetTop)||0)-top)<1&&checks.every(check=>check(mediaOwners(currentBindings,allowedIds)))});
- for(const {card,id,network:fromNetwork} of targets){
+ for(const {card,id,network:fromNetwork,documentSource} of targets){
   if(!allowedIds.has(id))continue;
-  count(fromNetwork?'photoNetworkCards':'photoExactCards');
+  if(!documentSource)count(fromNetwork?'photoNetworkCards':'photoExactCards');
   if(!slots.has(id)){if(slots.size===20)continue;slots.set(id,new Map());}const media=slots.get(id);
-  for(const {node,item,source:readSource,ready} of photoNodes(card,id,group,core,audit)){
+  for(const {node,item,source:readSource,ready} of documentSource?[documentSource]:photoNodes(card,id,group,core,audit)){
    count('photoSources');
    if((fromNetwork||item.networkRequired)&&identity(item,owners)!==id){count('photoIdentityRejected');continue;}
    if(node.tagName==='IMG'&&(node.complete!==true||node.naturalWidth<1)){count('photoUnready');continue;}
    const needsNetwork=fromNetwork||item.networkRequired;
    const key=item.mediaId||item.url;if(!key)continue;
-   if(media.get(key)?.done){count('photoAlreadyDone');continue;}
+   if(media.get(key)?.done||keys.includes(media.get(key))){count('photoAlreadyDone');continue;}
    const r=node.getBoundingClientRect(),x=Math.max(0,r.left-left),y=Math.max(0,r.top-top),right=Math.min(width,r.right-left),bottom=Math.min(height,r.bottom-top);
    if(right-x<60||bottom-y<60||(right-x)*(bottom-y)<r.width*r.height*.6){count('photoGeometryRejected');continue;}
    // Occluding headers/dialogs must never become a thumbnail of a post image.
@@ -164,15 +198,15 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null)
     // Rendered images may deliberately delegate input to their real parent.
     // Accept only the actual top hit, not a sibling overlay or another document.
     if(!delegatedHit(w,node,hit,px,py))return false;
-    if(hit.closest?.('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"],[role="menu"],[role="listbox"],[role="complementary"],aside,nav,header'))return false;
+    if(hit.closest?.('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[role="menu"],[role="listbox"],[role="complementary"],aside,nav,header'))return false;
     return true;
    });
    if(!uncovered()){count('photoOccluded');continue;}
    // Offscreen/occluded images must not consume the three visible-preview slots.
    if(!media.has(key)){if(media.size===3)continue;media.set(key,{slot:media.size,done:false});}const mark=media.get(key);
    const sourceValue=()=>readSource?readSource():node.currentSrc||node.getAttribute?.('href')||node.getAttribute?.('src');const source=sourceValue();
-   checks.push(lookup=>{const after=node.getBoundingClientRect();return node.isConnected!==false&&node.ownerDocument===w.document&&(needsNetwork?scrollCards(w,core,group).some(p=>p.card===card)&&identity(photoNodes(card,id,group,core).find(p=>p.node===node)?.item||{},lookup)===id:cards(w,core,group).some(p=>p.card===card&&p.id===id))&&["left","top","right","bottom"].every(k=>Math.abs(after[k]-r[k])<1)&&source===sourceValue()&&(!ready||ready())&&uncovered();});
-   count('photoSelected');network=network||needsNetwork;tiles.push({postId:id,slot:mark.slot,x,y,width:right-x,height:bottom-y});keys.push(mark);
+   checks.push(lookup=>{const after=node.getBoundingClientRect();return node.isConnected!==false&&node.ownerDocument===w.document&&(documentSource?identity(item,lookup)===id:needsNetwork?scrollCards(w,core,group).some(p=>p.card===card)&&identity(photoNodes(card,id,group,core).find(p=>p.node===node)?.item||{},lookup)===id:cards(w,core,group).some(p=>p.card===card&&p.id===id))&&["left","top","right","bottom"].every(k=>Math.abs(after[k]-r[k])<1)&&source===sourceValue()&&(!ready||ready())&&uncovered();});
+   count('photoSelected');if(documentSource)count('photoDocumentSelected');network=network||needsNetwork;tiles.push({postId:id,slot:mark.slot,x,y,width:right-x,height:bottom-y});keys.push(mark);
    if(tiles.length===3)return result();
   }
  }
