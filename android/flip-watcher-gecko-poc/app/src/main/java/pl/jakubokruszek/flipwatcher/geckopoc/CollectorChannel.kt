@@ -122,6 +122,7 @@ class CollectorChannel(
         val nonce=UUID.randomUUID().toString()
         val reply=request(nonce,JSONObject().put("type","reviewPost").put("nonce",nonce).put("consent",true).put("reviewConsent",true).put("groupId",group).put("postId",row.postId).put("expectedUrl",expectedUrl).put("fixture",fixtureMode).put("previousRow",ReviewDataProtocol.row(row)),2_000)
         observe(if(reply==null)"NO_REPLY" else if(reply.optString("status")=="OK")"REPLY_OK" else "REPLY_STOP")
+        if(fixtureMode&&reply!=null){val stats=reply.optJSONObject("stats");observe("FOCUS_${stats?.optInt("pageFocused",-1)}_VISIBLE_${stats?.optInt("pageVisible",-1)}_EXACT_${stats?.optInt("verified",-1)}")}
         val parsed=ReviewDataProtocol.parse(reply,nonce,row.postId,group);observe(if(parsed==null)"PARSE_STOP" else "PARSE_OK");return parsed
     }
 
