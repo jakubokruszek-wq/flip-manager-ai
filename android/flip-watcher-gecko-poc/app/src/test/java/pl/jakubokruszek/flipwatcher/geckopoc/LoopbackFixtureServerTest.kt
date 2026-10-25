@@ -9,6 +9,18 @@ import java.net.Proxy
 import java.net.URL
 
 class LoopbackFixtureServerTest {
+    @Test fun `load image is served as an actual image and missing assets remain HTML`() {
+        val svg="<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"/>"
+        for(present in listOf(true,false))LoopbackFixtureServer { name -> if(present&&name=="fixtures/load-image.html")svg else null }.use { server ->
+            val connection=URL(server.url("/data","load-image")).openConnection(Proxy.NO_PROXY) as HttpURLConnection
+            try{
+                assertEquals(if(present)200 else 404,connection.responseCode)
+                assertEquals(if(present)"image/svg+xml; charset=utf-8" else "text/html; charset=utf-8",connection.contentType)
+                if(present)assertEquals(svg,connection.inputStream.bufferedReader().readText())
+            }finally{connection.disconnect()}
+        }
+    }
+
     @Test fun `fixture names are restricted`() {
         assertEquals("feed-basic", LoopbackFixtureServer.fixtureName("/groups/1/?fixture=feed-basic"))
         assertNull(LoopbackFixtureServer.fixtureName("/groups/1/?fixture=../../secrets"))

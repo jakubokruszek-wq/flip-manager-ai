@@ -50,8 +50,10 @@ class LoopbackFixtureServer(private val redirects: Map<String, String> = emptyMa
         val body = name?.let { readAsset("fixtures/$it.html") }
         val (status, content) = if (body != null) "200 OK" to body else "404 Not Found" to "<!doctype html><title>404</title>"
         val bytes = content.toByteArray(Charsets.UTF_8)
+        // A real decoded image avoids browser retries of the old text-as-image fixture.
+        val contentType = if (name == "load-image" && body != null) "image/svg+xml" else "text/html"
         val out = client.getOutputStream()
-        out.write("HTTP/1.1 $status\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ${bytes.size}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n".toByteArray())
+        out.write("HTTP/1.1 $status\r\nContent-Type: $contentType; charset=utf-8\r\nContent-Length: ${bytes.size}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n".toByteArray())
         out.write(bytes)
         out.flush()
     }
