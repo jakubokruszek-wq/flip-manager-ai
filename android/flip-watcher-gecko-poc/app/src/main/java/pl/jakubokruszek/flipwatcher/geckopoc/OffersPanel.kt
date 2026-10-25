@@ -45,6 +45,8 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
             card.addView(label("${DesktopPresentation.priceLabel(row)}: ${number(row.price)} zł",22f).apply{tag="poc.offer.price.${row.postId}"})
             card.addView(label("${number(row.area)} m² • pokoje: ${number(row.rooms)}"))
             card.addView(label(listOfNotNull(row.district,row.neighborhood,row.street).joinToString(" / ").ifEmpty{"Lokalizacja: —"}))
+            card.addView(label(DesktopPresentation.completeness(row),14f).apply{tag="poc.offer.missing.${row.postId}"})
+            card.addView(label(DesktopPresentation.source(row),12f))
             card.addView(label(DesktopPresentation.photos(row.photos),14f))
             val pictures=thumbnails(row.postId).filter{!it.isRecycled}.take(3)
             if(pictures.isEmpty())card.addView(label("Brak lokalnej miniatury — zdjęcie mogło nie być widoczne podczas próby.",13f))
@@ -71,6 +73,10 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
             content.addView(label("Te posty mają dokładny link, ale nie zostały rozpoznane jako oferty. Napisy na grafikach mogą być niedostępne jako tekst. Brak OCR; nie dopowiadamy ceny ani metrażu.",14f))
             for(row in review){
                 content.addView(label(DesktopPresentation.explanation(row),14f))
+                content.addView(label("${DesktopPresentation.priceLabel(row)}: ${number(row.price)} zł • ${number(row.area)} m² • pokoje: ${number(row.rooms)}",16f).apply{tag="poc.review.fields.${row.postId}"})
+                content.addView(label(listOfNotNull(row.district,row.neighborhood,row.street).joinToString(" / ").ifEmpty{"Lokalizacja: —"}))
+                content.addView(label(DesktopPresentation.completeness(row),14f))
+                content.addView(label(DesktopPresentation.source(row),12f))
                 for((index,image) in thumbnails(row.postId).filter{!it.isRecycled}.take(3).withIndex())content.addView(ImageView(context).apply{
                     tag="poc.review.photo.${row.postId}.$index";isSaveEnabled=false;adjustViewBounds=true;scaleType=ImageView.ScaleType.FIT_CENTER
                     contentDescription="Lokalna miniatura nieocenionego posta ${index+1}";setImageBitmap(image)
@@ -82,6 +88,11 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
                     if(link!=null)setOnClickListener{onOpen(row)}
                 })
             }
+        }
+        val excluded=rows.filter{!DesktopSummary.eligible(it)&&!DesktopPresentation.reviewable(it)}
+        if(excluded.isNotEmpty()){
+            content.addView(label("Poza filtrem (${excluded.size})",18f))
+            for((reason,items) in excluded.groupBy{DesktopPresentation.explanation(it)})content.addView(label("${items.size} × $reason",13f))
         }
         content.addView(label("Link otwiera Facebooka lub przeglądarkę poza POC. Przed otwarciem lista jest czyszczona. Bez skanu i uploadu.",13f))
         content.addView(Button(context).apply{tag="poc.offers.report";text="Raport i powody pozostałych postów";isAllCaps=false;isSaveEnabled=false;setOnClickListener{onReport()}})

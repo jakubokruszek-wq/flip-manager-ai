@@ -4,6 +4,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DesktopPresentationTest {
+    @Test fun missingFieldsAndSourcesAreExplicitForPartialRows(){
+        val partial=row("550000000000091").copy(price=null,priceSource="NONE",area=null,rooms=null,district=null,neighborhood=null,street=null)
+        assertEquals(listOf("cena","metraż","pokoje","lokalizacja"),DesktopPresentation.missing(partial))
+        assertTrue(DesktopPresentation.completeness(partial).contains("cena"));assertTrue(DesktopPresentation.source(partial).contains("heurystyczne"))
+    }
+    @Test fun version0531HistoryPadsTextCountersWithoutRewritingAndRejectsInvalidCounts(){
+        val original=org.json.JSONObject(DesktopSummary.create("EMPTY",1).encode());for(key in DesktopProtocol.statKeys.drop(112))original.getJSONObject("stats").remove(key)
+        val raw=original.toString();val restored=DesktopSummary.decode(raw)!!;for(key in DesktopProtocol.statKeys.drop(112))assertEquals(0,restored.stats.getValue(key));assertEquals(raw,original.toString())
+        val stats=org.json.JSONObject(DesktopProtocol.emptyStats()).put("textExpanded",1);assertNull(DesktopProtocol.parseStats(stats));stats.put("textExpandAttempts",1);assertNotNull(DesktopProtocol.parseStats(stats));stats.put("textExpandAttempts",21);assertNull(DesktopProtocol.parseStats(stats))
+    }
+
     @Test fun version0529HistoryPadsDocumentCountersInRamAndBoundsTheirRelationship(){
         val original=org.json.JSONObject(DesktopSummary.create("EMPTY",1).encode())
         for(key in DesktopProtocol.statKeys.drop(109))original.getJSONObject("stats").remove(key)

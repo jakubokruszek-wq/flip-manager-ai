@@ -5,6 +5,9 @@ import java.util.Locale
 
 /** Transient presentation only. Clipboard and persistence continue using aggregate report(). */
 object DesktopPresentation {
+    fun missing(row:DesktopRow)=listOfNotNull(if(row.price==null)"cena" else null,if(row.area==null)"metraż" else null,if(row.rooms==null)"pokoje" else null,if(listOf(row.district,row.neighborhood,row.street).all{it==null})"lokalizacja" else null)
+    fun completeness(row:DesktopRow)=missing(row).let{if(it.isEmpty())"Podstawowe pola odczytane — do porównania z postem." else "Do uzupełnienia / sprawdzenia: ${it.joinToString(", ")}."}
+    fun source(row:DesktopRow)="Źródła odczytu: "+when(row.layer){"DOM"->"treść posta (DOM)";"NETWORK"->"odpowiedź Facebooka";"HYDRATION"->"dane strony";else->"DOM i dane Facebooka"}+". Pola są heurystyczne."
     fun priceLabel(row:DesktopRow)=if(row.priceSource=="DERIVED_FROM_PRICE_PER_M2")"Cena wyliczona z ceny za m²" else "Cena"
     fun reviewable(row:DesktopRow)=!DesktopSummary.eligible(row)&&row.intent in setOf("SELL_PROPERTY","UNKNOWN")&&row.qualification in setOf("NO_TEXT","MISSING_FIELDS","NOT_PROPERTY","CLASSIFIER")
     fun photos(count:Int)=if(count==0)"Zdjęcia: brak rozpoznanego obrazu; pełna liczba nieustalona." else "Rozpoznane zdjęcia/miniatury: $count; pełna liczba zdjęć nieustalona."

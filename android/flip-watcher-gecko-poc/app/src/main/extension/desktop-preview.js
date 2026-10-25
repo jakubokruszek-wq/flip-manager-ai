@@ -1,7 +1,7 @@
 /* Isolated/native-consented local projection. No storage, upload or public page bridge. */
 (function(root){
 'use strict';
-const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible','scrollNativeSteps','scrollNativeMoves','photoPreviewFrames','photoPreviews','viewportHeight','visualViewportHeight','rootRemaining','viewportModule','viewportGranted','viewportReady','viewportProbeCode','nativeRequests','nativeRejected','nativeTimeout','pointMisses','mediaBindingPosts','pointProbes','pointEmpty','pointFrame','pointForeign','pointForm','pointDialog','pointComment','pointCommentable','pointChrome','pointUnbound','pointWidget','pointCache','pointCacheCards','pointRects','viewportWidth','visualWidth','visualOffsetX','visualOffsetY','visualScale100','gestureRequested','gestureTouches','gestureAnchored','gestureRejected','gestureWaitMs','gestureScrollSteps','gestureScrollMoves','noticeDetected','noticeClosed','noticeReason','noticeModals','noticeVisible','noticeNameSource','photoExactCards','photoNetworkCards','photoSources','photoIdentityRejected','photoUnready','photoGeometryRejected','photoOccluded','photoAlreadyDone','photoSelected','photoRawImg','photoRawSvg','photoRawCss','photoOwnerRejected','photoScopeRejected','photoAnchorRejected','photoSizeRejected','photoSourceRejected','photoCssUnready','scrollFast','scrollCadenceMs','photoNetworkAnchors','photoSvgBounds','photoTinyBound','photoDocumentNodes','photoDocumentBound','photoDocumentSelected'];
+const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible','scrollNativeSteps','scrollNativeMoves','photoPreviewFrames','photoPreviews','viewportHeight','visualViewportHeight','rootRemaining','viewportModule','viewportGranted','viewportReady','viewportProbeCode','nativeRequests','nativeRejected','nativeTimeout','pointMisses','mediaBindingPosts','pointProbes','pointEmpty','pointFrame','pointForeign','pointForm','pointDialog','pointComment','pointCommentable','pointChrome','pointUnbound','pointWidget','pointCache','pointCacheCards','pointRects','viewportWidth','visualWidth','visualOffsetX','visualOffsetY','visualScale100','gestureRequested','gestureTouches','gestureAnchored','gestureRejected','gestureWaitMs','gestureScrollSteps','gestureScrollMoves','noticeDetected','noticeClosed','noticeReason','noticeModals','noticeVisible','noticeNameSource','photoExactCards','photoNetworkCards','photoSources','photoIdentityRejected','photoUnready','photoGeometryRejected','photoOccluded','photoAlreadyDone','photoSelected','photoRawImg','photoRawSvg','photoRawCss','photoOwnerRejected','photoScopeRejected','photoAnchorRejected','photoSizeRejected','photoSourceRejected','photoCssUnready','scrollFast','scrollCadenceMs','photoNetworkAnchors','photoSvgBounds','photoTinyBound','photoDocumentNodes','photoDocumentBound','photoDocumentSelected','textExpandAttempts','textExpanded','textExpandRejected','textFullRecords'];
 const zero=()=>Object.fromEntries(statKeys.map(k=>[k,0]));
 function groupURL(raw,group,fixture){try{const u=new URL(raw);return /^[A-Za-z0-9._-]{1,100}$/.test(group)&&!u.username&&!u.password&&!u.hash&&(fixture||!u.search)&&u.pathname.replace(/\/$/,'')==='/groups/'+group&&((u.protocol==='https:'&&!u.port&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))||(fixture===true&&u.protocol==='http:'&&u.hostname==='127.0.0.1'));}catch{return false;}}
 function exact(raw,group){try{const u=new URL(raw);const p=u.pathname.match(/^\/groups\/([^/]+)\/(?:posts|permalink)\/(\d{5,30})\/?$/);return u.protocol==='https:'&&!u.port&&!u.username&&!u.password&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&p?.[1]===group?p[2]:null;}catch{return null;}}
@@ -17,7 +17,7 @@ function networkMedia(records,body,source,core){
  if(!accepted.size)return records;
  const roots=[];const clean=body.replace(/^\s*for\s*\(;;\);?/, '').trim();
  try{roots.push(JSON.parse(clean));}catch{let lines=0;for(const line of clean.split('\n')){if(++lines>256||roots.length===64)break;try{roots.push(JSON.parse(line));}catch{}}}
- const extras=new Map(),digits=v=>typeof v==='string'&&/^\d{5,30}$/.test(v)?v:null;
+ const extras=new Map(),messages=new Map(),digits=v=>typeof v==='string'&&/^\d{5,30}$/.test(v)?v:null;
  const kind=n=>typeof n.__typename==='string'?n.__typename:typeof n.typename==='string'?n.typename:'';
  const rootId=n=>digits(n.post_id)||digits(n.postId)||digits(n.story_fbid)||digits(n.story_id)||digits(n.storyId)||(/^(?:Story|Post)$/.test(kind(n))?digits(n.id):null);
  const excluded=key=>/(?:shared|quoted|crosspost|reshare|original_story|attached_story|actor|author|owner|profile|avatar|comment|feedback|video)/i.test(key);
@@ -41,6 +41,13 @@ function networkMedia(records,body,source,core){
    if(owner&&rid!==owner)return;
    owner=own?rid:null;attachment=false;
   }
+  if(owner&&rid===owner&&!attachment){
+   for(const key of ['message','text','body']){
+    const value=n[key],raw=typeof value==='string'?value:value&&typeof value.text==='string'?value.text:null;
+    if(!raw||raw.length>12000)continue;const text=messageText(raw);if(!text)continue;
+    const set=messages.get(owner)||new Set();if(set.size<20)set.add(text);messages.set(owner,set);
+   }
+  }
   if(owner&&attachment&&/^(?:Photo|Image)$/.test(kind(n))){
    const mediaIds=['photo_id','photoId','media_id','mediaId','id'].map(k=>digits(n[k])).filter(Boolean);
    const mediaId=new Set(mediaIds).size===1?mediaIds[0]:null;
@@ -58,7 +65,19 @@ function networkMedia(records,body,source,core){
   for(const [key,child] of Object.entries(n).slice(0,100))if(!excluded(key))walk(child,depth+1,owner,attachment||/^(?:attachments|attachment|all_subattachments|subattachments|media|photo)$/.test(key),/^(?:story|post|stories|posts)$/.test(key));
  }
  for(const root of roots)walk(root,0);
- return records.map(r=>extras.has(r.postId)?{...r,media:[...(r.media||[]).slice(0,100),...extras.get(r.postId)]}:r);
+ return records.map(r=>{
+  const result=extras.has(r.postId)?{...r,media:[...(r.media||[]).slice(0,100),...extras.get(r.postId)]}:r;
+  const choices=[...(messages.get(r.postId)||[])];if(!choices.length)return result;
+  const longer=choices.sort((a,b)=>b.length-a.length)[0];
+  const prefix=v=>messageText(v).replace(/(?:\.{3}|…)\s*$/u,'').replace(/\s+/gu,' ').trim();
+  const comparable=messageText(longer).replace(/\s+/gu,' ');
+  // A fuller own message can replace only its prefix, never a competing text.
+  const path=r.__structuredDiagnostics?.structuredTextPath;
+  const borrowed=typeof path==='string'&&/(?:shared|quoted|crosspost|reshare|original_story|attached_story)/i.test(path);
+  const old=borrowed?'':typeof r.text==='string'?r.text:'';
+  if(!choices.every(t=>comparable.startsWith(prefix(t)))||old&&!comparable.startsWith(prefix(old))||longer.length<=old.length)return result;
+  return {...result,text:longer,__structuredDiagnostics:{...r.__structuredDiagnostics,structuredTextPath:'poc_verified_own.message',ownFullText:true}};
+ });
 }
 function photoLinkId(raw){try{const u=new URL(raw);if(u.protocol!=='https:'||u.port||u.username||u.password||!['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))return null;
  const id=/^\/photo(?:\.php)?\/?$/.test(u.pathname)?u.searchParams.get('fbid'):u.pathname.match(/^\/(?:[^/]+\/)?photos\/(?:(?:a|pcb)\.\d{5,30}\/)?(\d{5,30})\/?$/)?.[1];return /^\d{5,30}$/.test(id||'')?id:null;}catch{return null;}}
@@ -186,6 +205,11 @@ function createModel(core,fields,group){
    else if(row.qualification!=='NO_TEXT'&&old.qualification!==row.qualification)old.qualification='CLASSIFIER';
    const bad=blocked.get(row.postId)||new Set();if(foreign)bad.add('foreignCity');
    for(const k of ['price','area','rooms','district','neighborhood','street']){
+    if(k==='price'&&!bad.has(k)&&old.price!==null&&row.price!==null){
+     const explicit=x=>['EXPLICIT_TOTAL','THOUSANDS_TOTAL'].includes(x);
+     if(old.priceSource==='DERIVED_FROM_PRICE_PER_M2'&&explicit(row.priceSource)){old.price=row.price;old.priceSource=row.priceSource;continue;}
+     if(explicit(old.priceSource)&&row.priceSource==='DERIVED_FROM_PRICE_PER_M2')continue;
+    }
     if(old[k]!=null&&row[k]!=null&&old[k]!==row[k]){bad.add(k);stats.ambiguous++;}
     old[k]=bad.has(k)?null:old[k]??row[k];
    }
@@ -203,7 +227,7 @@ function createModel(core,fields,group){
   }else rows.set(row.postId,{...row});
   stats.candidates=rows.size;return true;
  }
- function add(record,layer){const row=project(record,layer);if(row){stats[layer==='DOM'?'dom':layer==='HYDRATION'?'hydration':'network']++;merge(row);const stored=rows.get(row.postId);if(stored&&row.photos>0)stored.photos=row.photos;}}
+ function add(record,layer){if(layer==='NETWORK'&&record?.__structuredDiagnostics?.ownFullText===true)stats.textFullRecords=Math.min(10000,stats.textFullRecords+1);const row=project(record,layer);if(row){stats[layer==='DOM'?'dom':layer==='HYDRATION'?'hydration':'network']++;merge(row);const stored=rows.get(row.postId);if(stored&&row.photos>0)stored.photos=row.photos;}}
  function hydration(texts){const source={sourceType:'GROUP',sourceId:group,sourceUrl:'https://www.facebook.com/groups/'+group+'/',allowGroupRedirect:false};
   for(const body of texts.slice(0,64)){if(typeof body!=='string'||body.length>524288)continue;stats.scripts++;const ids=explicitIds(body,group);
    let found=[];try{found=core.extractStructuredRecordsFromText(body,'HYDRATION',source,0)||[];}catch{stats.rejected++;}
@@ -328,12 +352,50 @@ function scrollTrace(w,card){
  const before=Number(w.scrollY)||0;
  return ()=>Number(w.scrollY)>before+1||nodes.some(([n,y])=>n.isConnected!==false&&(Number(n.scrollTop)||0)>y+1);
 }
+const messageSelector='[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="message"]';
+const textForbidden='[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],[data-ad-rendering-role*="shared"],[data-testid*="shared"],blockquote,form,input,textarea,[contenteditable="true"]';
+function messageText(value){return typeof value==='string'?value.replace(/\r\n?/g,'\n').replace(/[^\S\n]+/gu,' ').replace(/ *\n */g,'\n').trim():'';}
+function ownMessageNodes(card){
+ const nodes=card.querySelectorAll(messageSelector);if(nodes.length>30)return[];
+ return Array.from(nodes).filter(n=>n.closest('[role="article"],article')===card&&!n.closest(textForbidden)&&!n.querySelector?.('[role="article"],article,'+textForbidden));
+}
 function ownMessageText(card){
- const selector='[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="message"]';
- const texts=new Set(Array.from(card.querySelectorAll(selector)).filter(n=>n.closest('[role="article"],article')===card&&!n.closest('[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"]'))
-  .map(n=>String(n.innerText||n.textContent||'').replace(/\s+/g,' ').trim()).filter(Boolean));
- // Identical nested markers are one message. Distinct messages stay ambiguous.
+ const nodes=ownMessageNodes(card);
+ const top=nodes.filter(n=>!nodes.some(other=>other!==n&&other.contains?.(n)));
+ const texts=new Set(top.map(n=>messageText(typeof n.innerText==='string'?n.innerText:n.textContent).replace(/\s*(?:zobacz więcej|wyświetl więcej|see more)\s*$/iu,'').trim()).filter(Boolean));
  return texts.size===1?[...texts][0].slice(0,12000):'';
+}
+function ownCardId(card,core,group){
+ const nodes=card.querySelectorAll('a[href]');if(nodes.length>100)return null;
+ const anchors=Array.from(nodes).filter(a=>a.closest('[role="article"],article')===card);const links=anchors.map(a=>core.parsePostLink(a.href)).filter(Boolean);
+ const ids=new Set(links.map(p=>p.postId));return links.length&&ids.size===1&&links.every(p=>p.sourceType==='GROUP'&&p.sourceId===group)&&anchors.some(a=>exact(a.href,group)===links[0].postId)?links[0].postId:null;
+}
+// Only an explicitly consented in-place message disclosure; never follow links.
+async function expandOwnMessage(w,core,group,allowed,state,stats,active,safe){
+ if(state.size>=20)return 'NONE';const nodes=w.document.querySelectorAll('[role="article"],article');if(nodes.length>100)return 'NONE';
+ for(const card of Array.from(nodes)){
+  if(card.parentElement?.closest('[role="article"],article')||card.ownerDocument!==w.document||card.isConnected===false||card.closest(textForbidden))continue;
+  const id=ownCardId(card,core,group);if(!id||!allowed.has(id)||state.has(id))continue;
+  const candidates=[];
+  for(const message of ownMessageNodes(card)){
+   const buttons=message.querySelectorAll('button,[role="button"]');if(buttons.length>30)continue;
+   for(const button of Array.from(buttons))if(/^(?:zobacz więcej|wyświetl więcej|see more)$/iu.test(messageText(button.innerText||button.textContent)))candidates.push({button,message});
+  }
+  const unique=[...new Map(candidates.map(x=>[x.button,x])).values()];if(!unique.length)continue;
+  const reject=()=>{stats.textExpandRejected=Math.min(10000,stats.textExpandRejected+1);};
+  if(unique.length!==1){reject();continue;}const {button,message}=unique[0];
+  const valid=()=>{
+   if(typeof button.click!=='function'||!safe()||w.document.hidden===true||w.document.visibilityState!=='visible'||w.document.hasFocus?.()!==true||button.isConnected===false||button.ownerDocument!==w.document||button.disabled||String(button.getAttribute?.('aria-disabled')||'').toLowerCase()==='true'||button.closest('a[href]')||button.hasAttribute?.('href')||button.closest(textForbidden)||button.closest('[role="article"],article')!==card||!message.contains(button)||!ownMessageNodes(card).includes(message)||ownCardId(card,core,group)!==id)return false;
+   if(!/^(?:zobacz więcej|wyświetl więcej|see more)$/iu.test(messageText(button.innerText||button.textContent)))return false;
+   const style=w.getComputedStyle(button),r=button.getBoundingClientRect(),vp=w.visualViewport,left=vp?.offsetLeft||0,top=vp?.offsetTop||0,width=vp?.width||w.innerWidth,height=Math.min(w.innerHeight,vp?.height||w.innerHeight);
+   if(style.display==='none'||/hidden|collapse/.test(style.visibility)||Number(style.opacity??1)<=0||r.width<=0||r.height<=0||r.left<left||r.top<top||r.right>left+width||r.bottom>top+height)return false;
+   const hit=w.document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return hit===button||button.contains(hit);
+  };
+  if(!valid()){reject();continue;}if(!await active())return 'CONTEXT';if(!valid()){reject();continue;}
+  state.add(id);stats.textExpandAttempts++;const before=ownMessageText(card);button.click();
+  if(!safe())return 'CONTEXT';return {id,card,before};
+ }
+ return 'NONE';
 }
 // CSS pixels; independent of whether a native wheel fallback was needed.
 function viewportMetrics(w){
@@ -399,7 +461,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   }
   // Reserve time for final extraction and native delivery within the original deadline.
   const scrollStart=w.performance.now(),scrollEnd=m.gestureScroll===true&&!gestureTarget?scrollStart:Math.min(scrollStart+30000,end-1500);
-  let noTargetStreak=0,lastTailAt=-Infinity,nativeFailures=0,lastMoved=null;const photoSlots=new Map(),viewport=baseline?null:w.FlipDesktopViewport;let mediaBindings=[];const snapshots=new Map();
+  let noTargetStreak=0,lastTailAt=-Infinity,nativeFailures=0,lastMoved=null;const photoSlots=new Map(),viewport=baseline?null:w.FlipDesktopViewport;let mediaBindings=[];const snapshots=new Map(),textExpansions=new Set();
   model.stats.viewportModule=Number(!!viewport);
   model.stats.viewportGranted=Number(m.viewportConsent===true||m.photosConsent===true);
   if(viewport&&model.stats.viewportGranted){
@@ -419,6 +481,18 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
    model.stats.pageFocused=Math.max(model.stats.pageFocused,Number(w.document.hasFocus?.()===true));
    model.stats.pageVisible=Math.max(model.stats.pageVisible,Number(w.document.visibilityState==='visible'&&w.document.hidden!==true));
    readDOM(w,model,core,m.groupId);
+   if(m.messageConsent===true&&w.performance.now()<scrollEnd-250){
+    const expanded=await expandOwnMessage(w,core,m.groupId,new Set(model.rows().map(r=>r.postId)),textExpansions,model.stats,active,()=>!invalid&&safe(m));
+    if(expanded==='CONTEXT')return empty('CONTEXT');
+    if(expanded&&typeof expanded==='object'){
+     await pause(Math.min(150,Math.max(0,scrollEnd-w.performance.now())));if(!await active())return empty('CONTEXT');
+     const cards=w.document.querySelectorAll('[role="article"],article');if(cards.length>100)return empty('CONTEXT');
+     const current=Array.from(cards).filter(c=>c.ownerDocument===w.document&&c.isConnected!==false&&!c.parentElement?.closest('[role="article"],article')&&!c.closest(textForbidden)&&ownCardId(c,core,m.groupId)===expanded.id);
+     if(current.length!==1)return empty('CONTEXT');
+     if(ownMessageText(current[0]).length>expanded.before.length)model.stats.textExpanded++;
+     readDOM(w,model,core,m.groupId);
+    }
+   }
    model.stats.viewportHeight=Math.min(10000,Math.round(w.innerHeight));model.stats.visualViewportHeight=Math.min(10000,Math.round(w.visualViewport?.height||w.innerHeight));
    model.stats.rootRemaining=Math.max(0,Math.min(10000,Math.round((w.document.scrollingElement?.scrollHeight||0)-(w.document.scrollingElement?.clientHeight||0)-(w.scrollY||0))));
    if(viewport&&m.photosConsent===true){
@@ -500,12 +574,12 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   await pause(700);if(!await active())return empty('CONTEXT');readDOM(w,model,core,m.groupId);
   const result=await send({type:'readDesktop',nonce:m.nonce});if(invalid||!safe(m)||result?.status!=='OK')return empty('CONTEXT');
   for(const row of result.rows||[])mergeSnapshot(model,snapshots,row);
-  for(const k of ['network','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped'])model.stats[k]=result.stats?.[k]||0;
+  for(const k of ['network','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','textFullRecords'])model.stats[k]=result.stats?.[k]||0;
   model.stats.desktop=w.innerWidth>=900?1:0;
   for(const k of statKeys)model.stats[k]=Math.max(0,Math.min(k==='bytes'?4194304:k==='scrollElapsedMs'?30000:k==='gestureWaitMs'?15000:10000,Math.floor(model.stats[k])));
   return {status:'OK',reason:'DONE',rows:model.rows(),stats:{...model.stats}};
  }catch{return empty('ERROR');}
  finally{noticeDispose?.();gestureWatch?.stop();setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
-const api={networkMedia,imageURL,photoAnchorHref,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,mergeSnapshot,viewportMetrics,scrollDistance,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
+const api={expandOwnMessage,ownCardId,messageText,networkMedia,imageURL,photoAnchorHref,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,mergeSnapshot,viewportMetrics,scrollDistance,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);

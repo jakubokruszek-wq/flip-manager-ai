@@ -71,7 +71,7 @@ object DesktopSessionPreview {
                 if(!baseline&&view!=null&&images!=null&&channel.viewportBridge==null)channel.viewportBridge=DesktopViewportBridge(view,nonce,images,{
                     live()&&gate.phase==DesktopTrial.Phase.READING&&currentUrl()==expected&&channel.connectionGeneration==generation&&channel.connectedUrl==expected
                 })
-                val reply=channel.desktopPreview(nonce,documentAfter,remaining().toInt(),group,previousDocument,baseline,gesture,fastScroll)
+                val reply=channel.desktopPreview(nonce,documentAfter,remaining().toInt(),group,previousDocument,baseline,gesture,fastScroll,expandMessages=true)
                 if(!live())return@withContext failure(gate.reason)
                 if(currentUrl()!=expected||generation!=channel.connectionGeneration)return@withContext failure("NAVIGATION")
                 if(reply==null)return@withContext failure(if(channel.isConnected)"PROTOCOL" else "PORT_LOST")

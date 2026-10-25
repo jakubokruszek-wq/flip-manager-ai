@@ -161,13 +161,14 @@ class DesktopPreviewInstrumentedTest {
             val id="550000000000091"
             val offer=DesktopRow(id,"https://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/posts/$id/","DOM",319000.0,"EXPLICIT_TOTAL",42.0,2,null,null,null,"SELL_PROPERTY",true,0)
             val reviewId="550000000000092"
-            val review=offer.copy(postId=reviewId,permalink=offer.permalink.replace(id,reviewId),price=null,priceSource="NONE",area=null,rooms=null,intent="UNKNOWN",usable=false,qualification="NO_TEXT")
+            val review=offer.copy(postId=reviewId,permalink=offer.permalink.replace(id,reviewId),price=319000.0,priceSource="EXPLICIT_TOTAL",area=null,rooms=null,intent="UNKNOWN",usable=false,qualification="NOT_PROPERTY")
             val buyer=review.copy(postId="550000000000093",permalink=review.permalink.replace(reviewId,"550000000000093"),intent="BUY_PROPERTY")
             var opened:String?=null;val panel=OffersPanel(host,{opened=it.postId},{})
             val picture=android.graphics.Bitmap.createBitmap(8,8,android.graphics.Bitmap.Config.ARGB_8888)
             host.setContentView(panel);panel.showRows(listOf(offer,review,buyer),thumbnails={if(it==reviewId)listOf(picture)else emptyList()})
             val image=panel.findViewWithTag<android.widget.ImageView>("poc.review.photo.$reviewId.0")
             assertNotNull(image);assertNotNull(image.drawable)
+            assertTrue(panel.findViewWithTag<android.widget.TextView>("poc.review.fields.$reviewId").text.toString().contains("319"))
             assertNotNull(panel.findViewWithTag<android.view.View>("poc.offer.card.$id"))
             assertNull(panel.findViewWithTag<android.view.View>("poc.offer.card.$reviewId"))
             val link=panel.findViewWithTag<android.widget.TextView>("poc.review.link.$reviewId")
@@ -182,7 +183,8 @@ class DesktopPreviewInstrumentedTest {
     }
     @Test fun actualSvgAnchorLinksCapturePhotosWithoutChangingAutomaticScroll()=checkNativeViewport(false,fastScroll=true,svgPhotos=true,svgAnchor=true)
     @Test fun exactNetworkMediaOutsideArticlesCapturesRealImagesAndContinuesScrolling()=checkNativeViewport(false,networkOnly=true,fastScroll=true,documentPhotos=true)
-    private fun checkNativeViewport(deep:Boolean,networkOnly:Boolean=false,cachedFeed:Boolean=false,marginOnly:Boolean=false,delegated:Boolean=false,baseline:Boolean=false,gesture:Boolean=false,noGesture:Boolean=false,consentWindow:Boolean=false,noticeWindow:Boolean=false,unknownNotice:Boolean=false,noticeVariant:Int=0,cssPhotos:Boolean=false,postWrapper:Boolean=false,fastScroll:Boolean=false,svgPhotos:Boolean=false,colloquial:Boolean=false,svgAnchor:Boolean=false,documentPhotos:Boolean=false){
+    @Test fun exactOwnMessageDisclosureFillsMissingFieldsAndPreservesAutomaticScroll()=checkNativeViewport(false,baseline=true,fastScroll=true,fullMessage=true)
+    private fun checkNativeViewport(deep:Boolean,networkOnly:Boolean=false,cachedFeed:Boolean=false,marginOnly:Boolean=false,delegated:Boolean=false,baseline:Boolean=false,gesture:Boolean=false,noGesture:Boolean=false,consentWindow:Boolean=false,noticeWindow:Boolean=false,unknownNotice:Boolean=false,noticeVariant:Int=0,cssPhotos:Boolean=false,postWrapper:Boolean=false,fastScroll:Boolean=false,svgPhotos:Boolean=false,colloquial:Boolean=false,svgAnchor:Boolean=false,documentPhotos:Boolean=false,fullMessage:Boolean=false){
         ActivityScenario.launch(GeckoTestHostActivity::class.java).use {scenario->
             var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it
                 if(consentWindow){
@@ -199,7 +201,7 @@ class DesktopPreviewInstrumentedTest {
                 val server=LoopbackFixtureServer(pages=if(networkOnly)mapOf("/api/graphql/" to "network-media")else emptyMap(),onRequest={path,_->if(path=="/gesture-ready")gestureSeen.set(true);if(path=="/notice-dismissed")noticeDismissed.set(true)}){asset->
                     if(networkOnly&&asset=="fixtures/network-media.html")"""{"post_id":"550000000000091","url":"https://www.facebook.com/groups/1234567890123/posts/550000000000091/","message":{"text":"Sprzedam mieszkanie 42m2. Cena 319000 zł."},"attachments":[{"media":{"__typename":"Photo","photo_id":"880000000000001","image":{"uri":"https://scontent.fbcdn.net/red.jpg"}}},{"media":{"__typename":"Photo","photo_id":"880000000000002","image":{"uri":"https://scontent.fbcdn.net/green.jpg"}}}]}""".let{if(documentPhotos)it.replace("\"photo_id\":","\"id\":").replace("\"image\":","\"viewer_image\":")else it}
                     else {
-                    val selected=if(asset=="fixtures/desktop-start.html")(if(documentPhotos)"fixtures/desktop-viewport-document.html" else if(colloquial)"fixtures/desktop-colloquial.html" else if(noticeWindow)"fixtures/desktop-notice.html" else if(gesture)"fixtures/desktop-gesture.html" else if(baseline)"fixtures/desktop-start.html" else if(svgAnchor)"fixtures/desktop-viewport-svg-anchor.html" else if(svgPhotos)"fixtures/desktop-viewport-svg.html" else if(postWrapper)"fixtures/desktop-viewport-commentable.html" else if(cssPhotos)"fixtures/desktop-viewport-css.html" else if(deep)"fixtures/desktop-viewport-deep.html" else "fixtures/desktop-viewport.html") else asset
+                    val selected=if(asset=="fixtures/desktop-start.html")(if(fullMessage)"fixtures/desktop-full-message.html" else if(documentPhotos)"fixtures/desktop-viewport-document.html" else if(colloquial)"fixtures/desktop-colloquial.html" else if(noticeWindow)"fixtures/desktop-notice.html" else if(gesture)"fixtures/desktop-gesture.html" else if(baseline)"fixtures/desktop-start.html" else if(svgAnchor)"fixtures/desktop-viewport-svg-anchor.html" else if(svgPhotos)"fixtures/desktop-viewport-svg.html" else if(postWrapper)"fixtures/desktop-viewport-commentable.html" else if(cssPhotos)"fixtures/desktop-viewport-css.html" else if(deep)"fixtures/desktop-viewport-deep.html" else "fixtures/desktop-viewport.html") else asset
                     runCatching{context.assets.open(selected).bufferedReader().use{it.readText()}}.getOrNull()?.let{html->val described=when(noticeVariant){
                         1->html.replace("role=\"alertdialog\"", "role=\"dialog\"").replace("aria-label=\"Push notifications request\"", "aria-labelledby=\"notice-name\"").replace("<span style=", "<span id=\"notice-name\">Push notifications request</span><span style=")
                         2->html.replace("role=\"alertdialog\"", "role=\"dialog\"").replace("aria-label=\"Push notifications request\"", "aria-label=\"Informacje\"")
@@ -312,6 +314,10 @@ class DesktopPreviewInstrumentedTest {
                         assertNotNull(price);assertTrue(price.text.toString().startsWith("Cena wyliczona z ceny za m²:"))
                         val report=DesktopSummary.create("DONE",trial.requests,reply).encode()
                         assertFalse(report.contains("365400"));assertFalse(report.contains(row.postId));panel.showRows(emptyList())
+                    }
+                    if(fullMessage){
+                        assertEquals(1,reply.stats.getValue("textExpandAttempts"));assertEquals(1,reply.stats.getValue("textExpanded"))
+                        val row=reply.rows.single{it.postId=="550000000000091"};assertEquals(319000.0,row.price!!,0.0);assertEquals(42.0,row.area!!,0.0);assertEquals(2,row.rooms);assertEquals("Testowa 12",row.street);assertTrue(DesktopSummary.eligible(row))
                     }
                     if(baseline){
                         assertTrue("baseline must really scroll throughout the window",reply.stats.getValue("scrollMoves")>=(if(fastScroll)45 else 25))
