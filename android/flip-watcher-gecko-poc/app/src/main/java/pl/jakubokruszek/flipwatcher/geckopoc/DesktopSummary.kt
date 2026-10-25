@@ -6,7 +6,7 @@ import org.json.JSONObject
 class DesktopSummary private constructor(val verdict:String,val reason:String,val offers:Int,val navigations:Int,val stats:Map<String,Int>){
     fun encode():String=JSONObject().put("verdict",verdict).put("reason",reason).put("offers",offers).put("navigations",navigations).put("stats",JSONObject(stats)).toString()
     fun report():String=buildString {
-        appendLine("KOMPUTER 0.5.28 • tylko lokalnie • $verdict")
+        appendLine("KOMPUTER 0.5.29 • tylko lokalnie • $verdict")
         appendLine("Komunikat powiadomień: wykryty ${stats.getValue("noticeDetected")} • zamknięty ${stats.getValue("noticeClosed")} • uprawnienia bez zmian")
         if(reason=="NOTICE_BLOCKED"){
             appendLine("Powód: NOTICE_BLOCKED")
@@ -50,8 +50,8 @@ class DesktopSummary private constructor(val verdict:String,val reason:String,va
         if(stats.getValue("viewportGranted")==1&&stats.getValue("viewportReady")==0)appendLine("UWAGA: kanał viewport nie potwierdził gotowości. Podgląd ofert nie potwierdza działania przewijania ani miniatur.")
         appendLine("Ostatni wybór punktu: próbki ${stats.getValue("pointProbes")} • puste ${stats.getValue("pointEmpty")} • ramka ${stats.getValue("pointFrame")} • obcy dokument ${stats.getValue("pointForeign")} • formularz ${stats.getValue("pointForm")}")
         appendLine("Odrzucenia punktów: dialog ${stats.getValue("pointDialog")} • komentarz ${stats.getValue("pointComment")} (commentable ${stats.getValue("pointCommentable")}) • menu/sidebar/header ${stats.getValue("pointChrome")} • widget ${stats.getValue("pointWidget")} • brak regionu ${stats.getValue("pointUnbound")}")
-        appendLine("Cel z ruchu: ${stats.getValue("pointCache")} • bezpieczne karty ${stats.getValue("pointCacheCards")} • prostokąty ${stats.getValue("pointRects")} • szerokość ${stats.getValue("viewportWidth")}/${stats.getValue("visualWidth")} • offset ${stats.getValue("visualOffsetX")}/${stats.getValue("visualOffsetY")} • skala×100 ${stats.getValue("visualScale100")}")
-        appendLine("Geometria (px): viewport ${stats.getValue("viewportHeight")} • widoczny ${stats.getValue("visualViewportHeight")} • pozostały zakres dokumentu ${stats.getValue("rootRemaining")}")
+        appendLine("Cel z ruchu: ${stats.getValue("pointCache")} • bezpieczne karty ${stats.getValue("pointCacheCards")} • prostokąty ${stats.getValue("pointRects")}")
+        appendLine("Geometria strony (CSS px): viewport ${stats.getValue("viewportWidth")}×${stats.getValue("viewportHeight")} • widoczny ${stats.getValue("visualWidth")}×${stats.getValue("visualViewportHeight")} • offset ${stats.getValue("visualOffsetX")}/${stats.getValue("visualOffsetY")} • skala×100 ${stats.getValue("visualScale100")} • pozostały zakres dokumentu ${stats.getValue("rootRemaining")}")
         appendLine("Przewijanie: do 30 s / ${if(stats.getValue("scrollFast")==1)60 else 30} prób; rytm DOM ${if(stats.getValue("scrollCadenceMs")==0)"niezapisany" else "${stats.getValue("scrollCadenceMs")} ms"}. Wspólne 60 s z ładowaniem może skrócić próbę. Maksymalnie 20 ID.")
         if(stats.getValue("scrollAtEnd")>0||stats.getValue("scrollStalls")>0)appendLine("UWAGA: osiągnięto koniec zakresu lub próba nie przesunęła strony; czekano na doładowanie. Brak nowych postów nie potwierdza kompletności.")
         if(stats.getValue("scrollSteps")==0&&stats.getValue("candidates")<20)appendLine("UWAGA: przewijanie nie rozpoczęło się — nie znaleziono dozwolonego kontenera z dostępnym zakresem przewijania. Wynik nie potwierdza kompletności grupy.")

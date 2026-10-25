@@ -178,3 +178,19 @@ test('fast automatic mode makes sixty measured DOM moves at 500ms within the ori
 test('fast mode never substitutes for consent or document freshness',async()=>{for(const patch of [{consent:false},{documentAfter:2000}]){const h=env();const r=await preview.run(h.w,{...m,fastScroll:true,...patch},core,fields,h.safe,h.send,h.setAbort,h.notify);assert.equal(h.sent.length,0);assert.equal(r.rows.length,0);assert.equal(r.stats.scrollSteps,0);}});
 test('fast scrolling still revokes context and clears partial rows',async()=>{const h=env('lateUnsafe');const r=await preview.run(h.w,{...m,fastScroll:true},core,fields,h.safe,h.send,h.setAbort,h.notify);assert.equal(r.status,'STOP');assert.deepEqual(r.rows,[]);assert(!h.sent.includes('readDesktop'));assert(h.disposed());});
 test('fast scrolling never extends the shared loading deadline',async()=>{const h=env();const r=await preview.run(h.w,{...m,fastScroll:true,remainingMs:8000},core,fields,h.safe,h.send,h.setAbort,h.notify);assert.equal(r.status,'OK');assert(r.stats.scrollSteps>0&&r.stats.scrollSteps<16);assert(h.w.performance.now()<8000);});
+test('291px viewport keeps overlap instead of a 400px jump and still runs sixty fast steps',async()=>{
+ const h=env(),moves=[];h.w.innerHeight=291;h.w.document.scrollingElement.clientHeight=291;h.w.visualViewport={width:980,height:291,scale:.42,offsetLeft:0,offsetTop:0};const original=h.w.scrollBy;h.w.scrollBy=function(o){moves.push(o.top);original.call(this,o)};
+ const r=await preview.run(h.w,{...m,fastScroll:true},core,fields,h.safe,h.send,h.setAbort,h.notify);
+ assert.equal(r.status,'OK');assert.equal(r.stats.scrollMoves,60);assert.equal(r.stats.scrollCadenceMs,500);assert.equal(r.stats.scrollElapsedMs,30000);assert(moves.every(n=>n===247&&n<291));
+ assert.equal(r.stats.pointProbes,0);assert.equal(r.stats.viewportWidth,980);assert.equal(r.stats.visualWidth,980);assert.equal(r.stats.visualScale100,42);assert.equal(r.stats.visualViewportHeight,291);assert(h.disposed());
+});
+test('normal viewport scroll distances retain existing fast behavior',()=>{assert.equal(preview.scrollDistance(1610),900);assert.equal(preview.scrollDistance(800),680);assert.equal(preview.scrollDistance(600),510);assert.equal(preview.scrollDistance(291),247);});
+test('viewport telemetry distinguishes pinch zoom without native point probes and stays finite',()=>{
+ const h=env();h.w.visualViewport={width:490,height:400,scale:2,offsetLeft:20,offsetTop:30};const m=modelForMetrics();preview.readDOM(h.w,m,core,group);assert.equal(m.stats.viewportWidth,980);assert.equal(m.stats.visualWidth,490);assert.equal(m.stats.visualScale100,200);assert.equal(m.stats.pointProbes,0);assert.equal(m.stats.visualViewportHeight,400);
+ const malformed=preview.viewportMetrics({innerWidth:Infinity,innerHeight:NaN,visualViewport:{width:999999,height:-1,scale:Infinity,offsetLeft:NaN,offsetTop:-10}});assert(Object.values(malformed).every(n=>Number.isInteger(n)&&n>=0&&n<=10000));
+});
+function modelForMetrics(){return preview.createModel(core,fields,group)}
+test('pinch-sized visible viewport caps the step even when the layout viewport is taller',async()=>{
+ const h=env(),moves=[];h.w.visualViewport={width:400,height:291,scale:2,offsetLeft:0,offsetTop:0};const original=h.w.scrollBy;h.w.scrollBy=function(o){moves.push(o.top);original.call(this,o)};
+ const r=await preview.run(h.w,{...m,fastScroll:true},core,fields,h.safe,h.send,h.setAbort,h.notify);assert.equal(r.status,'OK');assert.equal(r.stats.scrollMoves,60);assert(moves.every(n=>n===247));assert.equal(r.stats.viewportHeight,800);assert.equal(r.stats.visualViewportHeight,291);assert.equal(r.stats.visualScale100,200);
+});

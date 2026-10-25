@@ -284,7 +284,15 @@ function ownMessageText(card){
  // Identical nested markers are one message. Distinct messages stay ambiguous.
  return texts.size===1?[...texts][0].slice(0,12000):'';
 }
+// CSS pixels; independent of whether a native wheel fallback was needed.
+function viewportMetrics(w){
+ const metric=v=>Number.isFinite(v)?Math.max(0,Math.min(10000,Math.round(v))):0,vp=w.visualViewport;
+ return {viewportWidth:metric(w.innerWidth),viewportHeight:metric(w.innerHeight),visualWidth:metric(vp?.width??w.innerWidth),visualViewportHeight:metric(Math.min(w.innerHeight,vp?.height??w.innerHeight)),visualOffsetX:metric(vp?.offsetLeft??0),visualOffsetY:metric(vp?.offsetTop??0),visualScale100:metric((vp?.scale??1)*100)};
+}
+// Preserve viewport overlap, including a small surface after an IME/zoom change.
+function scrollDistance(height,visibleHeight=height){const h=Number.isFinite(height)&&height>0?height:1,v=Number.isFinite(visibleHeight)&&visibleHeight>0?visibleHeight:h;return Math.max(1,Math.min(900,Math.round(Math.min(h,v)*.85)));}
 function readDOM(w,model,core,group){
+ Object.assign(model.stats,viewportMetrics(w));
  let bytes=0;const texts=[];for(const s of Array.from(w.document.querySelectorAll('script:not([src])')).slice(0,120)){
   const t=s.textContent||'';if(!t||t.length>524288||bytes+t.length>2097152)continue;bytes+=t.length;texts.push(t);
  }model.hydration(texts);
@@ -431,7 +439,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
    const root=container===w.document.scrollingElement;
    const readPosition=()=>root&&m.gestureScroll===true?Math.max(w.scrollY||0,container.scrollTop||0):root?w.scrollY:container.scrollTop;
    const before=readPosition();
-   const top=Math.max(400,Math.min(900,Math.round((root?w.innerHeight:container.clientHeight)*.85)));
+   const top=scrollDistance(root?w.innerHeight:container.clientHeight,Math.min(w.innerHeight,w.visualViewport?.height||w.innerHeight));
    if(root)w.scrollBy({left:0,top,behavior:'instant'});else container.scrollBy({left:0,top,behavior:'instant'});
    model.stats.scrollSteps++;if(m.gestureScroll===true)model.stats.gestureScrollSteps++;
    await pause(Math.min(cadence,Math.max(0,scrollEnd-w.performance.now()))); // measure actual movement before the next bounded attempt
@@ -448,5 +456,5 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
  }catch{return empty('ERROR');}
  finally{noticeDispose?.();gestureWatch?.stop();setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
-const api={imageURL,photoAnchorHref,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,mergeSnapshot,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
+const api={imageURL,photoAnchorHref,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,mergeSnapshot,viewportMetrics,scrollDistance,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);

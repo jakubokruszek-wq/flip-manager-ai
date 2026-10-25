@@ -40,6 +40,7 @@ object DesktopSessionPreview {
             val portAfter=sourceGeneration
             val documentAfter=System.currentTimeMillis()
             session.loadUri(target)
+            var surfaceHeight=-1
             while(live()){
                 val expected=currentUrl()
                 if(!gate.located||expected!=gate.requested){gate.waitFor(DesktopTrial.Phase.LOCATION);delay(100);continue}
@@ -50,10 +51,19 @@ object DesktopSessionPreview {
                 if(!pageReady()){gate.waitFor(DesktopTrial.Phase.PAGE);delay(100);continue}
                 if(view!=null){
                     if(!view.isAttachedToWindow||!view.isShown||!view.isEnabled||!view.hasWindowFocus()){
+                        surfaceHeight=-1;gate.waitFor(DesktopTrial.Phase.FOCUS);delay(100);continue
+                    }
+                    if(!view.hasFocus()){
+                        view.requestFocus();surfaceHeight=-1
                         gate.waitFor(DesktopTrial.Phase.FOCUS);delay(100);continue
                     }
-                    if(!view.hasFocus())view.requestFocus()
-                    if(!view.hasFocus()){gate.waitFor(DesktopTrial.Phase.FOCUS);delay(100);continue}
+                    if(DesktopKeyboard.visible(view)){
+                        DesktopKeyboard.dismiss(view);surfaceHeight=-1
+                        gate.waitFor(DesktopTrial.Phase.FOCUS);delay(100);continue
+                    }
+                    if(view.height<=0||view.isLayoutRequested||surfaceHeight!=view.height){
+                        surfaceHeight=view.height;gate.waitFor(DesktopTrial.Phase.FOCUS);delay(100);continue
+                    }
                 }
                 gate.waitFor(DesktopTrial.Phase.READING)
                 val generation=channel.connectionGeneration
