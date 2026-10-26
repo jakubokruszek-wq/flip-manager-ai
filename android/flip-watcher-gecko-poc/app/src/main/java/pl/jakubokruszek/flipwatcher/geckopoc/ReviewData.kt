@@ -48,7 +48,7 @@ object ReviewEvidence{
   if(out.getValue("readerStage")>6||out.getValue("readerErrors")>1||out.getValue("budgetLimited")>1)return null
   return out
  }
- fun report(e:Map<String,Int>)=if(e.isEmpty())"" else "\nOstatnia zwalidowana odpowiedź czytnika (liczniki, nie posty): article ${e["articleNodes"]} • powiązane ${e["boundCards"]} • zagnieżdżone ${e["nestedCards"]} • obcy rodzic ${e["foreignParents"]} • bloki treści ${e["messageNodes"]}.\nSkrypty: znalezione ${e["scriptNodes"]} • zgodne ${e["scriptMatched"]} • parsowane ${e["scriptParsed"]} • pominięte ${e["scriptSkipped"]} • limit pracy ${e["budgetLimited"]}. Etap ${e["readerStage"]}/6 • wyjątek ${e["readerErrors"]}."
+ fun report(e:Map<String,Int>)=if(e.isEmpty())"" else "\nOstatnia zwalidowana odpowiedź czytnika (liczniki, nie posty): article ${e["articleNodes"]} • powiązane ${e["boundCards"]} • zagnieżdżone ${e["nestedCards"]} • odrzucony rodzic ${e["foreignParents"]} • bloki treści ${e["messageNodes"]}.\nSkrypty: znalezione ${e["scriptNodes"]} • zgodne ${e["scriptMatched"]} • parsowane ${e["scriptParsed"]} • pominięte ${e["scriptSkipped"]} • limit pracy ${e["budgetLimited"]}. Etap ${e["readerStage"]}/6 • wyjątek ${e["readerErrors"]}."
 }
 data class ReviewPostReply(val safe:Boolean,val row:DesktopRow?,val bound:Boolean,val textRead:Boolean,val reason:String="DONE",val evidence:Map<String,Int> = emptyMap())
 object ReviewDataProtocol{
