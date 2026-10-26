@@ -329,7 +329,7 @@ class PocActivity : ComponentActivity() {
                         delay(200)
                         val outcome=kotlinx.coroutines.withTimeout(120000){OcrBatch.run(snapshot,true,{desktopThumbnails.ocrRows(it).size},live,
                             read={id,index->val photo=desktopThumbnails.ocrRows(id).getOrNull(index);val owned=photo?.takeIf{!it.isRecycled}?.copy(android.graphics.Bitmap.Config.ARGB_8888,false);if(owned==null)null else LocalOcr.readOwned(owned)},
-                            project={id,texts->GeckoHost.background.ocrFields(id,texts)},now={android.os.SystemClock.elapsedRealtime()},snapshot={if(ocrBusy&&ocrEpoch==epoch)saveOcr(it.copy(reason="INTERRUPTED"))})}
+                            project={id,texts->GeckoHost.background.ocrFields(id,texts,true)},now={android.os.SystemClock.elapsedRealtime()},snapshot={if(ocrBusy&&ocrEpoch==epoch)saveOcr(it.copy(reason="INTERRUPTED"))})}
                         if(!ocrBusy||ocrEpoch!=epoch)return@launch
                         ocrBusy=false;saveOcr(outcome.summary);ocrReportPending=true
                         if(outcome.summary.reason=="DONE")ocrResults.putAll(outcome.rows) else if(outcome.summary.reason in setOf("CONTEXT","PROTOCOL"))clearDesktopDetails()

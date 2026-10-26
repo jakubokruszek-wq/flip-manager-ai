@@ -21,3 +21,8 @@ test('new consent exact ID group nonce and bounded texts precede projection',()=
  for(const change of [{consent:false},{groupId:'foreign'},{postId:'guessed'},{nonce:'old'},{texts:[]},{texts:['x'.repeat(12001)]},{texts:['x'.repeat(9000),'x'.repeat(9000),'x'.repeat(9000)]}])assert.equal(ocr.create().project({...message(['Sprzedam mieszkanie 42m2 za 319000 zł']),...change},core,f,p).status,'STOP');
  const reader=ocr.create();assert.equal(read(['Sprzedam mieszkanie 42m2 za 319000 zł'],reader).status,'OK');assert.equal(read(['Sprzedam mieszkanie 42m2 za 319000 zł'],reader).status,'STOP');
 });
+
+test('actual offline recognizer transcription accepts romanized zl without guessing similar glyphs',()=>{
+ const text='Sprzedam mieszkanie\n45,8 m2\n260 000 zl\n2 pokoje';const r=read([text]);assert.equal(r.rows[0].price,260000);assert.equal(r.rows[0].area,45.8);assert.equal(r.rows[0].rooms,2);assert.equal(r.rows[0].priceSource,'EXPLICIT_TOTAL');
+ assert.equal(read([text.replace(' zl',' z1')]).rows[0].price,null);
+});

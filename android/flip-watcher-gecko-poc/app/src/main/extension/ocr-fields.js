@@ -7,7 +7,7 @@ function create(){const used=new Set();return{project(m,core,fields,preview){
  const model=preview.createModel(core,fields,m.groupId);
  try{for(const original of m.texts){
   // Explicit plural area unit only; do not reinterpret distances "metry od/do" or guess digits.
-  const text=original.replace(/(\d+(?:[.,]\d+)?)\s+metr(?:y|ów|ow)\b(?!\s+(?:od|do)\b)/giu,'$1 m2').replace(/(\d)\s*m\s*2\b/giu,'$1 m²').replace(/\/\s*m\s*2\b/giu,'/m²').replace(/\bcena\s*:?\s*(?=\d[\d .,]*\s*(?:zł|zl|pln)\s*\/\s*m[²2](?![0-9]))/giu,'');
+  const text=original.replace(/\bzl\b/giu,'zł').replace(/(\d+(?:[.,]\d+)?)\s+metr(?:y|ów|ow)\b(?!\s+(?:od|do)\b)/giu,'$1 m2').replace(/(\d)\s*m\s*2\b/giu,'$1 m²').replace(/\/\s*m\s*2\b/giu,'/m²').replace(/\bcena\s*:?\s*(?=\d[\d .,]*\s*(?:zł|zl|pln)\s*\/\s*m[²2](?![0-9]))/giu,'');
   model.add({postId:m.postId,permalink:'https://www.facebook.com/groups/'+m.groupId+'/posts/'+m.postId+'/',text,media:[]},'DOM');
  }
  const rows=model.rows(),stats=preview.zero();

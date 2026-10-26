@@ -64,8 +64,8 @@ class BackgroundChannel {
 
     suspend fun awaitPort(timeoutMs: Long): Boolean = withTimeoutOrNull(timeoutMs) { portReady.await(); true } ?: false
 
-    suspend fun ocrFields(id:String,texts:List<String>):DesktopRow?{
-        if(!Regex("[0-9]{5,30}").matches(id)||texts.isEmpty()||texts.size>3||texts.any{it.length>12000}||texts.sumOf{it.length}>24000)return null
+    suspend fun ocrFields(id:String,texts:List<String>,consent:Boolean=false):DesktopRow?{
+        if(!consent||!Regex("[0-9]{5,30}").matches(id)||texts.isEmpty()||texts.size>3||texts.any{it.length>12000}||texts.sumOf{it.length}>24000)return null
         val nonce=UUID.randomUUID().toString()
         val message=JSONObject().put("type","ocrFields").put("nonce",nonce).put("consent",true).put("groupId",PocPolicy.APPROVED_GROUP_ID).put("postId",id).put("texts",org.json.JSONArray(texts))
         return OcrProtocol.parse(request(message),nonce,id)
