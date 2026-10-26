@@ -33,7 +33,10 @@ class OcrInstrumentedTest{
      }
      val bitmap=image();val text=LocalOcr.readOwned(bitmap);assertTrue(bitmap.isRecycled);assertTrue(text.contains("260"));assertTrue(text.contains("45"))
      GeckoHost.collectorExtension(host!!);assertTrue(GeckoHost.background.awaitPort(15000))
-     val projected=GeckoHost.background.ocrFields(row().postId,listOf(text));assertNotNull(projected);assertEquals(260000.0,projected!!.price!!,0.0);assertEquals(45.8,projected.area!!,0.0);assertEquals(2,projected.rooms)
+     val projected=GeckoHost.background.ocrFields(row().postId,listOf(text))
+     val synthetic="Generated fixture OCR: "+text+" / fields="+projected
+     assertNotNull(synthetic,projected);assertNotNull(synthetic,projected!!.price);assertNotNull(synthetic,projected.area)
+     assertEquals(synthetic,260000.0,projected.price!!,0.0);assertEquals(synthetic,45.8,projected.area!!,0.0);assertEquals(synthetic,2,projected.rooms)
      assertFalse(OcrSummary("DONE",1,1,1,1,0).encode().contains(text))
     }
    }
