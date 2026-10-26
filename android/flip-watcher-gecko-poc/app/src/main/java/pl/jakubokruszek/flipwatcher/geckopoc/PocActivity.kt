@@ -1116,6 +1116,7 @@ class PocActivity : ComponentActivity() {
             facebookTab.isEnabled=enabled;offersTab.isEnabled=enabled
             offersTab.text="Oferty (${desktopRows.count{DesktopSummary.eligible(it)}})"
         }
+        listOf("desktopResult","reviewResult","ocrResult").forEach{buttons[it]?.isEnabled=!busyForTabs()}
         if(ocrBusy||reviewWorking())buttons.filterKeys{it!="open"}.values.forEach{it.isEnabled=false}
         val p = probe
         diagnostics.text = buildString {
