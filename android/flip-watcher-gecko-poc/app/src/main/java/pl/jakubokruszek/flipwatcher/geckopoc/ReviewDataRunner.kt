@@ -15,7 +15,7 @@ object ReviewDataRunner{
     data class Outcome(val summary:ReviewDataSummary,val rows:List<DesktopRow>)
     suspend fun run(view:GeckoView,original:GeckoSession,rows:List<DesktopRow>,consent:Boolean,alive:()->Boolean,progress:(Int,Int)->Unit={_,_->},restoreActive:()->Boolean=alive,fixtureOrigin:String?=null,observe:(String)->Unit={},snapshot:(ReviewDataSummary)->Unit={},onBoundPost:suspend(CollectorChannel,DesktopRow,String,()->Boolean)->Unit={_,_,_,_->}):Outcome=withContext(Dispatchers.Main){
         val fixture=fixtureOrigin!=null;val group=if(fixture)FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID
-        val queue=ReviewDataGate.queue(rows,group);var opened=0;var bound=0;var text=0;var enriched=0;var unchanged=0;var unresolved=0;var filtered=0;var evidence:Map<String,Int> = emptyMap()
+        val queue=ReviewDataGate.queue(rows,group);var opened=0;var bound=0;var text=0;var enriched=0;var unchanged=0;var unresolved=0;var filtered=0;var unboundStreak=0;var evidence:Map<String,Int> = emptyMap()
         fun summary(reason:String)=ReviewDataSummary(reason,queue.size,opened,bound,text,enriched,unchanged,unresolved,filtered,evidence)
         fun outcome(reason:String,result:List<DesktopRow> = emptyList()):Outcome{observe("END_"+reason);val value=summary(reason);snapshot(value);return Outcome(value,result)}
         if(!consent||queue.isEmpty()||rows.size>20||rows.map{it.postId}.distinct().size!=rows.size||!alive())return@withContext outcome("NO_CONSENT_OR_INPUT")
@@ -34,8 +34,8 @@ object ReviewDataRunner{
         }
         browser.contentDelegate=object:GeckoSession.ContentDelegate{
             override fun onTitleChange(s:GeckoSession,t:String?){if(Regex("log in|logowanie|captcha|checkpoint|security check|potwierdź.*tożsamość",RegexOption.IGNORE_CASE).containsMatchIn(t.orEmpty()))gate.stop("VERIFICATION_OR_LOGIN")}
-            override fun onCrash(s:GeckoSession){gate.stop("ENGINE_LOST")}
-            override fun onKill(s:GeckoSession){gate.stop("ENGINE_LOST")}
+            override fun onCrash(s:GeckoSession){gate.stop("ENGINE_CRASHED")}
+            override fun onKill(s:GeckoSession){gate.stop("ENGINE_KILLED")}
         }
         val merged=rows.associateByTo(linkedMapOf()){it.postId}
         try{
@@ -69,7 +69,7 @@ object ReviewDataRunner{
                         else->"DOM_TIMEOUT"
                     });return@withContext outcome(gate.reason)
                 }
-                browser.setFocused(true);view.requestFocus();navigating=false;val portGeneration=channel.connectionGeneration;var reply:ReviewPostReply?=null
+                browser.purgeHistory();browser.setFocused(true);view.requestFocus();navigating=false;val portGeneration=channel.connectionGeneration;var reply:ReviewPostReply?=null
                 for(attempt in 0..2){
                     delay(500);if(!live()||channel.connectionGeneration!=portGeneration)return@withContext outcome(if(gate.active)"PORT_LOST" else gate.reason)
                     val current=gate.currentUrl?:return@withContext outcome("CONTEXT")
@@ -85,7 +85,8 @@ object ReviewDataRunner{
                 if(!DesktopPresentation.reviewable(updated)&&!DesktopSummary.eligible(updated))filtered++
                 else if(ReviewDataSummary.fields(updated)>ReviewDataSummary.fields(previous)||DesktopSummary.eligible(updated)&&!DesktopSummary.eligible(previous))enriched++
                 else if(result.textRead)unchanged++
-                merged[previous.postId]=updated;snapshot(summary("INTERRUPTED"))
+                merged[previous.postId]=updated;unboundStreak=if(result.bound)0 else unboundStreak+1;snapshot(summary("INTERRUPTED"))
+                if(unboundStreak>=2){gate.stop("NO_OWN_POST");return@withContext outcome(gate.reason)}
             }
             if(!live())return@withContext outcome(gate.reason)
             outcome("DONE",merged.values.toList())

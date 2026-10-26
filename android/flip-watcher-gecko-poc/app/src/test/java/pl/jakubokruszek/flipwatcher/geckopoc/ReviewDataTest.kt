@@ -71,4 +71,11 @@ class ReviewDataTest{
   val parsed=ReviewDataProtocol.parse(reply,nonce,id,PocPolicy.APPROVED_GROUP_ID);assertNotNull(parsed);assertFalse(parsed!!.safe);assertEquals("ERROR",parsed.reason);assertEquals(1,parsed.evidence["readerErrors"])
  }
 
+ @Test fun engineLossAndUnboundStopKeepTheActualCauseAndOldEvidenceStillDecodes(){
+  val old=ReviewEvidence.legacyKeys.associateWith{0};assertEquals(old,ReviewEvidence.parse(org.json.JSONObject(old)))
+  val progress=ReviewDataSummary("INTERRUPTED",11,8,0,0,0,0,7,0,old)
+  for(code in listOf("ENGINE_KILLED","ENGINE_CRASHED")){val stopped=progress.stopped(code);assertEquals(code,stopped.reason);assertEquals(stopped,ReviewDataSummary.decode(stopped.encode()));assertTrue(OcrSummary("ERROR",11,0,0,0,0,stopped).report().contains(code))}
+  val unbound=progress.copy(reason="NO_OWN_POST",opened=2,unresolved=2);assertEquals(unbound,ReviewDataSummary.decode(unbound.encode()));assertTrue(unbound.explanation().contains("Nie otwierano dalszych stron"))
+ }
+
 }

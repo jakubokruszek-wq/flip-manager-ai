@@ -41,14 +41,16 @@ class ReviewDataGate(private val group:String,private val fixture:Boolean=false,
 }
 
 object ReviewEvidence{
- val keys=setOf("articleNodes","boundCards","nestedCards","foreignParents","messageNodes","scriptNodes","scriptParsed","scriptMatched","scriptSkipped","budgetLimited","readerStage","readerErrors")
+ val legacyKeys=setOf("articleNodes","boundCards","nestedCards","foreignParents","messageNodes","scriptNodes","scriptParsed","scriptMatched","scriptSkipped","budgetLimited","readerStage","readerErrors")
+ val keys=legacyKeys+setOf("hrefExact","attrExact","identityMissing","foreignGroup","foreignPost","commentIdentity","excludedCards","manyLinks")
  fun parse(j:JSONObject?):Map<String,Int>?{
-  if(j==null||j.keys().asSequence().toSet()!=keys)return null
-  val out=keys.associateWith{k->val n=j.opt(k);if(n !is Int||n !in 0..10000)return null;n}
+  if(j==null)return null
+  val actual=j.keys().asSequence().toSet();if(actual!=keys&&actual!=legacyKeys)return null
+  val out=actual.associateWith{k->val n=j.opt(k);if(n !is Int||n !in 0..10000)return null;n}
   if(out.getValue("readerStage")>6||out.getValue("readerErrors")>1||out.getValue("budgetLimited")>1)return null
   return out
  }
- fun report(e:Map<String,Int>)=if(e.isEmpty())"" else "\nOstatnia zwalidowana odpowiedź czytnika (liczniki, nie posty): article ${e["articleNodes"]} • powiązane ${e["boundCards"]} • zagnieżdżone ${e["nestedCards"]} • odrzucony rodzic ${e["foreignParents"]} • bloki treści ${e["messageNodes"]}.\nSkrypty: znalezione ${e["scriptNodes"]} • zgodne ${e["scriptMatched"]} • parsowane ${e["scriptParsed"]} • pominięte ${e["scriptSkipped"]} • limit pracy ${e["budgetLimited"]}. Etap ${e["readerStage"]}/6 • wyjątek ${e["readerErrors"]}."
+ fun report(e:Map<String,Int>)=if(e.isEmpty())"" else "\nOstatnia zwalidowana odpowiedź czytnika (liczniki, nie posty): article ${e["articleNodes"]} • powiązane ${e["boundCards"]} • zagnieżdżone ${e["nestedCards"]} • odrzucony rodzic ${e["foreignParents"]} • bloki treści ${e["messageNodes"]}.\nSkrypty: znalezione ${e["scriptNodes"]} • zgodne ${e["scriptMatched"]} • parsowane ${e["scriptParsed"]} • pominięte ${e["scriptSkipped"]} • limit pracy ${e["budgetLimited"]}. Etap ${e["readerStage"]}/6 • wyjątek ${e["readerErrors"]}."+(if("hrefExact" in e)"\nPowiązanie kart: href ${e["hrefExact"]} • interaktywny adres ${e["attrExact"]} • bez adresu ${e["identityMissing"]} • inna grupa ${e["foreignGroup"]} • inny post ${e["foreignPost"]} • link komentarza/treści ${e["commentIdentity"]} • wykluczone ${e["excludedCards"]}." else "")
 }
 data class ReviewPostReply(val safe:Boolean,val row:DesktopRow?,val bound:Boolean,val textRead:Boolean,val reason:String="DONE",val evidence:Map<String,Int> = emptyMap())
 object ReviewDataProtocol{
@@ -69,7 +71,7 @@ object ReviewDataProtocol{
 
 data class ReviewDataSummary(val reason:String,val selected:Int,val opened:Int,val bound:Int,val textRead:Int,val enriched:Int,val unchanged:Int,val unresolved:Int,val filtered:Int,val evidence:Map<String,Int> = emptyMap()){
     fun encode()=JSONObject().put("reason",reason).put("selected",selected).put("opened",opened).put("bound",bound).put("textRead",textRead).put("enriched",enriched).put("unchanged",unchanged).put("unresolved",unresolved).put("filtered",filtered).apply{if(evidence.isNotEmpty())put("evidence",JSONObject(evidence))}.toString()
-    fun stopped(code:String)=copy(reason=if(code in setOf("PAUSED","CANCELLED","ERROR","SESSION_CLOSED"))code else "INTERRUPTED")
+    fun stopped(code:String)=copy(reason=if(code in setOf("PAUSED","CANCELLED","ERROR","SESSION_CLOSED","ENGINE_KILLED","ENGINE_CRASHED"))code else "INTERRUPTED")
     fun explanation()=when(reason){
         "DONE"->"Zakończono kolejkę."
         "NAVIGATION","CONTEXT"->"Zatrzymano: adres lub kontekst posta nie przeszedł weryfikacji."
@@ -79,6 +81,7 @@ data class ReviewDataSummary(val reason:String,val selected:Int,val opened:Int,v
         "DOM_TIMEOUT"->"Zatrzymano: rozszerzenie nie potwierdziło gotowości DOM posta."
         "PAGE_TIMEOUT","DEADLINE"->"Zatrzymano: upłynął limit czasu otwarcia posta lub kolejki."
         "LOAD_ERROR"->"Zatrzymano: błąd ładowania strony posta."
+        "NO_OWN_POST"->"Zatrzymano po dwóch stronach bez powiązania z dokładnym postem. Nie otwierano dalszych stron; to nie dowód braku ofert."
         "REPLY_TIMEOUT"->"Zatrzymano: czytnik nie odpowiedział w limicie czasu."
         "REPLY_INVALID"->"Zatrzymano: odpowiedź czytnika nie spełniła ścisłego formatu."
         "READER_ERROR"->"Zatrzymano: czytnik zgłosił wyjątek; bez treści wyjątku i bez danych posta."
@@ -86,18 +89,20 @@ data class ReviewDataSummary(val reason:String,val selected:Int,val opened:Int,v
         "VERIFICATION_OR_LOGIN"->"Zatrzymano: logowanie lub weryfikacja Facebooka."
         "PAUSED","PAUSED_OR_CONTEXT"->"Zatrzymano: aplikacja utraciła aktywny widok lub poprawny kontekst."
         "CANCELLED"->"Przerwano przyciskiem operatora."
+        "ENGINE_KILLED"->"Gecko zgłosił zamknięcie procesu strony; raport nie ustala przyczyny zamknięcia."
+        "ENGINE_CRASHED"->"Gecko zgłosił awarię procesu strony."
         "SESSION_CLOSED","ENGINE_LOST","CLOSED"->"Zatrzymano: zamknięcie lub utrata sesji."
         "ERROR"->"Zatrzymano: nieoczekiwany błąd aplikacji."
         else->"Próba nie ma potwierdzonego zakończenia."
     }
-    fun report()="UZUPEŁNIANIE 0.5.39 • tylko lokalnie • $reason\n${explanation()}${if(reason!="DONE") " Podgląd wyczyszczono ochronnie; nie oznacza to znalezienia zera ofert." else ""}\nWybrano $selected • otwarto $opened • potwierdzono w DOM/danych strony $bound • odczytano tekst $textRead\nUzupełniono $enriched • bez nowych pól $unchanged • brak potwierdzonego odczytu $unresolved • poza filtrem $filtered\nBrak odczytu nie dowodzi braku danych w poście. Tylko dokładne ID tej grupy; pola heurystyczne. Bez odczytu odpowiedzi sieciowych, uploadu i kolektora. OCR wymaga osobnej zgody i ma osobny raport. Pauza usuwa dane."+ReviewEvidence.report(evidence)
+    fun report()="UZUPEŁNIANIE 0.5.40 • tylko lokalnie • $reason\n${explanation()}${if(reason!="DONE") " Podgląd wyczyszczono ochronnie; nie oznacza to znalezienia zera ofert." else ""}\nWybrano $selected • otwarto $opened • potwierdzono w DOM/danych strony $bound • odczytano tekst $textRead\nUzupełniono $enriched • bez nowych pól $unchanged • brak potwierdzonego odczytu $unresolved • poza filtrem $filtered\nBrak odczytu nie dowodzi braku danych w poście. Tylko dokładne ID tej grupy; pola heurystyczne. Bez odczytu odpowiedzi sieciowych, uploadu i kolektora. OCR wymaga osobnej zgody i ma osobny raport. Pauza usuwa dane."+ReviewEvidence.report(evidence)
     companion object{
         fun decode(raw:String?):ReviewDataSummary?=runCatching{
             if(raw==null||raw.length>2000)return null
             val j=JSONObject(raw);val keys=setOf("reason","selected","opened","bound","textRead","enriched","unchanged","unresolved","filtered")
             val actual=j.keys().asSequence().toSet();if(actual!=keys&&actual!=keys+"evidence")return null
             val evidence=if(j.has("evidence"))ReviewEvidence.parse(j.getJSONObject("evidence"))?:return null else emptyMap()
-            if(j.optString("reason") !in setOf("DONE","NO_CONSENT_OR_INPUT","INPUT","DEADLINE","NAVIGATION","CONTEXT","PAUSED_OR_CONTEXT","PORT_LOST","LOAD_ERROR","VERIFICATION_OR_LOGIN","ENGINE_LOST","REPLY_TIMEOUT","REPLY_INVALID","READER_ERROR","PAGE_TIMEOUT","LOCATION_TIMEOUT","PORT_TIMEOUT","FOCUS_TIMEOUT","DOM_TIMEOUT","PROTOCOL","CLOSED","INTERRUPTED","PAUSED","CANCELLED","ERROR","SESSION_CLOSED"))return null
+            if(j.optString("reason") !in setOf("DONE","NO_CONSENT_OR_INPUT","INPUT","DEADLINE","NAVIGATION","CONTEXT","PAUSED_OR_CONTEXT","PORT_LOST","LOAD_ERROR","VERIFICATION_OR_LOGIN","ENGINE_LOST","ENGINE_KILLED","ENGINE_CRASHED","NO_OWN_POST","REPLY_TIMEOUT","REPLY_INVALID","READER_ERROR","PAGE_TIMEOUT","LOCATION_TIMEOUT","PORT_TIMEOUT","FOCUS_TIMEOUT","DOM_TIMEOUT","PROTOCOL","CLOSED","INTERRUPTED","PAUSED","CANCELLED","ERROR","SESSION_CLOSED"))return null
             val counts=(keys-"reason").associateWith{k->val v=j.opt(k);if(v !is Int||v !in 0..20)return null;v}
             if(counts.getValue("opened")>counts.getValue("selected")||counts.getValue("bound")>counts.getValue("opened")||counts.getValue("textRead")>counts.getValue("bound"))return null
             ReviewDataSummary(j.getString("reason"),counts.getValue("selected"),counts.getValue("opened"),counts.getValue("bound"),counts.getValue("textRead"),counts.getValue("enriched"),counts.getValue("unchanged"),counts.getValue("unresolved"),counts.getValue("filtered"),evidence)

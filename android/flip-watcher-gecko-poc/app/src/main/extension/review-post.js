@@ -3,20 +3,42 @@
 function exact(raw,group,id,fixture=false){try{const u=new URL(raw);return /^\d{5,30}$/.test(id)&&/^[A-Za-z0-9._-]{1,100}$/.test(group)&&!u.username&&!u.password&&!u.search&&!u.hash&&((u.protocol==='https:'&&!u.port&&['www.facebook.com','facebook.com','m.facebook.com'].includes(u.hostname))||(fixture&&u.protocol==='http:'&&u.hostname==='127.0.0.1'))&&['/groups/'+group+'/posts/'+id+'/','/groups/'+group+'/permalink/'+id+'/'].includes(u.pathname.endsWith('/')?u.pathname:u.pathname+'/');}catch{return false;}}
 const blocked='input[type="password"],form[action*="login"],form[action*="checkpoint"],iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="captcha"]';
 const excluded='[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],[data-testid*="shared"],[data-ad-rendering-role*="shared"],blockquote,form,input,textarea,[contenteditable="true"]';
-const evidenceKeys=['articleNodes','boundCards','nestedCards','foreignParents','messageNodes','scriptNodes','scriptParsed','scriptMatched','scriptSkipped','budgetLimited','readerStage','readerErrors'];
+const evidenceKeys=['articleNodes','boundCards','nestedCards','foreignParents','messageNodes','scriptNodes','scriptParsed','scriptMatched','scriptSkipped','budgetLimited','readerStage','readerErrors','hrefExact','attrExact','identityMissing','foreignGroup','foreignPost','commentIdentity','excludedCards','manyLinks'];
 function evidence(){return Object.fromEntries(evidenceKeys.map(k=>[k,0]));}
+function links(card,core,preview,group,base,audit=null){
+ const bump=k=>{if(audit)audit[k]=Math.min(10000,(audit[k]||0)+1);};
+ const anchors=[...new Set([...Array.from(card.querySelectorAll('a[href]')),...Array.from(card.querySelectorAll('a[data-href],a[data-url],[role="link"][data-href],[role="link"][data-url]'))])];
+ if(anchors.length>100){bump('manyLinks');return null;}const found=[];
+ for(const a of anchors){
+  if(a.closest('[role="article"],article')!==card)continue;
+  const values=[{value:a.href,attr:false},...['data-href','data-url'].map(key=>({value:a.getAttribute?.(key),attr:true}))];
+  for(const entry of values){
+   if(typeof entry.value!=='string'||!entry.value||entry.value.length>2048)continue;
+   try{const u=new URL(entry.value,base);if(u.protocol!=='https:'||u.port||u.username||u.password||!['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))continue;
+    const parsed=core.parsePostLink(u.href);if(!parsed)continue;
+    const clean=!u.searchParams.has('comment_id')&&!u.searchParams.has('reply_comment_id')&&!u.hash&&!a.closest(excluded)&&!a.closest('[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="message"],[data-ad-rendering-role="story_message"]');
+    if(!clean)bump('commentIdentity');
+    found.push({...parsed,clean,exact:preview.exact(u.href,group)===parsed.postId,attr:entry.attr});
+   }catch{}
+  }
+ }
+ return found;
+}
+function cardId(card,core,preview,group,base){const found=links(card,core,preview,group,base);if(!found?.length)return null;const ids=new Set(found.map(x=>x.postId));return ids.size===1&&found.every(x=>x.sourceType==='GROUP'&&x.sourceId===group)&&found.some(x=>x.exact&&x.clean)?found[0].postId:null;}
 function cards(w,m,core,preview,audit=evidence()){
  const nodes=Array.from(w.document.querySelectorAll('[role="article"],article'));audit.articleNodes=Math.min(10000,nodes.length);if(nodes.length>100)return [];
  const result=[];
  for(const c of nodes){
-  if(c.ownerDocument!==w.document||c.isConnected===false||c.closest(excluded)||preview.ownCardId(c,core,m.groupId)!==m.postId)continue;
-  const anchors=Array.from(c.querySelectorAll('a[href]'));if(anchors.length>100)continue;
-  if(!anchors.some(a=>{if(a.closest('[role="article"],article')!==c||a.closest(excluded)||a.closest('[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="message"],[data-ad-rendering-role="story_message"]'))return false;try{const u=new URL(a.href);return preview.exact(a.href,m.groupId)===m.postId&&!u.searchParams.has('comment_id')&&!u.searchParams.has('reply_comment_id')&&!u.hash;}catch{return false;}}))continue;
+  if(c.ownerDocument!==w.document||c.isConnected===false||c.closest(excluded)){audit.excludedCards++;continue;}
+  const found=links(c,core,preview,m.groupId,w.location.href,audit);if(!found?.length){audit.identityMissing++;continue;}
+  if(found.some(x=>x.sourceType!=='GROUP'||x.sourceId!==m.groupId)){audit.foreignGroup++;continue;}
+  if(new Set(found.map(x=>x.postId)).size!==1||found[0].postId!==m.postId){audit.foreignPost++;continue;}
+  const exact=found.filter(x=>x.clean&&x.exact);if(!exact.length){audit.identityMissing++;continue;}
+  if(exact.some(x=>!x.attr))audit.hrefExact++;else audit.attrExact++;
   let parent=c.parentElement?.closest('[role="article"],article'),depth=0,foreign=false,nested=!!parent;
   while(parent&&depth++<20){
    if(parent.ownerDocument!==w.document||parent.closest(excluded)){foreign=true;break;}
-   const links=Array.from(parent.querySelectorAll('a[href]'));if(links.length>100){foreign=true;break;}
-   if(links.filter(a=>a.closest('[role="article"],article')===parent).map(a=>core.parsePostLink(a.href)).filter(Boolean).length>0){foreign=true;break;}
+   const ancestors=links(parent,core,preview,m.groupId,w.location.href);if(ancestors===null||ancestors.length>0){foreign=true;break;}
    parent=parent.parentElement?.closest('[role="article"],article');
   }
   if(parent||foreign){audit.foreignParents++;continue;}if(nested)audit.nestedCards++;result.push(c);
@@ -70,5 +92,5 @@ function create(){const used=new Set();return {read(w,m,core,fields,preview){
   audit.readerStage=6;return {status:'OK',reason:'DONE',rows:[row],stats,bound,textRead,evidence:{...audit}};
  }catch{audit.readerErrors=1;return empty('ERROR');}finally{model?.clear();}
 }};}
-const api={exact,create,cards,evidenceKeys};if(typeof module!=='undefined')module.exports=api;root.FlipReviewPost=api;
+const api={exact,create,cards,cardId,evidenceKeys};if(typeof module!=='undefined')module.exports=api;root.FlipReviewPost=api;
 })(globalThis);

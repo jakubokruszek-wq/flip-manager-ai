@@ -1014,8 +1014,8 @@ class PocActivity : ComponentActivity() {
             render()
         }
 
-        override fun onCrash(session: GeckoSession) = lostEngine("Proces strony uległ awarii")
-        override fun onKill(session: GeckoSession) = lostEngine("System zamknął proces strony")
+        override fun onCrash(session: GeckoSession) = lostEngine("Proces strony uległ awarii","ENGINE_CRASHED")
+        override fun onKill(session: GeckoSession) = lostEngine("System zamknął proces strony","ENGINE_KILLED")
     }
 
     private val navigationDelegate = object : GeckoSession.NavigationDelegate {
@@ -1092,7 +1092,8 @@ class PocActivity : ComponentActivity() {
         render()
     }
 
-    private fun lostEngine(reason: String) {
+    private fun lostEngine(reason: String,code:String) {
+        cancelReview(code)
         haltMessage = "STOP: $reason. Sesja zamknięta; otwórz ją ponownie."
         closeSession()
     }
