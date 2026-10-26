@@ -41,7 +41,7 @@ class OcrBatchTest{
   assertNull(OcrSummary.decode(summary.encode().replace("DONE","PRIVATE_TEXT")));assertNull(OcrSummary.decode(summary.encode().replace("\"images\":3","\"images\":21")))
  }
  @Test fun exactOpeningFailureSurvivesOcrHistoryWithoutBeingMisreportedAsNoImages(){
-  for(reason in listOf("NAVIGATION","PAGE_TIMEOUT","PORT_LOST","DEADLINE","VERIFICATION_OR_LOGIN")){
+  for(reason in listOf("NAVIGATION","PAGE_TIMEOUT","LOCATION_TIMEOUT","PORT_TIMEOUT","FOCUS_TIMEOUT","DOM_TIMEOUT","PORT_LOST","DEADLINE","VERIFICATION_OR_LOGIN")){
    val review=ReviewDataSummary(reason,9,1,0,0,0,0,0,0)
    val value=OcrSummary("CONTEXT",9,0,0,0,0,review)
    assertEquals(value,OcrSummary.decode(value.encode()));assertTrue(value.report().contains("Przyczyna etapu otwierania: $reason"));assertTrue(value.report().contains("Otwarto 1/9"));assertFalse(value.encode().contains(row().postId))

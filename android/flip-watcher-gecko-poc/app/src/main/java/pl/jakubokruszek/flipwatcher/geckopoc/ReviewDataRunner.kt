@@ -61,7 +61,14 @@ object ReviewDataRunner{
                     delay(100)
                 }
                 if(!live())return@withContext outcome(gate.reason)
-                if(!documentReady){gate.stop("PAGE_TIMEOUT");return@withContext outcome(gate.reason)}
+                if(!documentReady){
+                    gate.stop(when{
+                        gate.currentUrl==null->"LOCATION_TIMEOUT"
+                        !channel.isConnected||channel.connectionGeneration<=generation||!ReviewDataGate.matches(channel.connectedUrl,group,previous.postId,fixture)->"PORT_TIMEOUT"
+                        !view.hasWindowFocus()||!view.hasFocus()->"FOCUS_TIMEOUT"
+                        else->"DOM_TIMEOUT"
+                    });return@withContext outcome(gate.reason)
+                }
                 browser.setFocused(true);view.requestFocus();navigating=false;val portGeneration=channel.connectionGeneration;var reply:ReviewPostReply?=null
                 for(attempt in 0..2){
                     delay(500);if(!live()||channel.connectionGeneration!=portGeneration)return@withContext outcome(if(gate.active)"PORT_LOST" else gate.reason)

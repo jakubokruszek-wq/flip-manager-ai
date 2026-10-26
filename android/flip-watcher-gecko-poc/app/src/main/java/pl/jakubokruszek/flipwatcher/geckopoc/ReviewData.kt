@@ -60,6 +60,10 @@ data class ReviewDataSummary(val reason:String,val selected:Int,val opened:Int,v
     fun explanation()=when(reason){
         "DONE"->"Zakończono kolejkę."
         "NAVIGATION","CONTEXT"->"Zatrzymano: adres lub kontekst posta nie przeszedł weryfikacji."
+        "LOCATION_TIMEOUT"->"Zatrzymano: nie potwierdzono zakończenia nawigacji do dokładnego posta."
+        "PORT_TIMEOUT"->"Zatrzymano: nie połączono nowego portu rozszerzenia dla tego dokładnego posta."
+        "FOCUS_TIMEOUT"->"Zatrzymano: strona posta nie uzyskała fokusu widocznej karty."
+        "DOM_TIMEOUT"->"Zatrzymano: rozszerzenie nie potwierdziło gotowości DOM posta."
         "PAGE_TIMEOUT","DEADLINE"->"Zatrzymano: upłynął limit czasu otwarcia posta lub kolejki."
         "LOAD_ERROR"->"Zatrzymano: błąd ładowania strony posta."
         "PROTOCOL","PORT_LOST"->"Zatrzymano: brak poprawnej odpowiedzi rozszerzenia lub utrata połączenia."
@@ -75,7 +79,7 @@ data class ReviewDataSummary(val reason:String,val selected:Int,val opened:Int,v
         fun decode(raw:String?):ReviewDataSummary?=runCatching{
             if(raw==null||raw.length>2000)return null
             val j=JSONObject(raw);val keys=setOf("reason","selected","opened","bound","textRead","enriched","unchanged","unresolved","filtered")
-            if(j.keys().asSequence().toSet()!=keys||j.optString("reason") !in setOf("DONE","NO_CONSENT_OR_INPUT","INPUT","DEADLINE","NAVIGATION","CONTEXT","PAUSED_OR_CONTEXT","PORT_LOST","LOAD_ERROR","VERIFICATION_OR_LOGIN","ENGINE_LOST","PAGE_TIMEOUT","PROTOCOL","CLOSED","INTERRUPTED","PAUSED","CANCELLED","ERROR","SESSION_CLOSED"))return null
+            if(j.keys().asSequence().toSet()!=keys||j.optString("reason") !in setOf("DONE","NO_CONSENT_OR_INPUT","INPUT","DEADLINE","NAVIGATION","CONTEXT","PAUSED_OR_CONTEXT","PORT_LOST","LOAD_ERROR","VERIFICATION_OR_LOGIN","ENGINE_LOST","PAGE_TIMEOUT","LOCATION_TIMEOUT","PORT_TIMEOUT","FOCUS_TIMEOUT","DOM_TIMEOUT","PROTOCOL","CLOSED","INTERRUPTED","PAUSED","CANCELLED","ERROR","SESSION_CLOSED"))return null
             val counts=(keys-"reason").associateWith{k->val v=j.opt(k);if(v !is Int||v !in 0..20)return null;v}
             if(counts.getValue("opened")>counts.getValue("selected")||counts.getValue("bound")>counts.getValue("opened")||counts.getValue("textRead")>counts.getValue("bound"))return null
             ReviewDataSummary(j.getString("reason"),counts.getValue("selected"),counts.getValue("opened"),counts.getValue("bound"),counts.getValue("textRead"),counts.getValue("enriched"),counts.getValue("unchanged"),counts.getValue("unresolved"),counts.getValue("filtered"))
