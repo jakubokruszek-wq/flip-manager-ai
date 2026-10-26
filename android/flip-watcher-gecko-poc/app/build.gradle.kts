@@ -48,7 +48,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = providers.gradleProperty("GECKO_POC_VERSION_CODE").orElse("2700").get().toInt()
-        versionName = "0.5.35-gecko-poc"
+        versionName = "0.5.36-gecko-poc"
         buildConfigField("String", "COLLECTOR_CORE_SHA256", "\"$collectorCoreSha256\"")
         // No backend in this POC: there is no API URL, token or upload code at all.
         buildConfigField("boolean", "LIVE_UPLOAD_ENABLED", "false")
@@ -117,6 +117,8 @@ androidComponents {
 
 dependencies {
     implementation("org.mozilla.geckoview:geckoview:$geckoviewVersion")
+    // Bundled offline Latin OCR; never use play-services model download or a cloud API.
+    implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.1")

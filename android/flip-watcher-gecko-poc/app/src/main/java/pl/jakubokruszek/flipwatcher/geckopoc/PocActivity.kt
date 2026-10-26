@@ -96,6 +96,14 @@ class PocActivity : ComponentActivity() {
     private var desktopJob:Job?=null
     private var desktopConsentDialog:android.app.Dialog?=null
     internal var desktopResultDialog:AlertDialog?=null; private set
+    private var ocrBusy=false
+    private var ocrEpoch=0L
+    private var ocrJob:Job?=null
+    private var ocrConsentDialog:AlertDialog?=null
+    private var ocrLast:OcrSummary?=null
+    private var ocrReportPending=false
+    private val ocrResults=linkedMapOf<String,DesktopRow>()
+    private val ocrPrefs by lazy{getSharedPreferences("ocr_counts_v1",MODE_PRIVATE)}
     private var desktopRows:List<DesktopRow> = emptyList()
     private var desktopResultText:TextView?=null
     private val desktopPrefs by lazy { getSharedPreferences("desktop_trial_summary_v1",MODE_PRIVATE) }
@@ -145,9 +153,10 @@ class PocActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    override fun onResume(){super.onResume();if(!reviewWorking())runCatching{session?.setActive(true)};window.decorView.post{showPendingReviewReport()}}
+    override fun onResume(){super.onResume();if(!reviewWorking())runCatching{session?.setActive(true)};window.decorView.post{showPendingReviewReport();showPendingOcrReport()}}
 
     override fun onPause() {
+        ocrConsentDialog?.dismiss();ocrConsentDialog=null;cancelOcr("PAUSED")
         reviewConsentDialog?.dismiss();reviewConsentDialog=null;cancelReview("PAUSED")
         desktopConsentDialog?.dismiss();desktopConsentDialog=null
         finishDesktop("PAUSED",show=false);clearDesktopDetails()
@@ -203,11 +212,11 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun startDesktopPreview(){
-        if(reviewWorking()||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||kind!=PageKind.APPROVED_GROUP||progress!=100||channel?.isConnected!=true)return
+        if(ocrBusy||reviewWorking()||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||kind!=PageKind.APPROVED_GROUP||progress!=100||channel?.isConnected!=true)return
         val currentSession=session?:return;val currentChannel=channel?:return;val target=url?:return
         desktopConsentDialog=DesktopConsentDialog(this,onAccept=accept@{
                 if(reviewWorking()||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)||session!==currentSession||channel!==currentChannel||url!=target||kind!=PageKind.APPROVED_GROUP||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||progress!=100||!currentChannel.isConnected)return@accept
-                reviewLast=null;stopVisiblePosts();finishShare("CANCELLED",clear=true);clearDesktopDetails()
+                reviewLast=null;ocrLast=null;stopVisiblePosts();finishShare("CANCELLED",clear=true);clearDesktopDetails()
                 val gate=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()})
                 if(!gate.begin(true)){publishDesktop(DesktopSummary.create("NO_CONSENT_OR_CONTEXT",0),emptyList());return@accept}
                 clearDesktopDetails();geckoView.requestFocus();DesktopKeyboard.dismiss(geckoView);desktopGate=gate;desktopBusy=true;desktopRows=emptyList();desktopNonce=UUID.randomUUID().toString();render()
@@ -230,8 +239,9 @@ class PocActivity : ComponentActivity() {
         render()
     }
     internal fun publishDesktop(summary:DesktopSummary,rows:List<DesktopRow>,show:Boolean=true){
+        cancelOcr("CONTEXT");ocrResults.clear()
         desktopRows=rows.take(20)
-        desktopThumbnails.retain(desktopRows.filter{DesktopSummary.eligible(it)}.map{it.postId}.toSet())
+        desktopThumbnails.retain(desktopRows.map{it.postId}.toSet())
         val saved=runCatching{desktopPrefs.edit().putString("last",summary.encode()).commit()}.getOrDefault(false)
         output.text=summary.report()+if(saved)"" else "\nUWAGA: nie zapisano raportu; skopiuj teraz."
         if(::offersPanel.isInitialized)offersPanel.showRows(desktopRows,thumbnails={desktopThumbnails.rows(it)})
@@ -239,12 +249,13 @@ class PocActivity : ComponentActivity() {
         render()
     }
     private fun clearDesktopDetails(){
+        cancelOcr("CONTEXT");ocrResults.clear()
         desktopRows=emptyList();desktopResultText?.text="";desktopResultText=null;desktopResultDialog?.dismiss();desktopResultDialog=null
         if(::offersPanel.isInitialized)offersPanel.showRows(emptyList())
         desktopThumbnails.clear()
         if(::offersTab.isInitialized)offersTab.text="Oferty (0)"
     }
-    private fun busyForTabs()=reviewWorking()||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad
+    private fun busyForTabs()=ocrBusy||reviewWorking()||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad
     private fun selectContentTab(offers:Boolean){
         if(busyForTabs()||!::offersPanel.isInitialized)return
         geckoView.visibility=if(offers)View.GONE else View.VISIBLE
@@ -284,8 +295,53 @@ class PocActivity : ComponentActivity() {
         showReviewResult()
     }
     private fun showReviewOrDesktopResult(){
+        if(ocrLast!=null){showOcrReport();return}
         if(reviewLast!=null||desktopRows.isEmpty()&&ReviewDataSummary.decode(reviewPrefs.getString("last",null))!=null)showReviewResult() else showDesktopResult()
     }
+    private fun saveOcr(value:OcrSummary){ocrLast=value;runCatching{ocrPrefs.edit().putString("last",value.encode()).commit()}}
+    private fun showOcrReport(){
+        ocrReportPending=false;desktopResultDialog?.dismiss()
+        desktopResultDialog=AlertDialog.Builder(this).setTitle("OCR — wynik lokalny")
+            .setMessage((ocrLast?:OcrSummary.decode(ocrPrefs.getString("last",null)))?.report()?:"Brak zapisanej próby OCR.")
+            .setPositiveButton("OK",null).create().also{it.show()}
+    }
+    private fun showPendingOcrReport(){if(ocrReportPending&&!ocrBusy&&!isFinishing&&!isDestroyed&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))showOcrReport()}
+    private fun cancelOcr(reason:String){
+        if(!ocrBusy)return
+        ocrBusy=false;ocrEpoch++;ocrResults.clear();ocrJob?.cancel()
+        saveOcr((ocrLast?:OcrSummary("INTERRUPTED",0,0,0,0,0)).copy(reason=if(reason in setOf("PAUSED","CANCELLED","CONTEXT"))reason else "ERROR"));ocrReportPending=true
+    }
+    private fun askOcr(){
+        if(busyForTabs()||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
+        val original=session?:return;val source=channel?:return;val generation=source.connectionGeneration;val target=url;val snapshot=desktopRows
+        val count=snapshot.count{(DesktopPresentation.reviewable(it)||DesktopSummary.eligible(it))&&desktopThumbnails.ocrRows(it.postId).isNotEmpty()}
+        if(count==0)return
+        ocrConsentDialog?.dismiss()
+        ocrConsentDialog=AlertDialog.Builder(this).setTitle("OCR lokalnie — nowa zgoda")
+            .setMessage("Odczytać napisy z widocznych wcześniej zdjęć przypisanych do $count postów zatwierdzonej grupy? Maks. 20 obrazów, 20 postów i 2 minuty. Model OCR jest w APK i działa na telefonie bez pobierania modelu. Bez wysyłania zdjęć lub wyników, dodatkowego pobierania mediów, skanu i kolektora.\n\nPola OCR mogą być błędne: będą pokazane osobno, DO SPRAWDZENIA. Nie nadpisują danych tekstowych. Wycinki i wyniki tylko w RAM, usuwane po pauzie lub zmianie kontekstu. Lokalnie pozostają tylko liczniki. Każda próba wymaga nowej zgody.")
+            .setNegativeButton("Anuluj",null).setPositiveButton("Zgadzam się"){_,_->
+                ocrConsentDialog=null
+                if(busyForTabs()||session!==original||channel!==source||url!=target||desktopRows!==snapshot||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return@setPositiveButton
+                ocrResults.clear();ocrReportPending=false;val epoch=++ocrEpoch;ocrBusy=true;saveOcr(OcrSummary("INTERRUPTED",count,0,0,0,0));render()
+                val live={ocrBusy&&ocrEpoch==epoch&&session===original&&channel===source&&source.isConnected&&source.connectionGeneration==generation&&url==target&&kind==PageKind.APPROVED_GROUP&&desktopRows===snapshot&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&window.decorView.hasWindowFocus()}
+                ocrJob=lifecycleScope.launch{
+                    try{
+                        delay(200)
+                        val outcome=kotlinx.coroutines.withTimeout(120000){OcrBatch.run(snapshot,true,{desktopThumbnails.ocrRows(it).size},live,
+                            read={id,index->val photo=desktopThumbnails.ocrRows(id).getOrNull(index);val owned=photo?.takeIf{!it.isRecycled}?.copy(android.graphics.Bitmap.Config.ARGB_8888,false);if(owned==null)null else LocalOcr.readOwned(owned)},
+                            project={id,texts->GeckoHost.background.ocrFields(id,texts)},now={android.os.SystemClock.elapsedRealtime()},snapshot={if(ocrBusy&&ocrEpoch==epoch)saveOcr(it.copy(reason="INTERRUPTED"))})}
+                        if(!ocrBusy||ocrEpoch!=epoch)return@launch
+                        ocrBusy=false;saveOcr(outcome.summary);ocrReportPending=true
+                        if(outcome.summary.reason=="DONE")ocrResults.putAll(outcome.rows) else if(outcome.summary.reason in setOf("CONTEXT","PROTOCOL"))clearDesktopDetails()
+                        offersPanel.showRows(desktopRows,"OCR: ${outcome.summary.suggestions} wyników do sprawdzenia",thumbnails={desktopThumbnails.rows(it)})
+                    }catch(_:kotlinx.coroutines.TimeoutCancellationException){if(ocrBusy&&ocrEpoch==epoch){ocrBusy=false;saveOcr((ocrLast?:OcrSummary("INTERRUPTED",count,0,0,0,0)).copy(reason="TIMEOUT"));ocrReportPending=true}}
+                    catch(e:kotlinx.coroutines.CancellationException){throw e}
+                    catch(_:Exception){if(ocrBusy&&ocrEpoch==epoch){ocrBusy=false;saveOcr((ocrLast?:OcrSummary("INTERRUPTED",count,0,0,0,0)).copy(reason="ERROR"));ocrReportPending=true}}
+                    finally{if(ocrEpoch==epoch)ocrJob=null;render();showPendingOcrReport()}
+                }
+            }.create().also{it.setCanceledOnTouchOutside(false);it.show()}
+    }
+
     private fun askReviewData(){
         val original=session?:return;val snapshot=desktopRows
         val queue=ReviewDataGate.queue(snapshot)
@@ -1025,6 +1081,7 @@ class PocActivity : ComponentActivity() {
             stop != null -> stop
             !open -> "Sesja zamknięta. „Otwórz sesję” uruchamia przeglądarkę tylko dla grupy ${PocPolicy.APPROVED_GROUP_ID}."
             loginRequested && kind == PageKind.LOGIN -> "Logowanie ręczne na stronie Facebooka. Po zalogowaniu użyj „Wróć do grupy”."
+            ocrBusy -> "OCR lokalnie • obrazy ${ocrLast?.images?:0}/20 • bez uploadu"
             reviewBusy -> "Odczyt postów do sprawdzenia: $reviewPosition/$reviewTotal • tylko lokalnie"
             desktopBusy -> if(desktopGate?.phase==DesktopTrial.Phase.READING)"Automatyczne przewijanie • do 30 s • tylko lokalnie" else "Ładowanie grupy • automatyczny podgląd • tylko lokalnie"
             shareBusy -> "Sprawdzanie jednego linku: do 20 s. Bez skanu."
@@ -1039,7 +1096,7 @@ class PocActivity : ComponentActivity() {
         banner.setBackgroundColor(if (stop != null) Color.parseColor("#B3261E") else Color.parseColor("#1E5AA8"))
 
         val canScan = open && !reviewWorking() && !desktopBusy && !shareBusy && !responseBusy && !scanning && stop == null && !preferences.getBoolean(KEY_ONE_SCAN_USED, false) && PocPolicy.canScan(kind) && channel?.isConnected == true
-        buttons["open"]?.text = if(reviewClosing) "Kończenie uzupełniania" else if(reviewBusy) "Przerwij uzupełnianie" else if(desktopBusy) "Przerwij próbę" else if (open) "Zamknij sesję" else "Otwórz sesję"
+        buttons["open"]?.text = if(ocrBusy) "Przerwij OCR" else if(reviewClosing) "Kończenie uzupełniania" else if(reviewBusy) "Przerwij uzupełnianie" else if(desktopBusy) "Przerwij próbę" else if (open) "Zamknij sesję" else "Otwórz sesję"
         listOf("group", "login", "back").forEach { buttons[it]?.isEnabled = open && !reviewWorking() && !desktopBusy && !scanning }
         listOf("scan", "scan3").forEach { buttons[it]?.isEnabled = canScan }
         buttons["responses"]?.isEnabled = open && !reviewWorking() && !desktopBusy && !responseBusy && !visibleBusy && !scanning && !inspectingDom && kind == PageKind.APPROVED_GROUP && progress == 100 && channel?.isConnected == true
@@ -1059,7 +1116,7 @@ class PocActivity : ComponentActivity() {
             facebookTab.isEnabled=enabled;offersTab.isEnabled=enabled
             offersTab.text="Oferty (${desktopRows.count{DesktopSummary.eligible(it)}})"
         }
-        if(reviewWorking())buttons.filterKeys{it!="open"}.values.forEach{it.isEnabled=false}
+        if(ocrBusy||reviewWorking())buttons.filterKeys{it!="open"}.values.forEach{it.isEnabled=false}
         val p = probe
         diagnostics.text = buildString {
             appendLine("STAN: ${banner.text}")
@@ -1087,7 +1144,7 @@ class PocActivity : ComponentActivity() {
             setOnClickListener {
                 if (key in setOf("open", "group", "tools")) onClick()
                 else { diagnosticsDialog?.dismiss(); window.decorView.post { if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
-                    if(key !in setOf("desktopResult","reviewResult","lastShareLinkResult","results","beaconNoGo"))selectContentTab(false)
+                    if(key !in setOf("desktopResult","reviewResult","ocrResult","lastShareLinkResult","results","beaconNoGo"))selectContentTab(false)
                     onClick()
                 } } }
             }
@@ -1176,6 +1233,7 @@ class PocActivity : ComponentActivity() {
             addView(row(button("desktopPreview","Automatyczny podgląd • 30 s"){startDesktopPreview()}))
             addView(row(button("desktopResult","Oferty"){selectContentTab(true)}))
             addView(row(button("reviewResult","Ostatni wynik uzupełniania"){showReviewResult()}))
+            addView(row(button("ocrResult","Ostatni wynik OCR"){showOcrReport()}))
             addView(row(Button(this@PocActivity).apply{text="Archiwum narzędzi";setOnClickListener{toolPanel.visibility=if(toolPanel.visibility==View.VISIBLE)View.GONE else View.VISIBLE}}))
             addView(toolPanel)
         }
@@ -1188,7 +1246,7 @@ class PocActivity : ComponentActivity() {
             setBackgroundColor(Color.parseColor("#FAFAFC"))
             addView(banner)
             addView(row(
-                button("open", "Otwórz sesję") { if(reviewClosing)Unit else if(reviewBusy)cancelReview("CANCELLED") else if(desktopBusy)finishDesktop("CANCELLED",show=false) else if (session == null) askConsentAndOpen() else closeSession() },
+                button("open", "Otwórz sesję") { if(ocrBusy)cancelOcr("CANCELLED") else if(reviewClosing)Unit else if(reviewBusy)cancelReview("CANCELLED") else if(desktopBusy)finishDesktop("CANCELLED",show=false) else if (session == null) askConsentAndOpen() else closeSession() },
                 button("group", "Otwórz grupę") { load(PocPolicy.APPROVED_GROUP_URL, login = false) },
                 button("tools", "Narzędzia / raport") { diagnosticsDialog?.show() },
             ))
@@ -1204,7 +1262,7 @@ class PocActivity : ComponentActivity() {
                     layoutParams=LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,0,1f)
                     geckoView.layoutParams=FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT)
                     addView(geckoView)
-                    offersPanel=OffersPanel(this@PocActivity,{openOffer(it)},{showReviewOrDesktopResult()},onEnrich={askReviewData()}).apply{
+                    offersPanel=OffersPanel(this@PocActivity,{openOffer(it)},{showReviewOrDesktopResult()},onEnrich={askReviewData()},onOcr={askOcr()},ocrAvailable={desktopThumbnails.ocrRows(it).isNotEmpty()},ocrResult={ocrResults[it]}).apply{
                         layoutParams=FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.MATCH_PARENT)
                         visibility=View.GONE
                         showRows(emptyList())

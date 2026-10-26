@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- GeckoView loads pages. No other network use: the POC has no backend client. -->
+    <!-- GeckoView loads pages. OCR uses a bundled local model; the POC has no backend client. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Stage C local screen-off test only: one short foreground service started by one alarm. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

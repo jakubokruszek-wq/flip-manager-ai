@@ -62,6 +62,7 @@
   // App <-> background port (official GeckoView native messaging). The app
   // arms the load measurement here BEFORE calling loadUri, because no page
   // script exists yet at that moment. Replies carry counts only.
+  let ocrFieldsReader=null;
   let appPort = null;
   function connectApp() {
     try {
@@ -73,7 +74,11 @@
     appPort.onMessage.addListener(message => {
       if (!message || typeof message !== "object" || typeof message.nonce !== "string") return;
       const reply = value => { try { appPort.postMessage({ nonce: message.nonce, ...value }); } catch { /* app gone */ } };
-      if (message.type === "abortDesktop") {
+      if (message.type === "ocrFields") {
+        const processor=scope.FlipOcrFields?.create;
+        if(!ocrFieldsReader&&processor)ocrFieldsReader=processor();
+        if(ocrFieldsReader)reply(ocrFieldsReader.project(message,scope.FlipFacebookCollectorCore,scope.FlipDesktopFields,scope.FlipDesktopPreview));
+      } else if (message.type === "abortDesktop") {
         scope.FlipDesktopBackground?.abort(message);
         reply({type:"abortDesktopResult"});
       } else if (message.type === "abortResponse") {

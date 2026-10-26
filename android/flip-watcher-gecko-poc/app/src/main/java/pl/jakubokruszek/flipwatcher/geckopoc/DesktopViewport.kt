@@ -42,14 +42,22 @@ object DesktopViewportProtocol {
 /** Bounded RAM ownership. Never encode, persist, log or copy bitmaps. */
 class DesktopThumbnails {
     private val images=LinkedHashMap<String,MutableMap<Int,Bitmap>>()
+    private val ocr=LinkedHashMap<String,MutableMap<Int,Bitmap>>()
+    internal val ocrBytes:Int get()=ocr.values.sumOf{m->m.values.sumOf{it.allocationByteCount}}
     fun rows(id:String):List<Bitmap> = images[id]?.toSortedMap()?.values?.toList()?:emptyList()
+    fun ocrRows(id:String):List<Bitmap> = ocr[id]?.toSortedMap()?.values?.toList()?:emptyList()
     val count:Int get()=images.values.sumOf{it.size}
-    fun put(id:String,slot:Int,image:Bitmap):Boolean {
-        if(slot !in 0..2||!Regex("[0-9]{5,30}").matches(id)||image.isRecycled||image.width>192||image.height>144||!images.containsKey(id)&&images.size>=20){image.recycle();return false}
-        val slots=images.getOrPut(id){linkedMapOf()};if(slots.containsKey(slot)){image.recycle();return false};slots[slot]=image;return true
+    fun put(id:String,slot:Int,image:Bitmap,ocrImage:Bitmap?=null):Boolean {
+        if(slot !in 0..2||!Regex("[0-9]{5,30}").matches(id)||image.isRecycled||image.width>192||image.height>144||!images.containsKey(id)&&images.size>=20){if(!image.isRecycled)image.recycle();ocrImage?.let{if(!it.isRecycled)it.recycle()};return false}
+        val slots=images.getOrPut(id){linkedMapOf()};if(slots.containsKey(slot)){image.recycle();ocrImage?.let{if(!it.isRecycled)it.recycle()};return false};slots[slot]=image
+        ocrImage?.let{b->
+            if(b!==image&&!b.isRecycled&&b.width in 1..1024&&b.height in 1..1024&&ocr.values.sumOf{it.size}<20&&ocrBytes+b.allocationByteCount<=24*1024*1024)ocr.getOrPut(id){linkedMapOf()}[slot]=b
+            else if(b!==image&&!b.isRecycled)b.recycle()
+        }
+        return true
     }
-    fun retain(ids:Set<String>){for(id in images.keys.toList())if(id !in ids)images.remove(id)?.values?.forEach{it.recycle()}}
-    fun clear(){images.values.flatMap{it.values}.forEach{it.recycle()};images.clear()}
+    fun retain(ids:Set<String>){for(map in listOf(images,ocr))for(id in map.keys.toList())if(id !in ids)map.remove(id)?.values?.forEach{it.recycle()}}
+    fun clear(){for(map in listOf(images,ocr)){map.values.flatMap{it.values}.forEach{if(!it.isRecycled)it.recycle()};map.clear()}}
     override fun toString()="DesktopThumbnails(redacted)"
 }
 
@@ -60,8 +68,8 @@ class DesktopViewportBridge(private val view:GeckoView,private val nonce:String,
     private var closed=false;private var busy=false;private var captures=0;private var scrolls=0;private var lastScroll=Long.MIN_VALUE
     private val requests=HashSet<String>()
     private var pendingFrame:String?=null;private var pendingAt=0L
-    private var pendingCrops:List<Pair<DesktopViewportProtocol.Tile,Bitmap>> = emptyList()
-    private fun discard(){pendingCrops.forEach{if(!it.second.isRecycled)it.second.recycle()};pendingCrops=emptyList();pendingFrame=null}
+    private var pendingCrops:List<Triple<DesktopViewportProtocol.Tile,Bitmap,Bitmap?>> = emptyList()
+    private fun discard(){pendingCrops.forEach{if(!it.second.isRecycled)it.second.recycle();it.third?.let{b->if(!b.isRecycled)b.recycle()}};pendingCrops=emptyList();pendingFrame=null}
     fun close(){closed=true;discard()}
     private fun active()=!closed&&live()&&view.isShown&&view.hasWindowFocus()&&view.width>=100&&view.height>=100
     fun handle(j:JSONObject,reply:(JSONObject)->Unit){
@@ -79,7 +87,7 @@ class DesktopViewportBridge(private val view:GeckoView,private val nonce:String,
             if(r.frameId!=pendingFrame){ack(false);return}
             if(r.action=="drop"){discard();ack(true);return}
             val count=pendingCrops.size
-            for((t,b) in pendingCrops)images.put(t.postId,t.slot,b)
+            for((t,b,o) in pendingCrops)images.put(t.postId,t.slot,b,o)
             pendingCrops=emptyList();pendingFrame=null;captureCounts[7]+=count;ack(true,count);return
         }
         if(pendingFrame!=null){ack(false);return}
@@ -100,7 +108,7 @@ class DesktopViewportBridge(private val view:GeckoView,private val nonce:String,
                 if(!active()){captureCounts[1]++;ack(false);return@accept}
                 if(now()-started>3000){captureCounts[4]++;ack(false);return@accept}
                 if(frame==null||frame.width!=view.width||frame.height!=view.height||frame.width.toLong()*frame.height>4_000_000){captureCounts[3]++;ack(false);return@accept}
-                val crops=ArrayList<Pair<DesktopViewportProtocol.Tile,Bitmap>>()
+                val crops=ArrayList<Triple<DesktopViewportProtocol.Tile,Bitmap,Bitmap?>>()
                 try{
                     for(t in r.tiles){
                         val x=floor(t.x/r.width*frame.width).toInt()+2;val y=floor(t.y/r.height*frame.height).toInt()+2
@@ -109,12 +117,15 @@ class DesktopViewportBridge(private val view:GeckoView,private val nonce:String,
                         val crop=Bitmap.createBitmap(frame,x,y,right-x,bottom-y);val factor=min(192.0/crop.width,144.0/crop.height).coerceAtMost(1.0)
                         val small=Bitmap.createScaledBitmap(crop,max(1,(crop.width*factor).toInt()),max(1,(crop.height*factor).toInt()),true)
                         val owned=if(small===frame||small===crop)requireNotNull(small.copy(Bitmap.Config.ARGB_8888,false)) else small
-                        if(crop!==frame&&crop!==owned)crop.recycle();crops.add(t to owned)
+                        val ocrFactor=min(1024.0/crop.width,1024.0/crop.height).coerceAtMost(1.0)
+                        val ocrScaled=Bitmap.createScaledBitmap(crop,max(1,(crop.width*ocrFactor).toInt()),max(1,(crop.height*ocrFactor).toInt()),true)
+                        val ocrOwned=if(ocrScaled===crop||ocrScaled===frame||ocrScaled===owned)requireNotNull(ocrScaled.copy(Bitmap.Config.ARGB_8888,false)) else ocrScaled
+                        if(crop!==frame&&crop!==owned&&crop!==ocrOwned)crop.recycle();crops.add(Triple(t,owned,ocrOwned))
                     }
                     if(!active()||now()-started>3000){captureCounts[4]++;ack(false);return@accept}
                     // The entire frame is transient; only already-visible image rectangles survive.
                     pendingCrops=crops.toList();pendingFrame=r.requestId;pendingAt=now();captureCounts[6]++;crops.clear();ack(true,r.tiles.size)
-                }finally{for((_,b) in crops)if(!b.isRecycled)b.recycle()}
+                }finally{for((_,b,o) in crops){if(!b.isRecycled)b.recycle();o?.let{if(!it.isRecycled)it.recycle()}}}
             }catch(_:Exception){captureCounts[5]++;ack(false)}finally{frame?.recycle();busy=false}
         },{busy=false;captureCounts[5]++;ack(false)})}catch(_:Exception){busy=false;captureCounts[5]++;ack(false)}
     }

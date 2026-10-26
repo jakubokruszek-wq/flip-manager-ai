@@ -15,7 +15,7 @@ import java.text.NumberFormat
 import java.util.Locale
 
 /** Cards are RAM-only. Erase text and listeners even from detached views held by old callbacks. */
-class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private val onReport:()->Unit,private val onEnrich:(()->Unit)?=null):ScrollView(context){
+class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private val onReport:()->Unit,private val onEnrich:(()->Unit)?=null,private val onOcr:(()->Unit)?=null,private val ocrAvailable:(String)->Boolean={false},private val ocrResult:(String)->DesktopRow?={null}):ScrollView(context){
     private val content=LinearLayout(context).apply{orientation=LinearLayout.VERTICAL;isSaveEnabled=false}
     init{tag="poc.offers";isSaveEnabled=false;addView(content)}
     private fun erase(view:View){
@@ -24,6 +24,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
         if(view is ImageView)view.setImageDrawable(null)
         if(view is ViewGroup)for(i in 0 until view.childCount)erase(view.getChildAt(i))
     }
+    private fun numberFormat(value:Number?)=value?.let{NumberFormat.getNumberInstance(Locale.forLanguageTag("pl-PL")).apply{maximumFractionDigits=2}.format(it)}?:"—"
     fun showRows(rows:List<DesktopRow>,notice:String?=null,thumbnails:(String)->List<Bitmap> = {emptyList()}){
         erase(content);content.removeAllViews()
         val dp=resources.displayMetrics.density
@@ -35,6 +36,15 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
         if(onEnrich!=null&&reviewCount>0)content.addView(Button(context).apply{
             tag="poc.review.enrich";text="Uzupełnij do ręcznego sprawdzenia ($reviewCount)";isAllCaps=false;isSaveEnabled=false;setOnClickListener{onEnrich.invoke()}
         })
+        if(onOcr!=null&&rows.any{ocrAvailable(it.postId)})content.addView(Button(context).apply{
+            tag="poc.ocr.start";text="Odczytaj napisy ze zdjęć (OCR)";isAllCaps=false;isSaveEnabled=false;setOnClickListener{onOcr.invoke()}
+        })
+        fun addOcr(parent:LinearLayout,id:String){ocrResult(id)?.let{r->
+            parent.addView(label("OCR — DO SPRAWDZENIA. Dane ze zdjęcia, oddzielone od danych tekstowych posta.",15f).apply{tag="poc.ocr.result.$id";setTextColor(Color.rgb(145,75,0))})
+            parent.addView(label("${DesktopPresentation.priceLabel(r)} (OCR): ${numberFormat(r.price)} zł • ${numberFormat(r.area)} m² • pokoje: ${r.rooms?:"—"}",16f))
+            parent.addView(label(listOfNotNull(r.district,r.neighborhood,r.street).joinToString(" / ").ifEmpty{"Lokalizacja OCR: —"},14f))
+            parent.addView(label("Heurystyki; porównaj ze zdjęciem. ${DesktopPresentation.explanation(r)}",13f))
+        }}
         if(notice!=null&&offers.isNotEmpty())content.addView(label(notice,14f))
         content.addView(label("Kandydaci do porównania z postem. Lista tylko w pamięci; opuszczenie aplikacji usuwa szczegóły.",14f))
         if(offers.isEmpty())content.addView(label(notice?:if(rows.any{DesktopPresentation.reviewable(it)})"Brak automatycznie rozpoznanych ofert. Posty do ręcznego sprawdzenia znajdują się poniżej." else "Brak ofert w pamięci. Uruchom nową próbę komputerową z nową zgodą. Zapisany raport zawiera tylko liczby."))
@@ -60,6 +70,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
                 contentDescription="Lokalna miniatura ${index+1}";setImageBitmap(image)
                 layoutParams=LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,(180*dp).toInt())
             })
+            addOcr(card,row.postId)
             card.addView(label("ID: ${row.postId}",12f))
             val link=OfferLinks.validated(row)
             card.addView(label(link?:"Brak bezpiecznego linku",14f).apply{
@@ -75,8 +86,9 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
         val review=rows.filter{DesktopPresentation.reviewable(it)}
         if(review.isNotEmpty()){
             content.addView(label("Do ręcznego sprawdzenia (${review.size})",22f).apply{tag="poc.offers.review"})
-            content.addView(label("Te posty mają dokładny link, ale nie zostały rozpoznane jako oferty. Napisy na grafikach mogą być niedostępne jako tekst. Brak OCR; nie dopowiadamy ceny ani metrażu.",14f))
+            content.addView(label("Te posty mają dokładny link, ale nie zostały rozpoznane jako oferty. Napisy na grafikach mogą być niedostępne jako tekst. OCR wymaga osobnej zgody i dostępnego wycinka zdjęcia w RAM; jego wyniki są oznaczone do sprawdzenia.",14f))
             for(row in review){
+                addOcr(content,row.postId)
                 content.addView(label(DesktopPresentation.explanation(row),14f))
                 content.addView(label("${DesktopPresentation.priceLabel(row)}: ${number(row.price)} zł • ${number(row.area)} m² • pokoje: ${number(row.rooms)}",16f).apply{tag="poc.review.fields.${row.postId}"})
                 content.addView(label(listOfNotNull(row.district,row.neighborhood,row.street).joinToString(" / ").ifEmpty{"Lokalizacja: —"}))
