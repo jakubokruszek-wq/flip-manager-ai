@@ -4,15 +4,19 @@ import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 
 /** No business fields in persistent summary. OCR candidates never replace accepted DOM fields. */
-data class OcrSummary(val reason:String,val selected:Int,val images:Int,val texts:Int,val suggestions:Int,val errors:Int){
- fun encode()=JSONObject().put("reason",reason).put("selected",selected).put("images",images).put("texts",texts).put("suggestions",suggestions).put("errors",errors).toString()
- fun report()="OCR 0.5.37 • tylko lokalnie • $reason\nPosty wybrane: $selected • obrazy: $images • odczytane napisy: $texts • wyniki do sprawdzenia: $suggestions • błędy: $errors\nPola OCR są heurystyczne i pozostają oddzielone od danych tekstowych posta. Sprawdź na zdjęciu, zwłaszcza cenę za m², wyliczoną cenę całkowitą i sprzeczności. Brak odczytu nie dowodzi braku danych. Obrazy i wyniki tylko w RAM; pauza je usuwa. Bez uploadu, skanu i kolektora."
+data class OcrSummary(val reason:String,val selected:Int,val images:Int,val texts:Int,val suggestions:Int,val errors:Int,val reviewFailure:ReviewDataSummary?=null){
+ fun encode()=JSONObject().put("reason",reason).put("selected",selected).put("images",images).put("texts",texts).put("suggestions",suggestions).put("errors",errors).apply{reviewFailure?.let{put("reviewFailure",JSONObject(it.encode()))}}.toString()
+ fun report()="OCR 0.5.38 • tylko lokalnie • $reason\nPosty wybrane: $selected • obrazy: $images • odczytane napisy: $texts • wyniki do sprawdzenia: $suggestions • błędy: $errors\nPola OCR są heurystyczne i pozostają oddzielone od danych tekstowych posta. Sprawdź na zdjęciu, zwłaszcza cenę za m², wyliczoną cenę całkowitą i sprzeczności. Brak odczytu nie dowodzi braku danych. Obrazy i wyniki tylko w RAM; pauza je usuwa. Bez uploadu, skanu i kolektora."+(reviewFailure?.let{"\n\nPrzyczyna etapu otwierania: ${it.reason}. ${it.explanation()}\nOtwarto ${it.opened}/${it.selected} • potwierdzono ${it.bound} • tekst ${it.textRead}. To zatrzymanie przebiegu, a nie dowód braku danych na obrazach."}?:"")
  companion object{fun decode(raw:String?):OcrSummary?=runCatching{
   if(raw==null||raw.length>1000)return null;val j=JSONObject(raw)
-  if(j.keys().asSequence().toSet()!=setOf("reason","selected","images","texts","suggestions","errors")||j.optString("reason") !in setOf("DONE","NO_CONSENT","CONTEXT","TIMEOUT","CANCELLED","PAUSED","ERROR","INTERRUPTED","PROTOCOL"))return null
+  val keys=j.keys().asSequence().toSet();val required=setOf("reason","selected","images","texts","suggestions","errors")
+  if(keys!=required&&keys!=required+"reviewFailure")return null
+  val failure=if(j.has("reviewFailure"))ReviewDataSummary.decode(j.getJSONObject("reviewFailure").toString())?.takeIf{it.reason!="DONE"}?:return null else null
+  if(j.optString("reason") !in setOf("DONE","NO_CONSENT","CONTEXT","TIMEOUT","CANCELLED","PAUSED","ERROR","INTERRUPTED","PROTOCOL"))return null
   val c=listOf("selected","images","texts","suggestions","errors").map{k->val n=j.opt(k);if(n !is Int||n !in 0..20)return null;n}
   if(c[2]>c[1]||c[3]>c[0]||c[4]>c[1]||c[2]+c[4]>c[1]||c[1]>c[0]*3)return null
-  OcrSummary(j.getString("reason"),c[0],c[1],c[2],c[3],c[4])
+  if(failure!=null&&(failure.selected!=c[0]||j.getString("reason")=="DONE"))return null
+  OcrSummary(j.getString("reason"),c[0],c[1],c[2],c[3],c[4],failure)
  }.getOrNull()}
 }
 object OcrProtocol{

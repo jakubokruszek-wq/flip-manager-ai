@@ -268,7 +268,7 @@ class PocActivity : ComponentActivity() {
     }
     private fun cancelReview(code:String){
         if(!reviewBusy)return
-        if(reviewOcrActive){saveOcr((ocrLast?:OcrSummary("INTERRUPTED",reviewTotal,0,0,0,0)).copy(reason=if(code in setOf("PAUSED","CANCELLED"))code else "ERROR"));ocrReportPending=true;reviewOcrActive=false}
+        if(reviewOcrActive){saveOcr((ocrLast?:OcrSummary("INTERRUPTED",reviewTotal,0,0,0,0)).copy(reason=if(code in setOf("PAUSED","CANCELLED"))code else "ERROR",reviewFailure=reviewSnapshot?.stopped(code)));ocrReportPending=true;reviewOcrActive=false}
         saveReviewResult((reviewSnapshot?:ReviewDataSummary("INTERRUPTED",reviewTotal,0,0,0,0,0,0,0)).stopped(code));reviewReportPending=true
         reviewBusy=false;reviewClosing=true;reviewJob?.cancel();clearDesktopDetails()
         output.text="Uzupełnianie zatrzymane: $code. Podgląd wyczyszczony; brak skanu i uploadu.";render()
@@ -360,7 +360,7 @@ class PocActivity : ComponentActivity() {
                     try{
                         delay(200)
                         val pendingOcr=linkedMapOf<String,DesktopRow>();var ocrImages=0;var ocrTexts=0;var ocrErrors=0
-                        fun ocrProgress(reason:String){if(withOcr)saveOcr(OcrSummary(reason,queue.size,ocrImages,ocrTexts,pendingOcr.size,ocrErrors))}
+                        fun ocrProgress(reason:String,failure:ReviewDataSummary?=null){if(withOcr)saveOcr(OcrSummary(reason,queue.size,ocrImages,ocrTexts,pendingOcr.size,ocrErrors,failure))}
                         val outcome=ReviewDataRunner.run(geckoView,original,snapshot,true,alive={reviewBusy&&session===original&&desktopRows===snapshot&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&geckoView.isAttachedToWindow},progress={index,total->reviewPosition=index;reviewTotal=total;render()},restoreActive={session===original&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)},snapshot={if(reviewBusy)saveReviewResult(it.copy(reason="INTERRUPTED"))},onBoundPost={source,row,current,live->
                             if(withOcr&&ocrImages<20&&live()){
                                 val crops=DesktopThumbnails()
@@ -389,7 +389,7 @@ class PocActivity : ComponentActivity() {
                             if(withOcr){ocrResults.putAll(pendingOcr);ocrProgress("DONE");ocrReportPending=true};desktopRows=outcome.rows.take(20);desktopThumbnails.retain(desktopRows.map{it.postId}.toSet())
                             offersPanel.showRows(desktopRows,"Uzupełniono: ${outcome.summary.enriched} • bez potwierdzonego odczytu: ${outcome.summary.unresolved}",thumbnails={desktopThumbnails.rows(it)})
                             output.text=outcome.summary.report();selectContentTab(true);render()
-                        }else{if(withOcr){ocrProgress("CONTEXT");ocrReportPending=true};publishReviewFailure(outcome.summary);output.text=outcome.summary.report();render()}
+                        }else{if(withOcr){ocrProgress("CONTEXT",outcome.summary);ocrReportPending=true};publishReviewFailure(outcome.summary);output.text=outcome.summary.report();render()}
                     }catch(e:kotlinx.coroutines.CancellationException){throw e}
                     catch(_:Exception){if(reviewBusy)cancelReview("ERROR")}
                     finally{reviewClosing=false;reviewOcrActive=false;if(!reviewBusy)reviewJob=null;render();if(withOcr)showPendingOcrReport() else showPendingReviewReport()}

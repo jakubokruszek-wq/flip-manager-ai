@@ -1,7 +1,7 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 require('../../../../../../extensions/facebook-collector/collector-core.js');const core=globalThis.FlipFacebookCollectorCore,p=require('../../main/extension/desktop-preview.js'),f=require('../../main/extension/desktop-fields.js'),reader=require('../../main/extension/review-post.js');
 const group='lodzsprzedazzakupwynajem',id='550000000000091',link=`https://www.facebook.com/groups/${group}/posts/${id}/`,nonce='12345678-1234-1234-1234-123456789012';
-function env(){const doc={title:'Own post',visibilityState:'visible',hidden:false,hasFocus:()=>true},w={document:doc,location:{href:link},innerWidth:980,getComputedStyle:()=>({display:'block',visibility:'visible'})};
+function env(){const doc={title:'Own post',readyState:'complete',visibilityState:'visible',hidden:false,hasFocus:()=>true},w={document:doc,location:{href:link},innerWidth:980,getComputedStyle:()=>({display:'block',visibility:'visible'})};
  const previous=p.createModel(core,f,group);previous.add({postId:id,permalink:link,text:'',media:[]},'DOM');
  const m={consent:true,reviewConsent:true,nonce,groupId:group,postId:id,expectedUrl:link,previousRow:previous.rows()[0]};
  const card={ownerDocument:doc,isConnected:true,parentElement:null,closest:()=>null};const anchor={href:link,closest:()=>card};
@@ -19,3 +19,5 @@ test('exact host path group and post are required without guessing aliases',()=>
 test('missing text remains an unconfirmed read, not evidence of an empty listing',()=>{const h=env();h.doc.createTreeWalker=()=>({nextNode:()=>null});const r=h.run();assert.equal(r.bound,1);assert.equal(r.textRead,0);assert.equal(r.rows[0].qualification,'NO_TEXT');});
 
 test('a comment permalink cannot bind an unmarked comment as the main post',()=>{const h=env();h.anchor.href=link+'?comment_id=777777777';const r=h.run();assert.equal(r.bound,0);assert.equal(r.textRead,0);assert.equal(r.rows[0].price,null);});
+
+test('interactive own DOM is readable without waiting for media completion; loading DOM is rejected',()=>{const h=env();h.doc.readyState='interactive';assert.equal(h.run().status,'OK');const b=env();b.doc.readyState='loading';b.doc.querySelectorAll=()=>{throw Error('loading DOM must not be read')};assert.equal(b.run().status,'STOP');});

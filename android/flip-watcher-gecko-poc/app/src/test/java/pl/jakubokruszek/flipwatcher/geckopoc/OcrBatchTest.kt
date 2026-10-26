@@ -40,4 +40,14 @@ class OcrBatchTest{
   val summary=OcrSummary("DONE",2,3,2,1,1);assertEquals(summary,OcrSummary.decode(summary.encode()));assertFalse(summary.encode().contains("http"));assertFalse(summary.encode().contains(row().postId));assertTrue(summary.report().contains("oddzielone"))
   assertNull(OcrSummary.decode(summary.encode().replace("DONE","PRIVATE_TEXT")));assertNull(OcrSummary.decode(summary.encode().replace("\"images\":3","\"images\":21")))
  }
+ @Test fun exactOpeningFailureSurvivesOcrHistoryWithoutBeingMisreportedAsNoImages(){
+  for(reason in listOf("NAVIGATION","PAGE_TIMEOUT","PORT_LOST","DEADLINE","VERIFICATION_OR_LOGIN")){
+   val review=ReviewDataSummary(reason,9,1,0,0,0,0,0,0)
+   val value=OcrSummary("CONTEXT",9,0,0,0,0,review)
+   assertEquals(value,OcrSummary.decode(value.encode()));assertTrue(value.report().contains("Przyczyna etapu otwierania: $reason"));assertTrue(value.report().contains("Otwarto 1/9"));assertFalse(value.encode().contains(row().postId))
+  }
+  val old="{\"reason\":\"DONE\",\"selected\":1,\"images\":1,\"texts\":1,\"suggestions\":1,\"errors\":0}"
+  assertNotNull(OcrSummary.decode(old));assertNull(OcrSummary.decode(OcrSummary("CONTEXT",9,0,0,0,0,ReviewDataSummary("DONE",9,1,0,0,0,0,0,0)).encode()))
+ }
+
 }

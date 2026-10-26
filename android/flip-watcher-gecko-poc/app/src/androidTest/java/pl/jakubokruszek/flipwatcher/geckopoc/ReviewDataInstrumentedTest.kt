@@ -33,7 +33,7 @@ class ReviewDataInstrumentedTest{
    runBlocking{withTimeout(60_000){withContext(Dispatchers.Main){
     val pathA="/groups/$FIXTURE_GROUP_ID/posts/$a/";val pathB="/groups/$FIXTURE_GROUP_ID/posts/$b/"
     val server=LoopbackFixtureServer(redirects=when(mode){"foreign"->mapOf(pathA to "/groups/foreign/posts/$a/");"lateforeign"->mapOf(pathB to "/groups/foreign/posts/$b/");else->emptyMap()},pages=mapOf(pathA to "review-full",pathB to "review-empty")){name->when(name){"fixtures/review-home.html"->"<!doctype html><title>Original group</title><p>Original group unchanged</p>";"fixtures/review-full.html"->if(mode=="login")"<!doctype html><title>Logowanie</title><input type=password>"else if(mode=="images")html(a,true).replace("</div></div>","</div>"+imageHtml()+"</div>")else html(a,true);"fixtures/review-empty.html"->html(b,false);else->null}}
-    val original=GeckoSession(GeckoSessionSettings.Builder().userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP).viewportMode(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP).build())
+    val original=GeckoSession(GeckoSessionSettings.Builder().userAgentMode(if(mode=="images")GeckoSessionSettings.USER_AGENT_MODE_MOBILE else GeckoSessionSettings.USER_AGENT_MODE_DESKTOP).viewportMode(if(mode=="images")GeckoSessionSettings.VIEWPORT_MODE_MOBILE else GeckoSessionSettings.VIEWPORT_MODE_DESKTOP).build())
     val channel=CollectorChannel(original,fixtureMode=true);var loaded=false
     original.progressDelegate=object:GeckoSession.ProgressDelegate{override fun onPageStop(s:GeckoSession,success:Boolean){loaded=success}}
     try{
@@ -46,7 +46,7 @@ class ReviewDataInstrumentedTest{
      }else{
       val trace=mutableListOf<String>();var imageCount=0;var boundCallbacks=0;val result=ReviewDataRunner.run(host!!.geckoView,original,rows,mode!="consent",alive={true},fixtureOrigin="http://127.0.0.1:${server.port}",observe={trace.add(it)},snapshot={snapshots.add(it)},onBoundPost={source,owner,current,live->
        if(mode=="images"){
-        boundCallbacks++;val crops=DesktopThumbnails()
+        assertEquals(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP,host!!.geckoView.session!!.settings.userAgentMode);assertEquals(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP,host!!.geckoView.session!!.settings.viewportMode);boundCallbacks++;val crops=DesktopThumbnails()
         try{assertTrue(source.reviewImages(owner,current,host!!.geckoView,crops,true,group=FIXTURE_GROUP_ID,alive=live));val photo=crops.ocrRows(owner.postId).firstOrNull();if(photo!=null){imageCount++;val text=LocalOcr.readOwned(photo.copy(android.graphics.Bitmap.Config.ARGB_8888,false));assertTrue("Generated fixture OCR did not read price",text.contains("260"));assertTrue(live())}}
         finally{crops.clear();assertEquals(0,crops.ocrBytes)}
        }
@@ -59,7 +59,7 @@ class ReviewDataInstrumentedTest{
        else->{assertNotEquals("DONE",result.summary.reason);assertTrue(result.rows.isEmpty())}
       }
      }
-     assertSame(original,host!!.geckoView.session);assertEquals("/groups/$FIXTURE_GROUP_ID/",channel.probe()!!.path)
+     assertSame(original,host!!.geckoView.session);if(mode=="images"){assertEquals(GeckoSessionSettings.USER_AGENT_MODE_MOBILE,original.settings.userAgentMode);assertEquals(GeckoSessionSettings.VIEWPORT_MODE_MOBILE,original.settings.viewportMode)};assertEquals("/groups/$FIXTURE_GROUP_ID/",channel.probe()!!.path)
     }finally{channel.close();runCatching{host!!.geckoView.releaseSession()};original.close();server.close()}
    }}}
   }
