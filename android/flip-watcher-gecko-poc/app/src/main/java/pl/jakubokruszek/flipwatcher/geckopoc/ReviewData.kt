@@ -42,15 +42,17 @@ class ReviewDataGate(private val group:String,private val fixture:Boolean=false,
 
 object ReviewEvidence{
  val legacyKeys=setOf("articleNodes","boundCards","nestedCards","foreignParents","messageNodes","scriptNodes","scriptParsed","scriptMatched","scriptSkipped","budgetLimited","readerStage","readerErrors")
- val keys=legacyKeys+setOf("hrefExact","attrExact","identityMissing","foreignGroup","foreignPost","commentIdentity","excludedCards","manyLinks")
+ val v540Keys=legacyKeys+setOf("hrefExact","attrExact","identityMissing","foreignGroup","foreignPost","commentIdentity","excludedCards","manyLinks")
+ val keys=v540Keys+setOf("rejectQuery","rejectRegion","canonicalSeen","canonicalExact","canonicalConflict","primaryCandidates","canonicalBound")
  fun parse(j:JSONObject?):Map<String,Int>?{
   if(j==null)return null
-  val actual=j.keys().asSequence().toSet();if(actual!=keys&&actual!=legacyKeys)return null
+  val actual=j.keys().asSequence().toSet();if(actual!=keys&&actual!=legacyKeys&&actual!=v540Keys)return null
   val out=actual.associateWith{k->val n=j.opt(k);if(n !is Int||n !in 0..10000)return null;n}
   if(out.getValue("readerStage")>6||out.getValue("readerErrors")>1||out.getValue("budgetLimited")>1)return null
+  if(listOf("canonicalExact","canonicalBound").any{it in out&&out.getValue(it)>1})return null
   return out
  }
- fun report(e:Map<String,Int>)=if(e.isEmpty())"" else "\nOstatnia zwalidowana odpowiedź czytnika (liczniki, nie posty): article ${e["articleNodes"]} • powiązane ${e["boundCards"]} • zagnieżdżone ${e["nestedCards"]} • odrzucony rodzic ${e["foreignParents"]} • bloki treści ${e["messageNodes"]}.\nSkrypty: znalezione ${e["scriptNodes"]} • zgodne ${e["scriptMatched"]} • parsowane ${e["scriptParsed"]} • pominięte ${e["scriptSkipped"]} • limit pracy ${e["budgetLimited"]}. Etap ${e["readerStage"]}/6 • wyjątek ${e["readerErrors"]}."+(if("hrefExact" in e)"\nPowiązanie kart: href ${e["hrefExact"]} • interaktywny adres ${e["attrExact"]} • bez adresu ${e["identityMissing"]} • inna grupa ${e["foreignGroup"]} • inny post ${e["foreignPost"]} • link komentarza/treści ${e["commentIdentity"]} • wykluczone ${e["excludedCards"]}." else "")
+ fun report(e:Map<String,Int>)=if(e.isEmpty())"" else "\nOstatnia zwalidowana odpowiedź czytnika (liczniki, nie posty): article ${e["articleNodes"]} • powiązane ${e["boundCards"]} • zagnieżdżone ${e["nestedCards"]} • odrzucony rodzic ${e["foreignParents"]} • bloki treści ${e["messageNodes"]}.\nSkrypty: znalezione ${e["scriptNodes"]} • zgodne ${e["scriptMatched"]} • parsowane ${e["scriptParsed"]} • pominięte ${e["scriptSkipped"]} • limit pracy ${e["budgetLimited"]}. Etap ${e["readerStage"]}/6 • wyjątek ${e["readerErrors"]}."+(if("hrefExact" in e)"\nPowiązanie kart: href ${e["hrefExact"]} • interaktywny adres ${e["attrExact"]} • bez adresu ${e["identityMissing"]} • inna grupa ${e["foreignGroup"]} • inny post ${e["foreignPost"]} • link komentarza/treści ${e["commentIdentity"]} • wykluczone ${e["excludedCards"]}." else "")+(if("canonicalSeen" in e)"\nDowód dokumentu: metadane ${e["canonicalSeen"]} • zgodne ${e["canonicalExact"]} • sprzeczne ${e["canonicalConflict"]} • główne karty ${e["primaryCandidates"]} • powiązanie kanoniczne ${e["canonicalBound"]}. Odrzucone linki: komentarz/hash ${e["rejectQuery"]} • obszar treści/komentarza ${e["rejectRegion"]}." else "")
 }
 data class ReviewPostReply(val safe:Boolean,val row:DesktopRow?,val bound:Boolean,val textRead:Boolean,val reason:String="DONE",val evidence:Map<String,Int> = emptyMap())
 object ReviewDataProtocol{
@@ -95,7 +97,7 @@ data class ReviewDataSummary(val reason:String,val selected:Int,val opened:Int,v
         "ERROR"->"Zatrzymano: nieoczekiwany błąd aplikacji."
         else->"Próba nie ma potwierdzonego zakończenia."
     }
-    fun report()="UZUPEŁNIANIE 0.5.40 • tylko lokalnie • $reason\n${explanation()}${if(reason!="DONE") " Podgląd wyczyszczono ochronnie; nie oznacza to znalezienia zera ofert." else ""}\nWybrano $selected • otwarto $opened • potwierdzono w DOM/danych strony $bound • odczytano tekst $textRead\nUzupełniono $enriched • bez nowych pól $unchanged • brak potwierdzonego odczytu $unresolved • poza filtrem $filtered\nBrak odczytu nie dowodzi braku danych w poście. Tylko dokładne ID tej grupy; pola heurystyczne. Bez odczytu odpowiedzi sieciowych, uploadu i kolektora. OCR wymaga osobnej zgody i ma osobny raport. Pauza usuwa dane."+ReviewEvidence.report(evidence)
+    fun report()="UZUPEŁNIANIE 0.5.41 • tylko lokalnie • $reason\n${explanation()}${if(reason!="DONE") " Podgląd wyczyszczono ochronnie; nie oznacza to znalezienia zera ofert." else ""}\nWybrano $selected • otwarto $opened • potwierdzono w DOM/danych strony $bound • odczytano tekst $textRead\nUzupełniono $enriched • bez nowych pól $unchanged • brak potwierdzonego odczytu $unresolved • poza filtrem $filtered\nBrak odczytu nie dowodzi braku danych w poście. Tylko dokładne ID tej grupy; pola heurystyczne. Bez odczytu odpowiedzi sieciowych, uploadu i kolektora. OCR wymaga osobnej zgody i ma osobny raport. Pauza usuwa dane."+ReviewEvidence.report(evidence)
     companion object{
         fun decode(raw:String?):ReviewDataSummary?=runCatching{
             if(raw==null||raw.length>2000)return null

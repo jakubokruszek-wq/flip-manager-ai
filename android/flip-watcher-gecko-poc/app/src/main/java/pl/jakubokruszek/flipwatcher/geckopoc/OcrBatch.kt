@@ -6,7 +6,17 @@ import org.json.JSONObject
 /** No business fields in persistent summary. OCR candidates never replace accepted DOM fields. */
 data class OcrSummary(val reason:String,val selected:Int,val images:Int,val texts:Int,val suggestions:Int,val errors:Int,val reviewFailure:ReviewDataSummary?=null){
  fun encode()=JSONObject().put("reason",reason).put("selected",selected).put("images",images).put("texts",texts).put("suggestions",suggestions).put("errors",errors).apply{reviewFailure?.let{put("reviewFailure",JSONObject(it.encode()))}}.toString()
- fun report()="OCR 0.5.40 • tylko lokalnie • $reason\nPosty wybrane: $selected • obrazy: $images • odczytane napisy: $texts • wyniki do sprawdzenia: $suggestions • błędy: $errors\nPola OCR są heurystyczne i pozostają oddzielone od danych tekstowych posta. Sprawdź na zdjęciu, zwłaszcza cenę za m², wyliczoną cenę całkowitą i sprzeczności. Brak odczytu nie dowodzi braku danych. Obrazy i wyniki tylko w RAM; pauza je usuwa. Bez uploadu, skanu i kolektora."+(reviewFailure?.let{"\n\nPrzyczyna etapu otwierania: ${it.reason}. ${it.explanation()}\nOtwarto ${it.opened}/${it.selected} • potwierdzono ${it.bound} • tekst ${it.textRead}. To zatrzymanie przebiegu, a nie dowód braku danych na obrazach.${ReviewEvidence.report(it.evidence)}"}?:"")
+ fun report()=buildString{
+  appendLine("OCR 0.5.41 • tylko lokalnie • $reason")
+  appendLine("Posty wybrane: $selected • obrazy: $images • odczytane napisy: $texts • wyniki do sprawdzenia: $suggestions • błędy: $errors")
+  reviewFailure?.let{
+   appendLine("\nPrzyczyna etapu otwierania: ${it.reason}. ${it.explanation()}")
+   appendLine("Otwarto ${it.opened}/${it.selected} • potwierdzono ${it.bound} • tekst ${it.textRead}. Zatrzymanie nie dowodzi braku ofert.")
+   append(ReviewEvidence.report(it.evidence))
+  }
+  append("\n\nPola OCR są heurystyczne, oddzielone od danych tekstowych i DO SPRAWDZENIA (także cena za m² i cena wyliczona). Brak odczytu nie dowodzi braku danych. Obrazy i wyniki tylko w RAM; pauza je usuwa. Bez uploadu, skanu i kolektora.")
+ }
+
  companion object{fun decode(raw:String?):OcrSummary?=runCatching{
   if(raw==null||raw.length>2000)return null;val j=JSONObject(raw)
   val keys=j.keys().asSequence().toSet();val required=setOf("reason","selected","images","texts","suggestions","errors")

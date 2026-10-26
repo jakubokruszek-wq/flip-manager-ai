@@ -8,9 +8,9 @@ function create(){const used=new Set();return {async read(w,m,core,preview,exact
  const cards=root.FlipReviewPost.cards(w,m,core,preview);
  if(cards.length!==1)return result('OK');const card=cards[0];let region=card;
  const zone=card.closest('[role="dialog"]')||card.closest('main,[role="main"]');
- if(zone){const links=Array.from(zone.querySelectorAll('a[href]'));const articles=Array.from(zone.querySelectorAll('[role="article"],article'));if(links.length<=200&&articles.length===1&&articles[0]===card){const posts=links.map(n=>core.parsePostLink(n.href)).filter(Boolean);if(posts.length&&posts.every(p=>p.sourceType==='GROUP'&&p.sourceId===m.groupId&&p.postId===m.postId))region=zone;}}
+ if(zone&&root.FlipReviewPost.cardId(card,core,preview,m.groupId,w.location.href)===m.postId){const links=Array.from(zone.querySelectorAll('a[href]'));const articles=Array.from(zone.querySelectorAll('[role="article"],article'));if(links.length<=200&&articles.length===1&&articles[0]===card){const posts=links.map(n=>core.parsePostLink(n.href)).filter(Boolean);if(posts.length&&posts.every(p=>p.sourceType==='GROUP'&&p.sourceId===m.groupId&&p.postId===m.postId))region=zone;}}
 
- const own=n=>safe()&&card.isConnected!==false&&root.FlipReviewPost.cardId(card,core,preview,m.groupId,w.location.href)===m.postId&&n.ownerDocument===w.document&&n.isConnected!==false&&(n.closest('[role="article"],article')===card||region!==card&&!n.closest('[role="article"],article'))&&region.contains(n)&&!n.closest(excluded)&&n.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})!==false;
+ const own=n=>safe()&&card.isConnected!==false&&root.FlipReviewPost.cards(w,m,core,preview).includes(card)&&n.ownerDocument===w.document&&n.isConnected!==false&&(n.closest('[role="article"],article')===card||region!==card&&!n.closest('[role="article"],article'))&&region.contains(n)&&!n.closest(excluded)&&n.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})!==false;
  const images=Array.from(region.querySelectorAll('img')).slice(0,100).filter(n=>own(n)&&n.complete&&n.naturalWidth>=200&&n.naturalHeight>=120).filter(n=>{const r=n.getBoundingClientRect();return r.width>=120&&r.height>=100;});
  // One image per post gives every unresolved post a chance within the shared 20-image limit.
  // Alt text is only a local ranking hint, never evidence of fields or identity.

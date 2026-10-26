@@ -78,4 +78,9 @@ class ReviewDataTest{
   val unbound=progress.copy(reason="NO_OWN_POST",opened=2,unresolved=2);assertEquals(unbound,ReviewDataSummary.decode(unbound.encode()));assertTrue(unbound.explanation().contains("Nie otwierano dalszych stron"))
  }
 
+ @Test fun canonicalEvidenceKeepsVersionedHistoryStrictAndCountOnly(){
+  for(keys in listOf(ReviewEvidence.legacyKeys,ReviewEvidence.v540Keys,ReviewEvidence.keys)){val e=keys.associateWith{0};val value=ReviewDataSummary("NO_OWN_POST",13,2,0,0,0,0,2,0,e);assertEquals(value,ReviewDataSummary.decode(value.encode()));assertFalse(value.encode().contains(id));assertFalse(value.encode().contains("http"))}
+  val e=ReviewEvidence.keys.associateWith{0};assertNull(ReviewEvidence.parse(org.json.JSONObject(e).put("canonicalBound",2)));assertNull(ReviewEvidence.parse(org.json.JSONObject(e).put("canonicalExact",2)))
+ }
+
 }
