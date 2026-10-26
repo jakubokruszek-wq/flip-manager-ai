@@ -17,3 +17,5 @@ test('one grant is single use even when no image exists',async()=>{const h=env()
 test('sibling image needs a unique same-post region, never the whole document',async()=>{const h=env();const zone={querySelectorAll:s=>s==='a[href]'?[h.anchor]:s==='img'?[h.image]:[h.card],contains:n=>n===h.image};h.card.closest=s=>s==='main,[role="main"]'?zone:null;h.card.querySelectorAll=s=>s==='a[href]'?[h.anchor]:[];h.image.closest=()=>null;assert.equal((await h.run()).count,1);const b=env();b.card.querySelectorAll=s=>s==='a[href]'?[b.anchor]:[];b.image.closest=()=>null;assert.equal((await b.run()).count,0);});
 
 test('interactive DOM still requires a loaded image and loading documents never capture',async()=>{const h=env();h.doc.readyState='interactive';assert.equal((await h.run()).count,1);const b=env();b.doc.readyState='loading';assert.equal((await b.run()).status,'STOP');assert.equal(b.calls.length,0);});
+
+test('photo without alt or any message/caption is still offered to pixel OCR',async()=>{const h=env();delete h.image.alt;assert.equal((await h.run()).count,1);assert.deepEqual(h.calls.map(x=>x.action),['photos','commit']);});
