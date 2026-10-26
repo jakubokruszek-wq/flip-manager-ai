@@ -59,4 +59,16 @@ class ReviewDataTest{
   }
  }
 
+ @Test fun readerEvidenceIsStrictlyNumericAndHistoryKeepsNoBusinessData(){
+  val e=ReviewEvidence.keys.associateWith{0}.toMutableMap().apply{put("readerStage",5);put("readerErrors",1);put("articleNodes",8)}
+  val summary=ReviewDataSummary("READER_ERROR",9,6,0,0,0,0,5,0,e)
+  assertEquals(summary,ReviewDataSummary.decode(summary.encode()));assertTrue(summary.report().contains("Etap 5/6"));assertFalse(summary.encode().contains(id))
+  for(bad in listOf(org.json.JSONObject(e).put("readerStage",7),org.json.JSONObject(e).put("readerErrors",2),org.json.JSONObject(e).put("url",url),org.json.JSONObject(e).put("boundCards","PRIVATE")))assertNull(ReviewEvidence.parse(bad))
+ }
+ @Test fun structuredReaderErrorIsValidStopRatherThanMalformedProtocol(){
+  val nonce="12345678-1234-1234-1234-123456789012";val e=ReviewEvidence.keys.associateWith{0}.toMutableMap().apply{put("readerStage",5);put("readerErrors",1)}
+  val reply=org.json.JSONObject().put("type","reviewPostResult").put("nonce",nonce).put("status","STOP").put("reason","ERROR").put("rows",org.json.JSONArray()).put("stats",org.json.JSONObject(DesktopProtocol.emptyStats())).put("bound",0).put("textRead",0).put("evidence",org.json.JSONObject(e))
+  val parsed=ReviewDataProtocol.parse(reply,nonce,id,PocPolicy.APPROVED_GROUP_ID);assertNotNull(parsed);assertFalse(parsed!!.safe);assertEquals("ERROR",parsed.reason);assertEquals(1,parsed.evidence["readerErrors"])
+ }
+
 }

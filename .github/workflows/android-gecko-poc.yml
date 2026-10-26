@@ -122,6 +122,8 @@ jobs:
           retention-days: 30
 
   instrumented:
+    # Temporary fast-validation lane requested for physical Samsung verification (0.5.39).
+    if: ${{ !contains(github.event.head_commit.message, '[gecko-fast]') && !contains(github.event.pull_request.title, '[gecko-fast]') }}
     name: GeckoView instrumented tests (Android 16 emulator, local HTML)
     runs-on: ubuntu-22.04
     timeout-minutes: 50

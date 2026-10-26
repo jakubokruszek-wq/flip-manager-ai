@@ -15,8 +15,8 @@ object ReviewDataRunner{
     data class Outcome(val summary:ReviewDataSummary,val rows:List<DesktopRow>)
     suspend fun run(view:GeckoView,original:GeckoSession,rows:List<DesktopRow>,consent:Boolean,alive:()->Boolean,progress:(Int,Int)->Unit={_,_->},restoreActive:()->Boolean=alive,fixtureOrigin:String?=null,observe:(String)->Unit={},snapshot:(ReviewDataSummary)->Unit={},onBoundPost:suspend(CollectorChannel,DesktopRow,String,()->Boolean)->Unit={_,_,_,_->}):Outcome=withContext(Dispatchers.Main){
         val fixture=fixtureOrigin!=null;val group=if(fixture)FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID
-        val queue=ReviewDataGate.queue(rows,group);var opened=0;var bound=0;var text=0;var enriched=0;var unchanged=0;var unresolved=0;var filtered=0
-        fun summary(reason:String)=ReviewDataSummary(reason,queue.size,opened,bound,text,enriched,unchanged,unresolved,filtered)
+        val queue=ReviewDataGate.queue(rows,group);var opened=0;var bound=0;var text=0;var enriched=0;var unchanged=0;var unresolved=0;var filtered=0;var evidence:Map<String,Int> = emptyMap()
+        fun summary(reason:String)=ReviewDataSummary(reason,queue.size,opened,bound,text,enriched,unchanged,unresolved,filtered,evidence)
         fun outcome(reason:String,result:List<DesktopRow> = emptyList()):Outcome{observe("END_"+reason);val value=summary(reason);snapshot(value);return Outcome(value,result)}
         if(!consent||queue.isEmpty()||rows.size>20||rows.map{it.postId}.distinct().size!=rows.size||!alive())return@withContext outcome("NO_CONSENT_OR_INPUT")
         val gate=ReviewDataGate(group,fixture){android.os.SystemClock.elapsedRealtime()}
@@ -75,8 +75,9 @@ object ReviewDataRunner{
                     val current=gate.currentUrl?:return@withContext outcome("CONTEXT")
                     reply=channel.reviewPost(previous,current,true,group,observe)
                     if(!live()||channel.connectionGeneration!=portGeneration)return@withContext outcome(if(gate.active)"PORT_LOST" else gate.reason)
-                    if(reply==null)return@withContext outcome("PROTOCOL")
-                    if(reply.safe!=true)return@withContext outcome("CONTEXT")
+                    if(reply==null)return@withContext outcome(channel.reviewFailureReason?:"PROTOCOL")
+                    evidence=reply.evidence
+                    if(reply.safe!=true)return@withContext outcome(channel.reviewFailureReason?:"CONTEXT")
                     if(reply.textRead)break
                 }
                 val result=reply?:return@withContext outcome("PROTOCOL");val updated=result.row?:return@withContext outcome("PROTOCOL")
