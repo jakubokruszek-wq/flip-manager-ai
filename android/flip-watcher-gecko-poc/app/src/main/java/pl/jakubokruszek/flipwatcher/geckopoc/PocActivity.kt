@@ -376,7 +376,7 @@ class PocActivity : ComponentActivity() {
                                         if(recognized.isNotBlank()){
                                             ocrTexts++;val suggestion=GeckoHost.background.ocrFields(row.postId,listOf(recognized),true)?:throw IllegalStateException("OCR_PROTOCOL")
                                             if(!live()||suggestion.postId!=row.postId||suggestion.permalink!=row.permalink)throw IllegalStateException("OCR_CONTEXT")
-                                            pendingOcr[row.postId]=suggestion
+                                            if(ReviewDataSummary.fields(suggestion)>0)pendingOcr[row.postId]=suggestion
                                         }
                                         ocrProgress("INTERRUPTED")
                                     }
