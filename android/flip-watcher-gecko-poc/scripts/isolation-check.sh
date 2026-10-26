@@ -62,8 +62,8 @@ if grep -R -n -E "userAgentOverride" "$src" --include='*.kt'; then
   echo "FAIL: a fabricated browser identity must not be supplied"; exit 1
 fi
 
-# Only the freshly consented desktop runner may select Gecko's official desktop mode.
-if grep -R -n -E "USER_AGENT_MODE_DESKTOP|userAgentMode[[:space:]]*=" "$src" --include='*.kt' --exclude='DesktopSessionPreview.kt'; then
+# Only the two freshly consented local runners may select Gecko's official desktop mode.
+if grep -R -n -E "USER_AGENT_MODE_DESKTOP|userAgentMode[[:space:]]*=" "$src" --include='*.kt' --exclude='DesktopSessionPreview.kt' --exclude='ReviewDataRunner.kt'; then
   echo "FAIL: desktop mode outside the explicit local trial"; exit 1
 fi
 node - "$src/java/pl/jakubokruszek/flipwatcher/geckopoc/DesktopSessionPreview.kt" <<'NODE'
@@ -71,6 +71,15 @@ const s=require('node:fs').readFileSync(process.argv[2],'utf8');
 const assignments=s.match(/session\.settings\.userAgentMode\s*=(?!=)[^\n]+/g)||[];
 if(assignments.length!==1 || assignments[0]!=="session.settings.userAgentMode=GeckoSessionSettings.USER_AGENT_MODE_DESKTOP")process.exit(1);
 if(!s.includes('channel.armDesktop(nonce,true,group,windowMs)') || !s.includes('VIEWPORT_MODE_DESKTOP'))process.exit(1);
+NODE
+
+# Exact-post review is a separate explicit grant and may not modify the original session.
+node - "$src/java/pl/jakubokruszek/flipwatcher/geckopoc/ReviewDataRunner.kt" <<'NODE'
+const s=require('node:fs').readFileSync(process.argv[2],'utf8');
+const setting='val settings=GeckoSessionSettings.Builder().userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP).viewportMode(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP).build()';
+const consent=s.indexOf('if(!consent||queue.isEmpty()');
+if(consent<0 || s.indexOf(setting)<consent || (s.match(/USER_AGENT_MODE_DESKTOP/g)||[]).length!==1 || /original\.settings\.[A-Za-z]+\s*=/.test(s))process.exit(1);
+if(!s.includes('ReviewDataGate.matches(target,group,previous.postId,fixture)') || !s.includes('gate.request(target)'))process.exit(1);
 NODE
 
 git diff --quiet "$base"...HEAD -- extensions/facebook-collector/collector-core.js || { echo "FAIL: collector-core.js changed"; exit 1; }
