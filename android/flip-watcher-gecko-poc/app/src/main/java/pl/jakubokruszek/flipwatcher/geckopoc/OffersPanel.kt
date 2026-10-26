@@ -36,8 +36,8 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
         if(onEnrich!=null&&reviewCount>0)content.addView(Button(context).apply{
             tag="poc.review.enrich";text="Uzupełnij do ręcznego sprawdzenia ($reviewCount)";isAllCaps=false;isSaveEnabled=false;setOnClickListener{onEnrich.invoke()}
         })
-        if(onOcr!=null&&rows.any{(DesktopPresentation.reviewable(it)||DesktopSummary.eligible(it))&&ocrAvailable(it.postId)})content.addView(Button(context).apply{
-            tag="poc.ocr.start";text="Odczytaj napisy ze zdjęć (OCR)";isAllCaps=false;isSaveEnabled=false;setOnClickListener{onOcr.invoke()}
+        if(onOcr!=null&&(reviewCount>0||rows.any{DesktopSummary.eligible(it)&&ocrAvailable(it.postId)}))content.addView(Button(context).apply{
+            tag="poc.ocr.start";text=if(reviewCount>0)"Otwórz brakujące dane + OCR ($reviewCount)" else "Odczytaj napisy ze zdjęć (OCR)";isAllCaps=false;isSaveEnabled=false;setOnClickListener{onOcr.invoke()}
         })
         fun addOcr(parent:LinearLayout,id:String){ocrResult(id)?.let{r->
             parent.addView(label("OCR — DO SPRAWDZENIA. Dane ze zdjęcia, oddzielone od danych tekstowych posta.",15f).apply{tag="poc.ocr.result.$id";setTextColor(Color.rgb(145,75,0))})

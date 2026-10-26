@@ -57,6 +57,14 @@ class OcrInstrumentedTest{
    panel.showRows(emptyList());assertNull(start.tag);start.performClick();assertEquals(1,calls);assertNull(panel.findViewWithTag<android.view.View>("poc.ocr.result.${original.postId}"))
   }}
  }
+ @Test fun unresolvedRowsCanStartOpenedPostOcrWithoutFeedCrops(){
+  ActivityScenario.launch(GeckoTestHostActivity::class.java).use{scenario->scenario.onActivity{a->
+   var calls=0;val panel=OffersPanel(a,{},{},onOcr={calls++},ocrAvailable={false})
+   panel.showRows(listOf(row()));val start=panel.findViewWithTag<Button>("poc.ocr.start")
+   assertNotNull(start);assertTrue(start.text.contains("brakujące dane"));start.performClick();assertEquals(1,calls)
+   panel.showRows(emptyList());start.performClick();assertEquals(1,calls)
+  }}
+ }
  @Test fun manualReviewRowKeepsBoundOcrPixelsUntilPauseWithoutStartingRecognition(){
   val context=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
   val prefs=context.getSharedPreferences("desktop_trial_summary_v1",Context.MODE_PRIVATE);val saved=prefs.getString("last",null)

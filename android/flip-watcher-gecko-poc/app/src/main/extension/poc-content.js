@@ -7,7 +7,7 @@
   // user already sees. Input values are never read; only element counts.
   const adapter = scope.FlipGeckoPocAdapter;
   const core = scope.FlipFacebookCollectorCore;
-  let reviewReader=null;
+  let reviewReader=null;let reviewImagesReader=null;
   // Isolated-world identity persists across reconnect/reinjection of this document.
   const priorIdentity=scope.FlipDesktopDocumentIdentity;
   const desktopIdentity=priorIdentity?.document===scope.document?priorIdentity:{document:scope.document,id:scope.crypto?.randomUUID?.()||null};
@@ -445,6 +445,9 @@
     if(message.type==='desktopDocumentProofRequest'){
       const safe=message.consent===true&&responsePageSafe(message);
       port.postMessage({type:'desktopDocumentProof',nonce:message.nonce,documentId:safe?desktopIdentity.id:null,timeOrigin:safe?scope.performance.timeOrigin:null});return;
+    }
+    if(message.type==='reviewImages'){
+      const reader=reviewImagesReader||(reviewImagesReader=scope.FlipReviewImages.create());const result=await reader.read(scope,message,core,scope.FlipDesktopPreview,scope.FlipReviewPost.exact,m=>viewportTransport.request(m));port.postMessage({type:'reviewImagesResult',nonce:message.nonce,...result});return;
     }
     if(message.type==='reviewPost'){
       const reader=reviewReader||(reviewReader=scope.FlipReviewPost.create());const result=reader.read(scope,message,core,scope.FlipDesktopFields,scope.FlipDesktopPreview);port.postMessage({type:'reviewPostResult',nonce:message.nonce,...result});return;

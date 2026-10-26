@@ -6,7 +6,7 @@ import org.json.JSONObject
 /** No business fields in persistent summary. OCR candidates never replace accepted DOM fields. */
 data class OcrSummary(val reason:String,val selected:Int,val images:Int,val texts:Int,val suggestions:Int,val errors:Int){
  fun encode()=JSONObject().put("reason",reason).put("selected",selected).put("images",images).put("texts",texts).put("suggestions",suggestions).put("errors",errors).toString()
- fun report()="OCR 0.5.36 • tylko lokalnie • $reason\nPosty wybrane: $selected • obrazy: $images • odczytane napisy: $texts • wyniki do sprawdzenia: $suggestions • błędy: $errors\nPola OCR są heurystyczne i pozostają oddzielone od danych tekstowych posta. Sprawdź na zdjęciu, zwłaszcza cenę za m², wyliczoną cenę całkowitą i sprzeczności. Brak odczytu nie dowodzi braku danych. Obrazy i wyniki tylko w RAM; pauza je usuwa. Bez uploadu, skanu i kolektora."
+ fun report()="OCR 0.5.37 • tylko lokalnie • $reason\nPosty wybrane: $selected • obrazy: $images • odczytane napisy: $texts • wyniki do sprawdzenia: $suggestions • błędy: $errors\nPola OCR są heurystyczne i pozostają oddzielone od danych tekstowych posta. Sprawdź na zdjęciu, zwłaszcza cenę za m², wyliczoną cenę całkowitą i sprzeczności. Brak odczytu nie dowodzi braku danych. Obrazy i wyniki tylko w RAM; pauza je usuwa. Bez uploadu, skanu i kolektora."
  companion object{fun decode(raw:String?):OcrSummary?=runCatching{
   if(raw==null||raw.length>1000)return null;val j=JSONObject(raw)
   if(j.keys().asSequence().toSet()!=setOf("reason","selected","images","texts","suggestions","errors")||j.optString("reason") !in setOf("DONE","NO_CONSENT","CONTEXT","TIMEOUT","CANCELLED","PAUSED","ERROR","INTERRUPTED","PROTOCOL"))return null

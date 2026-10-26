@@ -102,6 +102,7 @@ class PocActivity : ComponentActivity() {
     private var ocrConsentDialog:AlertDialog?=null
     private var ocrLast:OcrSummary?=null
     private var ocrReportPending=false
+    private var reviewOcrActive=false
     private val ocrResults=linkedMapOf<String,DesktopRow>()
     private val ocrPrefs by lazy{getSharedPreferences("ocr_counts_v1",MODE_PRIVATE)}
     private var desktopRows:List<DesktopRow> = emptyList()
@@ -267,6 +268,7 @@ class PocActivity : ComponentActivity() {
     }
     private fun cancelReview(code:String){
         if(!reviewBusy)return
+        if(reviewOcrActive){saveOcr((ocrLast?:OcrSummary("INTERRUPTED",reviewTotal,0,0,0,0)).copy(reason=if(code in setOf("PAUSED","CANCELLED"))code else "ERROR"));ocrReportPending=true;reviewOcrActive=false}
         saveReviewResult((reviewSnapshot?:ReviewDataSummary("INTERRUPTED",reviewTotal,0,0,0,0,0,0,0)).stopped(code));reviewReportPending=true
         reviewBusy=false;reviewClosing=true;reviewJob?.cancel();clearDesktopDetails()
         output.text="Uzupełnianie zatrzymane: $code. Podgląd wyczyszczony; brak skanu i uploadu.";render()
@@ -312,6 +314,7 @@ class PocActivity : ComponentActivity() {
         saveOcr((ocrLast?:OcrSummary("INTERRUPTED",0,0,0,0,0)).copy(reason=if(reason in setOf("PAUSED","CANCELLED","CONTEXT"))reason else "ERROR"));ocrReportPending=true
     }
     private fun askOcr(){
+        if(ReviewDataGate.queue(desktopRows).isNotEmpty()){askReviewData(withOcr=true);return}
         if(busyForTabs()||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
         val original=session?:return;val source=channel?:return;val generation=source.connectionGeneration;val target=url;val snapshot=desktopRows
         val count=snapshot.count{(DesktopPresentation.reviewable(it)||DesktopSummary.eligible(it))&&desktopThumbnails.ocrRows(it.postId).isNotEmpty()}
@@ -342,31 +345,54 @@ class PocActivity : ComponentActivity() {
             }.create().also{it.setCanceledOnTouchOutside(false);it.show()}
     }
 
-    private fun askReviewData(){
+    private fun askReviewData(withOcr:Boolean=false){
         val original=session?:return;val snapshot=desktopRows
         val queue=ReviewDataGate.queue(snapshot)
         if(busyForTabs()||queue.isEmpty()||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
         reviewConsentDialog?.dismiss()
-        reviewConsentDialog=AlertDialog.Builder(this).setTitle("Uzupełnij dane — nowa zgoda")
-            .setMessage("Jednorazowo otworzyć kolejno ${queue.size} dokładnych linków z Do ręcznego sprawdzenia? Jedna zatwierdzona grupa, maks. 20 postów i 3 minuty. Widoczna karta GeckoView odczyta treść DOM i osadzone dane tych stron, bez odczytu odpowiedzi sieciowych i bez klikania reakcji, komentarzy lub udostępniania.\n\nTylko potwierdzone ID; pola są heurystyczne. Komentarze, cytaty i cudze posty nie uzupełniają oferty. Dane pozostają w RAM; lokalnie zapisują się tylko liczniki. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu, pauza lub wygaszenie: STOP i wyczyszczenie podglądu. Bez OCR, skanu i uploadu. To nowa zgoda, niezależna od poprzedniego skanu.")
+        reviewConsentDialog=AlertDialog.Builder(this).setTitle(if(withOcr)"Otwórz posty + OCR — nowa zgoda" else "Uzupełnij dane — nowa zgoda")
+            .setMessage((if(withOcr)"OCR: po odczycie treści odczytać lokalnie napisy z jednego widocznego zdjęcia każdego potwierdzonego posta? Maks. 20 obrazów, jeden na post; najpierw posty bez tekstu. Sugestie osobno, DO SPRAWDZENIA, bez nadpisywania pól.\n\n" else "")+"Otworzyć kolejno ${queue.size} dokładnych linków z Do ręcznego sprawdzenia? Jedna zatwierdzona grupa, do 20 postów i 3 minut. Odczyt DOM i osadzonych danych; bez odczytu odpowiedzi sieciowych i bez klikania reakcji, komentarzy lub udostępniania.\n\nBez dodatkowego pobierania mediów, uploadu, skanu i kolektora. Tylko potwierdzone ID; pola heurystyczne. Komentarze, cytaty i cudze posty są wykluczone. Dane i obrazy w RAM; zapis tylko liczników. Logowanie/CAPTCHA/CHECKPOINT, zmiana kontekstu, pauza lub wygaszenie: STOP i wyczyszczenie podglądu. Nowa jednorazowa zgoda; wcześniejsza zgoda na skan nie jest używana.")
             .setNegativeButton("Anuluj",null).setPositiveButton("Zgadzam się"){_,_->
                 reviewConsentDialog=null
                 if(busyForTabs()||session!==original||desktopRows!==snapshot||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return@setPositiveButton
-                stopVisiblePosts();selectContentTab(false);reviewLast=null;reviewTotal=queue.size;reviewPosition=0;reviewReportPending=false;saveReviewResult(ReviewDataSummary("INTERRUPTED",queue.size,0,0,0,0,0,0,0));reviewBusy=true;render()
+                reviewOcrActive=withOcr;if(withOcr){ocrResults.clear();ocrReportPending=false;saveOcr(OcrSummary("INTERRUPTED",queue.size,0,0,0,0))};stopVisiblePosts();selectContentTab(false);reviewLast=null;reviewTotal=queue.size;reviewPosition=0;reviewReportPending=false;saveReviewResult(ReviewDataSummary("INTERRUPTED",queue.size,0,0,0,0,0,0,0));reviewBusy=true;render()
                 reviewJob=lifecycleScope.launch{
                     try{
                         delay(200)
-                        val outcome=ReviewDataRunner.run(geckoView,original,snapshot,true,alive={reviewBusy&&session===original&&desktopRows===snapshot&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&geckoView.isAttachedToWindow},progress={index,total->reviewPosition=index;reviewTotal=total;render()},restoreActive={session===original&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)},snapshot={if(reviewBusy)saveReviewResult(it.copy(reason="INTERRUPTED"))})
+                        val pendingOcr=linkedMapOf<String,DesktopRow>();var ocrImages=0;var ocrTexts=0;var ocrErrors=0
+                        fun ocrProgress(reason:String){if(withOcr)saveOcr(OcrSummary(reason,queue.size,ocrImages,ocrTexts,pendingOcr.size,ocrErrors))}
+                        val outcome=ReviewDataRunner.run(geckoView,original,snapshot,true,alive={reviewBusy&&session===original&&desktopRows===snapshot&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&geckoView.isAttachedToWindow},progress={index,total->reviewPosition=index;reviewTotal=total;render()},restoreActive={session===original&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)},snapshot={if(reviewBusy)saveReviewResult(it.copy(reason="INTERRUPTED"))},onBoundPost={source,row,current,live->
+                            if(withOcr&&ocrImages<20&&live()){
+                                val crops=DesktopThumbnails()
+                                try{
+                                    if(!source.reviewImages(row,current,geckoView,crops,true,alive=live))throw IllegalStateException("OCR_CONTEXT")
+                                    if(!live())throw IllegalStateException("OCR_CONTEXT")
+                                    val photo=crops.ocrRows(row.postId).firstOrNull()
+                                    if(photo!=null){
+                                        ocrImages++;ocrProgress("INTERRUPTED")
+                                        val owned=photo.copy(android.graphics.Bitmap.Config.ARGB_8888,false)
+                                        val recognized=try{kotlinx.coroutines.withTimeoutOrNull(8000){LocalOcr.readOwned(owned)}?:run{ocrErrors++;""}}catch(e:kotlinx.coroutines.CancellationException){throw e}catch(_:Exception){ocrErrors++;""}
+                                        if(!live())throw IllegalStateException("OCR_CONTEXT")
+                                        if(recognized.isNotBlank()){
+                                            ocrTexts++;val suggestion=GeckoHost.background.ocrFields(row.postId,listOf(recognized),true)?:throw IllegalStateException("OCR_PROTOCOL")
+                                            if(!live()||suggestion.postId!=row.postId||suggestion.permalink!=row.permalink)throw IllegalStateException("OCR_CONTEXT")
+                                            pendingOcr[row.postId]=suggestion
+                                        }
+                                        ocrProgress("INTERRUPTED")
+                                    }
+                                }finally{crops.clear()}
+                            }
+                        })
                         if(!reviewBusy)return@launch
                         reviewBusy=false;reviewJob=null;saveReviewResult(outcome.summary);reviewReportPending=true
                         if(outcome.summary.reason=="DONE"){
-                            desktopRows=outcome.rows.take(20);desktopThumbnails.retain(desktopRows.map{it.postId}.toSet())
+                            if(withOcr){ocrResults.putAll(pendingOcr);ocrProgress("DONE");ocrReportPending=true};desktopRows=outcome.rows.take(20);desktopThumbnails.retain(desktopRows.map{it.postId}.toSet())
                             offersPanel.showRows(desktopRows,"Uzupełniono: ${outcome.summary.enriched} • bez potwierdzonego odczytu: ${outcome.summary.unresolved}",thumbnails={desktopThumbnails.rows(it)})
                             output.text=outcome.summary.report();selectContentTab(true);render()
-                        }else{publishReviewFailure(outcome.summary);output.text=outcome.summary.report();render()}
+                        }else{if(withOcr){ocrProgress("CONTEXT");ocrReportPending=true};publishReviewFailure(outcome.summary);output.text=outcome.summary.report();render()}
                     }catch(e:kotlinx.coroutines.CancellationException){throw e}
                     catch(_:Exception){if(reviewBusy)cancelReview("ERROR")}
-                    finally{reviewClosing=false;if(!reviewBusy)reviewJob=null;render();showPendingReviewReport()}
+                    finally{reviewClosing=false;reviewOcrActive=false;if(!reviewBusy)reviewJob=null;render();if(withOcr)showPendingOcrReport() else showPendingReviewReport()}
                 }
             }.create().also{it.setCanceledOnTouchOutside(false);it.show()}
     }

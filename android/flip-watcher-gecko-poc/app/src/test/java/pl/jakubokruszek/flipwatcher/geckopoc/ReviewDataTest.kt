@@ -30,6 +30,12 @@ class ReviewDataTest{
   assertTrue(ReviewDataGate.queue(listOf(candidate)).isEmpty());assertTrue(ReviewDataGate.queue(listOf(row().copy(permalink=url.replace(PocPolicy.APPROVED_GROUP_ID,"foreign")))).isEmpty())
   val rows=(0..29).map{row((550000000000100+it).toString())};assertEquals(20,ReviewDataGate.queue(rows).size);assertEquals(1,ReviewDataGate.queue(listOf(row(),row())).size)
  }
+ @Test fun reviewQueuePrioritizesEmptyTextThenMissingFieldsWithoutChangingIdentity(){
+  val empty=row("550000000000095")
+  val partial=row().copy(price=260000.0,priceSource="EXPLICIT_TOTAL",qualification="MISSING_FIELDS")
+  val out=ReviewDataGate.queue(listOf(partial,empty))
+  assertEquals(listOf(empty.postId,partial.postId),out.map{it.postId});assertEquals(empty,out.first());assertEquals(partial,out.last())
+ }
  @Test fun protocolRejectsWrongNonceUnexpectedOwnerAndMissingBoundProof(){
   val nonce="12345678-1234-1234-1234-123456789012"
   fun reply(key:String)=org.json.JSONObject().put("type","reviewPostResult").put("nonce",nonce).put("status","OK").put("reason","DONE").put("rows",org.json.JSONArray().put(ReviewDataProtocol.row(row(key)))).put("stats",org.json.JSONObject(DesktopProtocol.emptyStats()).put("verified",1).put("candidates",1)).put("bound",1).put("textRead",1)

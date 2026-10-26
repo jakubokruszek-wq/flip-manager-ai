@@ -54,7 +54,7 @@ class CollectorChannel(
                 "shareLinkStop" -> if (json.optString("nonce") == shareNonce) onShareStop()
                 "visiblePostsStop" -> onVisibleStop()
                 "ready" -> ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
-                "reviewPostResult", "desktopDocumentProof", "desktopArmed", "desktopPreviewResult", "shareLinkContextResult", "mainTransportResult", "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
+                "reviewImagesResult", "reviewPostResult", "desktopDocumentProof", "desktopArmed", "desktopPreviewResult", "shareLinkContextResult", "mainTransportResult", "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                     pending.remove(json.optString("nonce"))?.complete(json)
                 }
@@ -124,6 +124,17 @@ class CollectorChannel(
         observe(if(reply==null)"NO_REPLY" else if(reply.optString("status")=="OK")"REPLY_OK" else "REPLY_STOP")
         if(fixtureMode&&reply!=null){val stats=reply.optJSONObject("stats");observe("FOCUS_${stats?.optInt("pageFocused",-1)}_VISIBLE_${stats?.optInt("pageVisible",-1)}_EXACT_${stats?.optInt("verified",-1)}")}
         val parsed=ReviewDataProtocol.parse(reply,nonce,row.postId,group);observe(if(parsed==null)"PARSE_STOP" else "PARSE_OK");return parsed
+    }
+
+    suspend fun reviewImages(row:DesktopRow,expectedUrl:String,view:org.mozilla.geckoview.GeckoView,images:DesktopThumbnails,consent:Boolean=false,group:String=PocPolicy.APPROVED_GROUP_ID,alive:()->Boolean):Boolean{
+        if(!consent||!alive()||!ReviewDataGate.matches(expectedUrl,group,row.postId,fixtureMode))return false
+        val nonce=UUID.randomUUID().toString();val generation=connectionGeneration
+        fun live()=alive()&&isConnected&&connectionGeneration==generation&&connectedUrl==expectedUrl
+        val bridge=DesktopViewportBridge(view,nonce,images,::live);viewportBridge=bridge
+        return try{
+            val reply=request(nonce,JSONObject().put("type","reviewImages").put("nonce",nonce).put("consent",true).put("ocrConsent",true).put("groupId",group).put("postId",row.postId).put("expectedUrl",expectedUrl).put("fixture",fixtureMode),7_000)
+            live()&&reply!=null&&reply.keys().asSequence().toSet()==setOf("type","nonce","status","count")&&reply.optString("type")=="reviewImagesResult"&&reply.optString("nonce")==nonce&&reply.optString("status")=="OK"&&reply.opt("count") is Int&&reply.getInt("count") in 0..1
+        }finally{bridge.close();if(viewportBridge===bridge)viewportBridge=null}
     }
 
     suspend fun shareLinkProof(expectedUrl: String, consent: Boolean, newDocumentAfter: Long? = null): ShareContextReply {

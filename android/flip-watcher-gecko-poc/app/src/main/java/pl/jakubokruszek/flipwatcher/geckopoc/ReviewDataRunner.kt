@@ -13,7 +13,7 @@ import org.mozilla.geckoview.WebRequestError
 /** Foreground temporary session shares the existing runtime, not a background/screen-off browser. */
 object ReviewDataRunner{
     data class Outcome(val summary:ReviewDataSummary,val rows:List<DesktopRow>)
-    suspend fun run(view:GeckoView,original:GeckoSession,rows:List<DesktopRow>,consent:Boolean,alive:()->Boolean,progress:(Int,Int)->Unit={_,_->},restoreActive:()->Boolean=alive,fixtureOrigin:String?=null,observe:(String)->Unit={},snapshot:(ReviewDataSummary)->Unit={}):Outcome=withContext(Dispatchers.Main){
+    suspend fun run(view:GeckoView,original:GeckoSession,rows:List<DesktopRow>,consent:Boolean,alive:()->Boolean,progress:(Int,Int)->Unit={_,_->},restoreActive:()->Boolean=alive,fixtureOrigin:String?=null,observe:(String)->Unit={},snapshot:(ReviewDataSummary)->Unit={},onBoundPost:suspend(CollectorChannel,DesktopRow,String,()->Boolean)->Unit={_,_,_,_->}):Outcome=withContext(Dispatchers.Main){
         val fixture=fixtureOrigin!=null;val group=if(fixture)FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID
         val queue=ReviewDataGate.queue(rows,group);var opened=0;var bound=0;var text=0;var enriched=0;var unchanged=0;var unresolved=0;var filtered=0
         fun summary(reason:String)=ReviewDataSummary(reason,queue.size,opened,bound,text,enriched,unchanged,unresolved,filtered)
@@ -65,7 +65,7 @@ object ReviewDataRunner{
                     if(reply.textRead)break
                 }
                 val result=reply?:return@withContext outcome("PROTOCOL");val updated=result.row?:return@withContext outcome("PROTOCOL")
-                if(result.bound)bound++;if(result.textRead)text++ else unresolved++
+                if(result.bound){bound++;onBoundPost(channel,updated,gate.currentUrl?:return@withContext outcome("CONTEXT"),{live()&&channel.connectionGeneration==portGeneration});if(!live()||channel.connectionGeneration!=portGeneration)return@withContext outcome(if(gate.active)"PORT_LOST" else gate.reason)};if(result.textRead)text++ else unresolved++
                 if(!DesktopPresentation.reviewable(updated)&&!DesktopSummary.eligible(updated))filtered++
                 else if(ReviewDataSummary.fields(updated)>ReviewDataSummary.fields(previous)||DesktopSummary.eligible(updated)&&!DesktopSummary.eligible(previous))enriched++
                 else if(result.textRead)unchanged++
