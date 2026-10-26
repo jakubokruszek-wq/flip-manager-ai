@@ -314,11 +314,15 @@ class PocActivity : ComponentActivity() {
         saveOcr((ocrLast?:OcrSummary("INTERRUPTED",0,0,0,0,0)).copy(reason=if(reason in setOf("PAUSED","CANCELLED","CONTEXT"))reason else "ERROR"));ocrReportPending=true
     }
     private fun askOcr(){
-        if(ReviewDataGate.queue(desktopRows).isNotEmpty()){askReviewData(withOcr=true);return}
         if(busyForTabs()||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
         val original=session?:return;val source=channel?:return;val generation=source.connectionGeneration;val target=url;val snapshot=desktopRows
         val count=snapshot.count{(DesktopPresentation.reviewable(it)||DesktopSummary.eligible(it))&&desktopThumbnails.ocrRows(it.postId).isNotEmpty()}
-        if(count==0)return
+        // Prefer already identity-bound crops: manual rows must not force a new
+        // navigation and prevent OCR of images we already hold in RAM.
+        if(count==0){
+            if(ReviewDataGate.queue(snapshot).isNotEmpty())askReviewData(withOcr=true)
+            return
+        }
         ocrConsentDialog?.dismiss()
         ocrConsentDialog=AlertDialog.Builder(this).setTitle("OCR lokalnie — nowa zgoda")
             .setMessage("Odczytać napisy z widocznych wcześniej zdjęć przypisanych do $count postów zatwierdzonej grupy? Maks. 20 obrazów, 20 postów i 2 minuty. Model OCR jest w APK i działa na telefonie bez pobierania modelu. Bez wysyłania zdjęć lub wyników, dodatkowego pobierania mediów, skanu i kolektora.\n\nPola OCR mogą być błędne: będą pokazane osobno, DO SPRAWDZENIA. Nie nadpisują danych tekstowych. Wycinki i wyniki tylko w RAM, usuwane po pauzie lub zmianie kontekstu. Lokalnie pozostają tylko liczniki. Każda próba wymaga nowej zgody.")
