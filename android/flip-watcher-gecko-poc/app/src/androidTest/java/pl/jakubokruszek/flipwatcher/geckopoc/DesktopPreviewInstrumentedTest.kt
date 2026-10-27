@@ -173,12 +173,15 @@ class DesktopPreviewInstrumentedTest {
             assertNull(panel.findViewWithTag<android.view.View>("poc.offer.card.$reviewId"))
             val link=panel.findViewWithTag<android.widget.TextView>("poc.review.link.$reviewId")
             assertNotNull(link);assertEquals(review.permalink,link.text.toString());assertTrue(link.performClick());assertEquals(reviewId,opened)
+            val open=panel.findViewWithTag<android.widget.Button>("poc.review.open.$reviewId")
+            assertNotNull(open);opened=null;assertTrue(open.performClick());assertEquals(reviewId,opened)
+            assertNull(panel.findViewWithTag<android.view.View>("poc.review.open.${buyer.postId}"))
             assertNull(panel.findViewWithTag<android.view.View>("poc.review.link.${buyer.postId}"))
             panel.showRows(listOf(review));assertNotNull(panel.findViewWithTag<android.view.View>("poc.offers.review"))
             val reviewOnly=panel.findViewWithTag<android.widget.TextView>("poc.review.link.$reviewId")
             assertEquals(review.permalink,reviewOnly.text.toString())
             panel.showRows(emptyList());assertNull(image.drawable);picture.recycle();assertEquals("",link.text.toString());assertFalse(link.performClick())
-            assertEquals("",reviewOnly.text.toString());assertFalse(reviewOnly.performClick())
+            assertEquals("",reviewOnly.text.toString());assertFalse(reviewOnly.performClick());assertEquals("",open.text.toString());assertFalse(open.performClick())
         }}
     }
     @Test fun actualSvgAnchorLinksCapturePhotosWithoutChangingAutomaticScroll()=checkNativeViewport(false,fastScroll=true,svgPhotos=true,svgAnchor=true)

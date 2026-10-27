@@ -7,7 +7,7 @@ import java.net.URLEncoder
 const val FIXTURE_GROUP_ID = "1234567890123"
 
 /** What the session is showing, from the top-level URL alone. */
-enum class PageKind { APPROVED_GROUP, OTHER_GROUP, LOGIN, CHECKPOINT, CAPTCHA, FACEBOOK_OTHER, FIXTURE, BLOCKED, BLANK }
+enum class PageKind { APPROVED_GROUP, APPROVED_POST, OTHER_GROUP, LOGIN, CHECKPOINT, CAPTCHA, FACEBOOK_OTHER, FIXTURE, BLOCKED, BLANK }
 
 /**
  * Fixed rules of the POC: one approved group, Facebook hosts only, and a stop
@@ -65,6 +65,9 @@ object PocPolicy {
             path.trimEnd('/') == "/groups/$APPROVED_GROUP_ID" -> PageKind.APPROVED_GROUP
             // Only an exact, verified alias of the approved group; never any /groups/ path.
             groupSegment(url)?.let { aliases[it] == APPROVED_GROUP_ID } == true -> PageKind.APPROVED_GROUP
+            // Viewing an exact post is distinct from permission to scan a group.
+            uri.rawUserInfo==null&&uri.port==-1&&uri.rawQuery==null&&uri.rawFragment==null&&
+                Regex("^/groups/$APPROVED_GROUP_ID/(posts|permalink)/[0-9]{5,30}/?$").matches(path) -> PageKind.APPROVED_POST
             path.startsWith("/groups/") -> PageKind.OTHER_GROUP
             else -> PageKind.FACEBOOK_OTHER
         }

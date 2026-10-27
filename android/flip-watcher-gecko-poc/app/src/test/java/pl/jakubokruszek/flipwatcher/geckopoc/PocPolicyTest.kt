@@ -85,7 +85,7 @@ class PocPolicyTest {
         assertEquals(PageKind.APPROVED_GROUP, PocPolicy.classify("https://www.facebook.com/groups/lodzsprzedazzakupwynajem/"))
         assertEquals(PageKind.OTHER_GROUP, PocPolicy.classify("https://www.facebook.com/groups/402796264871862/"))
         assertEquals(PageKind.OTHER_GROUP, PocPolicy.classify("https://www.facebook.com/groups/1350200629551011/"))
-        assertEquals(PageKind.OTHER_GROUP, PocPolicy.classify("https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/100000000001/"))
+        assertEquals(PageKind.APPROVED_POST, PocPolicy.classify("https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/100000000001/"))
         assertTrue(PocPolicy.VERIFIED_ALIASES.isEmpty())
         assertTrue(PocPolicy.aliasesFor(group).isEmpty())
         assertTrue(ScanRequest(nonce = "n").aliases.isEmpty())
@@ -107,4 +107,12 @@ class PocPolicyTest {
         assertEquals(null, PocPolicy.groupSegment("https://www.facebook.com/groups/abc/posts/1/"))
         assertEquals(null, PocPolicy.groupSegment("https://www.facebook.com/home.php"))
     }
+    @Test fun exactPostCanBeViewedButNeverGrantsGroupScanning(){
+        val url="https://www.facebook.com/groups/$group/posts/100000000001/"
+        assertEquals(PageKind.APPROVED_POST,PocPolicy.classify(url))
+        assertFalse(PocPolicy.canScan(PageKind.APPROVED_POST))
+        assertNull(PocPolicy.stopMessage(PageKind.APPROVED_POST,false))
+        for(bad in listOf(url+"?comment_id=123",url+"#comment",url.replace(group,"foreign"),url.replace("www.facebook.com","user@www.facebook.com"),url.replace("www.facebook.com","www.facebook.com:443")))assertNotEquals(PageKind.APPROVED_POST,PocPolicy.classify(bad))
+    }
+
 }

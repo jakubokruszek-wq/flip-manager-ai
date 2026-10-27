@@ -277,8 +277,10 @@ class PocActivity : ComponentActivity() {
         reviewSnapshot=value;reviewLast=value
         runCatching{reviewPrefs.edit().putString("last",value.encode()).commit()}
     }
-    internal fun publishReviewFailure(value:ReviewDataSummary){
-        require(value.reason!="DONE");clearDesktopDetails();saveReviewResult(value);reviewReportPending=true;render();showPendingReviewReport()
+    internal fun publishReviewFailure(value:ReviewDataSummary,preservePreview:Boolean=false){
+        require(value.reason!="DONE")
+        val keep=preservePreview&&value.reason=="NO_OWN_POST"&&session!=null&&haltMessage==null&&kind==PageKind.APPROVED_GROUP&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+        if(!keep)clearDesktopDetails();saveReviewResult(value);reviewReportPending=true;render();showPendingReviewReport()
     }
     private fun showReviewResult(){
         val result=reviewLast?:ReviewDataSummary.decode(reviewPrefs.getString("last",null))
@@ -290,8 +292,12 @@ class PocActivity : ComponentActivity() {
     private fun showPendingReviewReport(){
         if(!reviewReportPending||reviewWorking()||isFinishing||isDestroyed||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
         val result=reviewLast?:return
-        if(result.reason!="DONE"){
+        if(result.reason!="DONE"&&desktopRows.isEmpty()){
             offersPanel.showRows(emptyList(),result.explanation()+" Podgląd wyczyszczono ochronnie — to nie wynik zero ofert. Raport pozostaje w Narzędzia / raport.")
+            selectContentTab(true)
+        }
+        if(result.reason=="NO_OWN_POST"&&desktopRows.isNotEmpty()){
+            offersPanel.showRows(desktopRows,"Nie odczytano szczegółów. Dotychczasowe wyniki grupy pozostają dostępne; możesz otworzyć post ręcznie.",thumbnails={desktopThumbnails.rows(it)})
             selectContentTab(true)
         }
         showReviewResult()
@@ -393,7 +399,7 @@ class PocActivity : ComponentActivity() {
                             if(withOcr){ocrResults.putAll(pendingOcr);ocrProgress("DONE");ocrReportPending=true};desktopRows=outcome.rows.take(20);desktopThumbnails.retain(desktopRows.map{it.postId}.toSet())
                             offersPanel.showRows(desktopRows,"Uzupełniono: ${outcome.summary.enriched} • bez potwierdzonego odczytu: ${outcome.summary.unresolved}",thumbnails={desktopThumbnails.rows(it)})
                             output.text=outcome.summary.report();selectContentTab(true);render()
-                        }else{if(withOcr){ocrProgress("CONTEXT",outcome.summary);ocrReportPending=true};publishReviewFailure(outcome.summary);output.text=outcome.summary.report();render()}
+                        }else{if(withOcr){ocrProgress("CONTEXT",outcome.summary);ocrReportPending=true};publishReviewFailure(outcome.summary,preservePreview=session===original&&desktopRows===snapshot);output.text=outcome.summary.report();render()}
                     }catch(e:kotlinx.coroutines.CancellationException){throw e}
                     catch(_:Exception){if(reviewBusy)cancelReview("ERROR")}
                     finally{reviewClosing=false;reviewOcrActive=false;if(!reviewBusy)reviewJob=null;render();if(withOcr)showPendingOcrReport() else showPendingReviewReport()}
@@ -404,6 +410,13 @@ class PocActivity : ComponentActivity() {
     private fun openOffer(row:DesktopRow){
         if(!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)||busyForTabs()||desktopRows.none{it===row})return
         val link=OfferLinks.validated(row)?:OfferLinks.validatedReview(row)?:return
+        if(DesktopPresentation.reviewable(row)){
+            val browser=session?:return
+            // Explicit view-only navigation uses the already authenticated visible session.
+            // No enrichment/OCR/scan is implicitly granted by opening a post.
+            clearDesktopDetails();selectContentTab(false);geckoView.requestFocus()
+            browser.loadUri(link);return
+        }
         // Explicit user click; clear both UI copies/listeners before leaving the local preview.
         clearDesktopDetails()
         val intent=Intent(Intent.ACTION_VIEW,Uri.parse(link)).addCategory(Intent.CATEGORY_BROWSABLE)
@@ -1119,6 +1132,7 @@ class PocActivity : ComponentActivity() {
             responseBusy -> if (responseReloadGate.active) "Trwa diagnostyka od otwarcia (25 s)." else "Trwa lokalna diagnostyka odpowiedzi (15 s)."
             shareResolver?.status == ShareLinkResolver.Status.CONFIRMED -> "Link zatwierdzonej grupy potwierdzony. Bez skanu."
             scanning -> "Trwa skan (max ${PocPolicy.MAX_POSTS} postów, ${PocPolicy.SCAN_TIMEOUT_MS / 1000} s)…"
+            kind == PageKind.APPROVED_POST -> "Post zatwierdzonej grupy — podgląd ręczny, bez skanu i automatycznego odczytu."
             kind == PageKind.APPROVED_GROUP && preferences.getBoolean(KEY_ONE_SCAN_USED, false) ->
                 "Zatwierdzona grupa otwarta. Limit jednego skanu testowego wykorzystany; wyniki dostępne lokalnie."
             kind == PageKind.APPROVED_GROUP -> "Zatwierdzona grupa otwarta. Możesz uruchomić jeden skan."

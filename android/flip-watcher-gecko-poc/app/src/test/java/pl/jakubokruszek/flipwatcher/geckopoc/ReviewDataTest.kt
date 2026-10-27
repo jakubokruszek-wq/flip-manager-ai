@@ -83,4 +83,10 @@ class ReviewDataTest{
   val e=ReviewEvidence.keys.associateWith{0};assertNull(ReviewEvidence.parse(org.json.JSONObject(e).put("canonicalBound",2)));assertNull(ReviewEvidence.parse(org.json.JSONObject(e).put("canonicalExact",2)))
  }
 
+ @Test fun unboundPostDoesNotClaimThatOriginalPreviewWasNecessarilyDeleted(){
+  val value=ReviewDataSummary("NO_OWN_POST",11,2,0,0,0,0,2,0)
+  assertFalse(value.report().contains("Podgląd wyczyszczono"))
+  assertTrue(value.report().contains("NO_OWN_POST"))
+ }
+
 }

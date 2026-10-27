@@ -101,6 +101,10 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
                     layoutParams=LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,(180*dp).toInt())
                 })
                 val link=OfferLinks.validatedReview(row)
+                if(link!=null)content.addView(Button(context).apply{
+                    tag="poc.review.open.${row.postId}";text="Otwórz post do sprawdzenia";isAllCaps=false;isSaveEnabled=false
+                    setOnClickListener{onOpen(row)}
+                })
                 content.addView(label(link?:"Brak bezpiecznego linku",14f).apply{
                     tag="poc.review.link.${row.postId}";setTextColor(Color.rgb(20,80,180));isClickable=link!=null
                     if(link!=null)setOnClickListener{onOpen(row)}
@@ -112,7 +116,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
             content.addView(label("Poza filtrem (${excluded.size})",18f))
             for((reason,items) in excluded.groupBy{DesktopPresentation.explanation(it)})content.addView(label("${items.size} × $reason",13f))
         }
-        content.addView(label("Link otwiera Facebooka lub przeglądarkę poza POC. Przed otwarciem lista jest czyszczona. Bez skanu i uploadu.",13f))
+        content.addView(label("Posty do sprawdzenia otwierają się w karcie Facebook tej aplikacji. Pozostałe linki otwierają Facebooka lub przeglądarkę. Opuszczenie podglądu czyści dane; bez skanu i uploadu.",13f))
         content.addView(Button(context).apply{tag="poc.offers.report";text="Raport i powody pozostałych postów";isAllCaps=false;isSaveEnabled=false;setOnClickListener{onReport()}})
         scrollTo(0,0)
     }
