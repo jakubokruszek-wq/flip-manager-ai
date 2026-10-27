@@ -134,11 +134,18 @@ class ReviewDataTest{
   val g=ReviewDataGate(PocPolicy.APPROVED_GROUP_ID){0};val first=g.beginSession()
   assertTrue(g.acceptsSession(first));assertEquals(0,g.beginSession());assertEquals("CONTEXT",g.reason);assertFalse(g.acceptsSession(first))
  }
+ @Test fun oneWorkerPerPostAllowsTwentyButNoMoreThanSelected(){
+  val full=ReviewDataSummary("DONE",20,20,20,20,20,0,0,0,batchSessions=20,batchSessionsClosed=20)
+  assertEquals(full,ReviewDataSummary.decode(full.encode()))
+  assertNotNull(ReviewDataSummary.decode(full.copy(batchSessions=19,batchSessionsClosed=19).encode()))
+  assertNull(ReviewDataSummary.decode(full.copy(batchSessions=21).encode()))
+  assertNull(ReviewDataSummary.decode(full.copy(selected=19).encode()))
+ }
  @Test fun batchCountersRoundTripWithoutChangingLegacyCountReports(){
   val legacy=ReviewDataSummary("DONE",7,7,7,7,7,0,0,0)
   assertEquals(legacy,ReviewDataSummary.decode(legacy.encode()))
   val result=legacy.copy(batchSessions=3,batchSessionsClosed=3)
-  assertEquals(result,ReviewDataSummary.decode(result.encode()));assertTrue(result.report().contains("do 3 postów"))
+  assertEquals(result,ReviewDataSummary.decode(result.encode()));assertTrue(result.report().contains("Sesje robocze otwarte 3"))
   val ocr=OcrSummary("DONE",8,1,1,1,0,reviewCompleted=result)
   assertEquals(ocr,OcrSummary.decode(ocr.encode()));assertTrue(ocr.report().contains("otwarte 3"))
   assertFalse(result.encode().contains(id));assertFalse(result.encode().contains("http"))

@@ -12,7 +12,7 @@ import org.mozilla.geckoview.WebRequestError
 
 /** Foreground bounded workers; one queue grant and deadline across all batches. */
 object ReviewDataRunner{
-    private const val POSTS_PER_SESSION=3
+    private const val POSTS_PER_SESSION=1
     data class Outcome(val summary:ReviewDataSummary,val rows:List<DesktopRow>)
     suspend fun run(view:GeckoView,original:GeckoSession,rows:List<DesktopRow>,consent:Boolean,alive:()->Boolean,progress:(Int,Int)->Unit={_,_->},restoreActive:()->Boolean=alive,fixtureOrigin:String?=null,observe:(String)->Unit={},snapshot:(ReviewDataSummary)->Unit={},onBoundPost:suspend(CollectorChannel,DesktopRow,String,()->Boolean)->Unit={_,_,_,_->}):Outcome=withContext(Dispatchers.Main){
         val fixture=fixtureOrigin!=null;val group=if(fixture)FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID
@@ -28,6 +28,9 @@ object ReviewDataRunner{
         fun active():Boolean{if(!alive()||!view.isShown||!view.hasWindowFocus())gate.stop("PAUSED_OR_CONTEXT");return gate.tick()}
         suspend fun runBatch(batch:List<IndexedValue<DesktopRow>>):String?{
             if(!active())return gate.reason
+            // Never navigate a live detail worker to another post: cancelling residual media
+            // can emit onPageStop(false) for the previous document without an address.
+            check(batch.size==1)
             val epoch=gate.beginSession();if(epoch==0)return gate.reason
             val browser=GeckoSession(settings);lastWorker=browser;var navigating=true;var openedSession=false
             val channel=CollectorChannel(browser,fixtureMode=fixture,onPageDisconnect={if(gate.acceptsSession(epoch)&&!navigating)gate.stop("PORT_LOST")})
@@ -119,7 +122,7 @@ object ReviewDataRunner{
             for((index,batch) in batches.withIndex()){
                 val stopped=runBatch(batch);if(stopped!=null)return@withContext outcome(stopped)
                 if(!active())return@withContext outcome(gate.reason)
-                if(index<batches.lastIndex){delay(250);if(!active())return@withContext outcome(gate.reason)}
+                if(index<batches.lastIndex){delay(750);if(!active())return@withContext outcome(gate.reason)}
             }
             outcome("DONE",merged.values.toList())
         }finally{

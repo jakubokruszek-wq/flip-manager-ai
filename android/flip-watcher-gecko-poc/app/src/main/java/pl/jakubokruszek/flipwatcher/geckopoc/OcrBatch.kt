@@ -7,13 +7,13 @@ import org.json.JSONObject
 data class OcrSummary(val reason:String,val selected:Int,val images:Int,val texts:Int,val suggestions:Int,val errors:Int,val reviewFailure:ReviewDataSummary?=null,val reviewCompleted:ReviewDataSummary?=null){
  fun encode()=JSONObject().put("reason",reason).put("selected",selected).put("images",images).put("texts",texts).put("suggestions",suggestions).put("errors",errors).apply{reviewFailure?.let{put("reviewFailure",JSONObject(it.encode()))};reviewCompleted?.let{put("reviewCompleted",JSONObject(it.encode()))}}.toString()
  fun report()=buildString{
-  appendLine("OCR 0.5.49 • tylko lokalnie • $reason")
+  appendLine("OCR 0.5.50 • tylko lokalnie • $reason")
   appendLine("Posty wybrane: $selected • obrazy: $images • odczytane napisy: $texts • wyniki do sprawdzenia: $suggestions • błędy: $errors")
   if(reason=="PARTIAL")appendLine("OCR obrazów z pamięci ukończony; etap otwierania pozostałych postów zatrzymany. Wynik częściowy.")
   (reviewFailure?:reviewCompleted)?.let{
    appendLine(if(it.reason=="DONE")"\nEtap otwierania zakończony." else "\nPrzyczyna etapu otwierania: ${it.reason}. ${it.explanation()}")
    appendLine("Otwarto ${it.opened}/${it.selected} • potwierdzono ${it.bound} • tekst ${it.textRead}."+(if(it.reason!="DONE")" Zatrzymanie nie dowodzi braku ofert." else ""))
-   if(it.batchSessions>0)appendLine("Partie: do 3 postów • sesje robocze otwarte ${it.batchSessions} • zamknięte ${it.batchSessionsClosed}.")
+   if(it.batchSessions>0)appendLine("Sesje robocze otwarte ${it.batchSessions} • zamknięte ${it.batchSessionsClosed}.")
    append(ReviewEvidence.report(it.evidence))
   }
   append("\n\nPola OCR są heurystyczne, oddzielone od danych tekstowych i DO SPRAWDZENIA (także cena za m² i cena wyliczona). Brak odczytu nie dowodzi braku danych. Obrazy i wyniki tylko w RAM; pauza je usuwa. Bez uploadu, skanu i kolektora.")

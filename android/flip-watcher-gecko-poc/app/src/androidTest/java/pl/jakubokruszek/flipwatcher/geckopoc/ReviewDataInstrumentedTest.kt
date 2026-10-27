@@ -16,8 +16,10 @@ class ReviewDataInstrumentedTest{
  private fun html(id:String,full:Boolean)=if(!full)"""<!doctype html><title>Exact empty marker</title><article role="article"><a href="https://www.facebook.com/groups/$FIXTURE_GROUP_ID/posts/$id/">Post</a><div data-ad-preview="message"></div></article>""" else """<!doctype html><title>Exact full post</title><div role="dialog"><article role="article"><a href="https://www.facebook.com/groups/$FIXTURE_GROUP_ID/posts/$id/">Post</a></article><div data-ad-preview="message">Sprzedam mieszkanie 42m2. Cena 319000 zł. 2 pokoje. ul. Testowa 12.<div role="comment"><div data-ad-preview="message">Sprzedam inne mieszkanie 999m2 za 9000000 zł</div></div><form><textarea>PRIVATE_DRAFT 999999 zł</textarea></form><blockquote>9999999 zł</blockquote></div></div>"""
  @Test fun batchOpensExactReviewLinksReadsFullMessageWithoutCommentsAndRestoresGroup()=runCase("normal")
  @Test fun exactOpenedPostCapturesSiblingImageForOcrAndRestoresGroup()=runCase("images")
- @Test fun sevenPostsRotateThroughThreeWorkersAndRestoreTheOriginalGroup()=runCase("batches")
+ @Test fun sevenPostsUseSevenSingleDocumentWorkersAndRestoreTheOriginalGroup()=runCase("batches")
  @Test fun cancellationBetweenBatchesNeverOpensTheNextWorker()=runCase("cancelbetween")
+ @Test fun activeLoadFailureStillStopsWithoutPublishingRows()=runCase("loaderror")
+ @Test fun closedWorkerLoadFailureCannotAbortTheNextPost()=runCase("staleloaderror")
  @Test fun noNewConsentDoesNotNavigateOrReadAnyPost()=runCase("consent")
  @Test fun foreignRedirectAndVerificationStopWithoutPublishingPartialRows(){runCase("foreign");runCase("login")}
  @Test fun failureAfterOneReadKeepsNumericProgressButPublishesNoPartialRows()=runCase("lateforeign")
@@ -45,9 +47,11 @@ class ReviewDataInstrumentedTest{
      val snapshots=mutableListOf<ReviewDataSummary>();val rows=if(batchMode)batchIds.map{row(it)}else listOf(row(a),row(b));var outcome:ReviewDataRunner.Outcome?=null
      if(mode=="cancel"||mode=="cancelbetween"){
       var begun=false;val job=launch{outcome=ReviewDataRunner.run(host!!.geckoView,original,rows,true,alive={true},progress={_,_->if(mode=="cancel")begun=true},observe={if(mode=="cancelbetween"&&it=="BATCH_CLOSED")begun=true},fixtureOrigin="http://127.0.0.1:${server.port}",snapshot={snapshots.add(it)})}
-      withTimeout(if(mode=="cancelbetween")30000L else 10000L){while(!begun)delay(20)};job.cancelAndJoin();assertNull(outcome);assertTrue(snapshots.isNotEmpty());assertNotNull(ReviewDataSummary.decode(snapshots.last().stopped("CANCELLED").encode()));if(mode=="cancelbetween"){assertEquals(3,snapshots.last().opened);assertEquals(1,snapshots.last().batchSessions);assertEquals(1,snapshots.last().batchSessionsClosed)}
+      withTimeout(if(mode=="cancelbetween")30000L else 10000L){while(!begun)delay(20)};job.cancelAndJoin();assertNull(outcome);assertTrue(snapshots.isNotEmpty());assertNotNull(ReviewDataSummary.decode(snapshots.last().stopped("CANCELLED").encode()));if(mode=="cancelbetween"){assertEquals(1,snapshots.last().opened);assertEquals(1,snapshots.last().batchSessions);assertEquals(1,snapshots.last().batchSessionsClosed)}
      }else{
-      val trace=mutableListOf<String>();val workers=mutableSetOf<GeckoSession>();var imageCount=0;var boundCallbacks=0;val result=ReviewDataRunner.run(host!!.geckoView,original,rows,mode!="consent",alive={true},fixtureOrigin="http://127.0.0.1:${server.port}",observe={trace.add(it)},snapshot={snapshots.add(it)},onBoundPost={source,owner,current,live->
+      var closedFailure:(()->Unit)?=null;val trace=mutableListOf<String>();val workers=mutableSetOf<GeckoSession>();var imageCount=0;var boundCallbacks=0;val result=ReviewDataRunner.run(host!!.geckoView,original,rows,mode!="consent",alive={true},fixtureOrigin="http://127.0.0.1:${server.port}",observe={trace.add(it);if(mode=="staleloaderror"&&it=="BATCH_CLOSED")closedFailure?.invoke()},snapshot={snapshots.add(it)},onBoundPost={source,owner,current,live->
+       if(mode=="loaderror")host!!.geckoView.session!!.let{it.progressDelegate!!.onPageStop(it,false)}
+       if(mode=="staleloaderror"){val worker=host!!.geckoView.session!!;val delegate=worker.progressDelegate!!;closedFailure={delegate.onPageStop(worker,false)}}
        if(mode=="batches")workers.add(host!!.geckoView.session!!)
        if(mode=="images"){
         assertEquals(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP,host!!.geckoView.session!!.settings.userAgentMode);assertEquals(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP,host!!.geckoView.session!!.settings.viewportMode);boundCallbacks++;val crops=DesktopThumbnails()
@@ -56,9 +60,10 @@ class ReviewDataInstrumentedTest{
        }
       })
       when(mode){
-       "batches"->{assertEquals(result.summary.report()+" trace="+trace.joinToString(","),"DONE",result.summary.reason);assertEquals(7,result.summary.opened);assertEquals(7,result.summary.bound);assertEquals(7,result.summary.textRead);assertEquals(3,result.summary.batchSessions);assertEquals(3,result.summary.batchSessionsClosed);assertEquals(3,workers.size);assertFalse(workers.contains(original));assertEquals(3,trace.count{it=="BATCH_OPENED"});assertEquals(3,trace.count{it=="BATCH_CLOSED"})}
+       "batches"->{assertEquals(result.summary.report()+" trace="+trace.joinToString(","),"DONE",result.summary.reason);assertEquals(7,result.summary.opened);assertEquals(7,result.summary.bound);assertEquals(7,result.summary.textRead);assertEquals(7,result.summary.batchSessions);assertEquals(7,result.summary.batchSessionsClosed);assertEquals(7,workers.size);assertFalse(workers.contains(original));assertEquals(7,trace.count{it=="BATCH_OPENED"});assertEquals(7,trace.count{it=="BATCH_CLOSED"})}
        "images"->{assertEquals(result.summary.report()+" trace="+trace.joinToString(","),"DONE",result.summary.reason);assertEquals(2,boundCallbacks);assertEquals(1,imageCount);assertEquals(0,result.summary.textRead);assertEquals(2,result.rows.size)}
-       "normal"->{assertEquals(result.summary.report()+" trace="+trace.joinToString(","),"DONE",result.summary.reason);assertEquals(2,result.summary.opened);assertEquals(1,result.summary.enriched);assertEquals(1,result.summary.unresolved);val actual=result.rows.single{it.postId==a};assertEquals(319000.0,actual.price!!,0.0);assertEquals(42.0,actual.area!!,0.0);assertEquals(2,actual.rooms);assertEquals("Testowa 12",actual.street);assertTrue(DesktopSummary.eligible(actual));assertNull(result.rows.single{it.postId==b}.price)}
+       "normal","staleloaderror"->{assertEquals(result.summary.report()+" trace="+trace.joinToString(","),"DONE",result.summary.reason);assertEquals(2,result.summary.opened);assertEquals(1,result.summary.enriched);assertEquals(1,result.summary.unresolved);val actual=result.rows.single{it.postId==a};assertEquals(319000.0,actual.price!!,0.0);assertEquals(42.0,actual.area!!,0.0);assertEquals(2,actual.rooms);assertEquals("Testowa 12",actual.street);assertTrue(DesktopSummary.eligible(actual));assertNull(result.rows.single{it.postId==b}.price)}
+       "loaderror"->{assertEquals("LOAD_ERROR",result.summary.reason);assertEquals(1,result.summary.opened);assertTrue(result.rows.isEmpty())}
        "lateforeign"->{assertNotEquals("DONE",result.summary.reason);assertTrue(result.rows.isEmpty());assertEquals(2,result.summary.opened);assertEquals(1,result.summary.enriched);assertTrue(snapshots.any{it.textRead==1&&it.enriched==1});assertEquals(result.summary,ReviewDataSummary.decode(result.summary.encode()))}
        "consent"->{assertEquals("NO_CONSENT_OR_INPUT",result.summary.reason);assertEquals(0,result.summary.opened);assertTrue(result.rows.isEmpty())}
        else->{assertNotEquals("DONE",result.summary.reason);assertTrue(result.rows.isEmpty())}
