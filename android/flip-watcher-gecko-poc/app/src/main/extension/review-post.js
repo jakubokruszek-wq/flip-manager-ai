@@ -71,9 +71,11 @@ function cards(w,m,core,preview,audit=evidence()){
 function selectOwnStoryData(body,group,id,now,deadline){
  const empty=(valid=false,limited=false,unsupported=false)=>({bodies:[],valid,limited,unsupported,rejected:0});
  if(typeof body!=='string'||body.length>4194304)return empty(false,true);
- let i=body.charCodeAt(0)===0xfeff?1:0;while(/[\t\n\r ]/.test(body[i]||'x'))i++;
+ let i=body.charCodeAt(0)===0xfeff?1:0;
+ function whitespace(){while(/[\t\n\r ]/.test(body[i]||'x')){if((i&4095)===0&&now()>=deadline)return false;i++;}return true;}
+ if(!whitespace())return empty(false,true);
  if(body.startsWith('for(;;);',i))i+=8;
- while(/[\t\n\r ]/.test(body[i]||'x'))i++;
+ if(!whitespace())return empty(false,true);
  if(!['{','['].includes(body[i]))return empty(false,false,true);
  const frames=[],outputs=[];let root=false,members=0,objects=0,rejected=0,limited=false;
  const ids=['post_id','postId','story_fbid','story_id','storyId'],urls=['url','permalink','permalink_url'];
@@ -250,8 +252,8 @@ function create(){const used=new Set();return {read(w,m,core,fields,preview){
    if(body.length>4194304||probeChars+body.length>8388608){audit.selectorIncomplete=1;audit.budgetLimited=1;audit.scriptSkipped++;continue;}probeChars+=body.length;
    const unicodeHint=/\\u003[0-9]/.test(body);
    const hint=body.includes(m.postId)||unicodeHint;
-   const identityHint=hint&&(unicodeHint||directHint.test(body)||genericHint.test(body)&&/"(?:__typename|typename)"\s*:\s*"[^"]*(?:Story|Post)[^"]*"/i.test(body));
-   if(hint&&!identityHint&&(priority===0||/^[\s\uFEFF]*(?:for\(;;\);)?\s*[\[{]/.test(body))){audit.scriptSkipped++;continue;}
+   const identityHint=hint&&(unicodeHint||directHint.test(body)||genericHint.test(body)&&/"(?:__typename|typename)"\s*:\s*"[^"]{0,100}(?:Story|Post)[^"]{0,100}"/i.test(body));
+   if(hint&&!identityHint){let head=body.trimStart();if(head.startsWith('for(;;);'))head=head.slice(8).trimStart();if(priority===0||head[0]==='{'||head[0]==='['){audit.scriptSkipped++;continue;}}
    if(identityHint){
     if(sourceChars+body.length>4194304){audit.selectorIncomplete=1;audit.budgetLimited=1;audit.scriptSkipped++;continue;}
     sourceChars+=body.length;audit.sourceKiB=Math.ceil(sourceChars/1024);count('selectedBlocks');

@@ -149,3 +149,9 @@ test('tracking on an actual structured permalink is canonicalized but comment/re
   const bad=hydrationEnv([{textContent:JSON.stringify(wrapRelay({...selectedStory(),permalink_url:link+suffix}))}]).run();assert.equal(bad.bound,0);assert.equal(bad.rows[0].price,null);
  }
 });
+
+test('malformed long type hints and whitespace prefixes do not enter an unbounded regex path',()=>{
+ const malformed='{"id":"'+id+'","__typename":"'+'Story'.repeat(120000);
+ const whitespace=' '.repeat(600000)+'window.route="'+link+'";';
+ for(const body of [malformed,whitespace]){const r=hydrationEnv([{textContent:body}]).run();assert.equal(r.bound,0);assert.equal(r.rows[0].price,null);}
+});
