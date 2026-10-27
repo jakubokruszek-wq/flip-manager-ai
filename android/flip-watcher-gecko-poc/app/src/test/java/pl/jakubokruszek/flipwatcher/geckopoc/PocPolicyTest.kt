@@ -112,7 +112,7 @@ class PocPolicyTest {
         assertEquals(PageKind.APPROVED_POST,PocPolicy.classify(url))
         assertFalse(PocPolicy.canScan(PageKind.APPROVED_POST))
         assertNull(PocPolicy.stopMessage(PageKind.APPROVED_POST,false))
-        for(bad in listOf(url+"?comment_id=123",url+"#comment",url.replace(group,"foreign"),url.replace("www.facebook.com","user@www.facebook.com"),url.replace("www.facebook.com","www.facebook.com:443")))assertNotEquals(PageKind.APPROVED_POST,PocPolicy.classify(bad))
+        for(bad in listOf(url+"?comment_id=123",url+"#comment",url.replace(group,"foreign"),url.replace("www.facebook.com","user@www.facebook.com"),url.replace("www.facebook.com","www.facebook.com:443")))assertFalse(PocPolicy.classify(bad)==PageKind.APPROVED_POST)
     }
 
 }
