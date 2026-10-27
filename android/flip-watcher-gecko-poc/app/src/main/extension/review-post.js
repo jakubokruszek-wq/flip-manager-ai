@@ -94,12 +94,23 @@ function create(){const used=new Set();return {read(w,m,core,fields,preview){
   // Exact same-post structured records may contain text absent from rendered markers.
   audit.readerStage=5;let bytes=0;const scripts=w.document.querySelectorAll('script:not([src])');audit.scriptNodes=Math.min(10000,scripts.length);
   const now=()=>w.performance?.now?.()??Date.now(),started=now();
-  for(let i=0;i<Math.min(64,scripts.length);i++){
+  // The inspection cap is distinct from the expensive-parser cap. Facebook
+  // often places its JSON payload after more than 64 bootstrap script tags.
+  const candidates=[];
+  for(let i=0;i<Math.min(256,scripts.length);i++){
+   const node=scripts[i],type=String(node.getAttribute?.('type')||'').trim().toLowerCase();
+   candidates.push({node,priority:Number(!(/^(?:application\/(?:ld\+)?json)$/.test(type)||node.hasAttribute?.('data-sjs')))});
+  }
+  candidates.sort((a,b)=>a.priority-b.priority);
+  if(scripts.length>256)audit.budgetLimited=1;
+  for(const {node} of candidates){
    if(now()-started>=500){audit.budgetLimited=1;break;}
-   const body=scripts[i].textContent||'';if(!body||body.length>524288||bytes+body.length>2097152){audit.scriptSkipped++;continue;}bytes+=body.length;
+   const body=node.textContent||'';if(!body||body.length>524288){audit.scriptSkipped++;continue;}
+   if(bytes+body.length>2097152){audit.budgetLimited=1;audit.scriptSkipped++;continue;}bytes+=body.length;
    // This exact-url evidence was already required AFTER parsing. Check it first:
    // unrelated Facebook bootstrap scripts must not monopolize the content thread.
    const ids=preview.explicitIds(body,m.groupId);if(!ids.has(m.postId)){audit.scriptSkipped++;continue;}audit.scriptMatched++;
+   if(audit.scriptParsed>=64){audit.budgetLimited=1;break;}
    let records=[];try{audit.scriptParsed++;records=core.extractStructuredRecordsFromText(body,'HYDRATION',{sourceType:'GROUP',sourceId:m.groupId,sourceUrl:'https://www.facebook.com/groups/'+m.groupId+'/',allowGroupRedirect:false})||[];}catch{audit.readerErrors=1;return empty('ERROR');}
    for(const r of records.slice(0,100))if(r.postId===m.postId&&ids.has(m.postId)&&preview.exact(r.permalink,m.groupId)===m.postId){
     const path=r.__structuredDiagnostics?.structuredTextPath;

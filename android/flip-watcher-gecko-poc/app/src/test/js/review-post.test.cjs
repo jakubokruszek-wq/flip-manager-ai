@@ -39,3 +39,23 @@ test('canonical exact document plus one own primary card binds without using com
 test('canonical fallback refuses conflicting metadata, foreign own links or ambiguous main cards',()=>{for(const kind of ['metadata','group','post','ambiguous']){const h=canonicalEnv();if(kind==='metadata')h.meta.url=link.replace(id,'550000000000092');if(kind==='group')h.anchor.href=link.replace(group,'foreign');if(kind==='post')h.anchor.href=link.replace(id,'550000000000092');if(kind==='ambiguous')h.main.querySelectorAll=()=>[h.card,{ownerDocument:h.doc,isConnected:true,parentElement:null,closest:()=>null}];const r=h.run();assert.equal(r.bound,0,kind);assert.equal(r.rows[0].price,null,kind);assert.equal(r.evidence.canonicalBound,0,kind);}});
 test('URL and a sole card without head canonical metadata never establish this alternative proof',()=>{const h=canonicalEnv();delete h.doc.head;assert.equal(h.run().bound,0);});
 test('an explicitly labelled comment cannot become a canonical primary post',()=>{const h=canonicalEnv();h.card.getAttribute=()=> 'Comment by someone';assert.equal(h.run().bound,0);});
+
+function hydrationEnv(scripts){const h=env();h.anchor.href='https://www.facebook.com/';const prior=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='script:not([src])'?scripts:prior(s);return h;}
+const ownHydration=()=>JSON.stringify({__typename:'Story',post_id:id,permalink_url:link,message:{text:'Sprzedam mieszkanie 42 m2. Cena 319000 zł. 2 pokoje.'}});
+test('exact own JSON after 64 bootstrap scripts is read with the real structured parser',()=>{
+ const scripts=Array.from({length:150},()=>({textContent:'{"bootstrap":true}'}));scripts.push({textContent:ownHydration()});
+ const r=hydrationEnv(scripts).run();assert.equal(r.bound,1);assert.equal(r.textRead,1);assert.equal(r.rows[0].price,319000);assert.equal(r.rows[0].area,42);assert.equal(r.evidence.scriptParsed,1);assert.equal(r.evidence.scriptSkipped,150);
+});
+test('typed JSON is inspected before bootstrap scripts exhaust the existing byte budget',()=>{
+ const scripts=Array.from({length:10},()=>({textContent:'x'.repeat(250000)}));scripts.push({getAttribute:k=>k==='type'?'application/json':null,textContent:ownHydration()});
+ const r=hydrationEnv(scripts).run();assert.equal(r.bound,1);assert.equal(r.textRead,1);assert.equal(r.evidence.scriptParsed,1);assert.equal(r.evidence.budgetLimited,1);
+});
+test('inspection never reads past 256 script nodes and reports incomplete coverage',()=>{
+ let outside=0;const scripts=Array.from({length:256},()=>({textContent:'{"bootstrap":true}'}));scripts.push({get textContent(){outside++;return ownHydration()}});
+ const r=hydrationEnv(scripts).run();assert.equal(outside,0);assert.equal(r.bound,0);assert.equal(r.evidence.budgetLimited,1);assert.equal(r.evidence.scriptParsed,0);
+});
+test('more inspection never exceeds 64 expensive parses or accepts a neighboring post',()=>{
+ const scripts=Array.from({length:100},()=>({textContent:JSON.stringify({url:link})}));let calls=0;
+ const stub={...core,extractStructuredRecordsFromText(){calls++;return[{postId:'550000000000092',permalink:link.replace(id,'550000000000092'),text:'Sprzedam mieszkanie 999 m2',media:[]}]}};
+ const h=hydrationEnv(scripts),r=reader.create().read(h.w,h.m,stub,f,p);assert.equal(calls,64);assert.equal(r.bound,0);assert.equal(r.rows[0].area,null);assert.equal(r.evidence.budgetLimited,1);
+});

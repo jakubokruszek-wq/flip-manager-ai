@@ -7,7 +7,7 @@ import org.json.JSONObject
 data class OcrSummary(val reason:String,val selected:Int,val images:Int,val texts:Int,val suggestions:Int,val errors:Int,val reviewFailure:ReviewDataSummary?=null,val reviewCompleted:ReviewDataSummary?=null){
  fun encode()=JSONObject().put("reason",reason).put("selected",selected).put("images",images).put("texts",texts).put("suggestions",suggestions).put("errors",errors).apply{reviewFailure?.let{put("reviewFailure",JSONObject(it.encode()))};reviewCompleted?.let{put("reviewCompleted",JSONObject(it.encode()))}}.toString()
  fun report()=buildString{
-  appendLine("OCR 0.5.45 • tylko lokalnie • $reason")
+  appendLine("OCR 0.5.46 • tylko lokalnie • $reason")
   appendLine("Posty wybrane: $selected • obrazy: $images • odczytane napisy: $texts • wyniki do sprawdzenia: $suggestions • błędy: $errors")
   if(reason=="PARTIAL")appendLine("OCR obrazów z pamięci ukończony; etap otwierania pozostałych postów zatrzymany. Wynik częściowy.")
   (reviewFailure?:reviewCompleted)?.let{
