@@ -7,12 +7,13 @@ import org.json.JSONObject
 data class OcrSummary(val reason:String,val selected:Int,val images:Int,val texts:Int,val suggestions:Int,val errors:Int,val reviewFailure:ReviewDataSummary?=null,val reviewCompleted:ReviewDataSummary?=null){
  fun encode()=JSONObject().put("reason",reason).put("selected",selected).put("images",images).put("texts",texts).put("suggestions",suggestions).put("errors",errors).apply{reviewFailure?.let{put("reviewFailure",JSONObject(it.encode()))};reviewCompleted?.let{put("reviewCompleted",JSONObject(it.encode()))}}.toString()
  fun report()=buildString{
-  appendLine("OCR 0.5.50 • tylko lokalnie • $reason")
+  appendLine("OCR 0.5.51 • tylko lokalnie • $reason")
   appendLine("Posty wybrane: $selected • obrazy: $images • odczytane napisy: $texts • wyniki do sprawdzenia: $suggestions • błędy: $errors")
   if(reason=="PARTIAL")appendLine("OCR obrazów z pamięci ukończony; etap otwierania pozostałych postów zatrzymany. Wynik częściowy.")
   (reviewFailure?:reviewCompleted)?.let{
    appendLine(if(it.reason=="DONE")"\nEtap otwierania zakończony." else "\nPrzyczyna etapu otwierania: ${it.reason}. ${it.explanation()}")
    appendLine("Otwarto ${it.opened}/${it.selected} • potwierdzono ${it.bound} • tekst ${it.textRead}."+(if(it.reason!="DONE")" Zatrzymanie nie dowodzi braku ofert." else ""))
+   appendLine("Uzupełniono dane: ${it.enriched} • bez nowych pól: ${it.unchanged} • bez odczytanego tekstu: ${it.unresolved} • poza filtrem: ${it.filtered}.")
    if(it.batchSessions>0)appendLine("Sesje robocze otwarte ${it.batchSessions} • zamknięte ${it.batchSessionsClosed}.")
    append(ReviewEvidence.report(it.evidence))
   }

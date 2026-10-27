@@ -155,3 +155,53 @@ test('malformed long type hints and whitespace prefixes do not enter an unbounde
  const whitespace=' '.repeat(600000)+'window.route="'+link+'";';
  for(const body of [malformed,whitespace]){const r=hydrationEnv([{textContent:body}]).run();assert.equal(r.bound,0);assert.equal(r.rows[0].price,null);}
 });
+
+const photoUrl='https://scontent.xx.fbcdn.net/v/photo.jpg?signature=exact';
+const photo=()=>({__typename:'Photo',id:'880000000000001',image:{uri:photoUrl,width:800,height:400}});
+const photoStory=()=>({...selectedStory(),attachments:[{media:photo()}]});
+const photoSelect=value=>reader.selectOwnStoryData(JSON.stringify(value),group,id,()=>0,500,true);
+test('photo proof crosses attachment arrays but never enters text projection or native rows',()=>{
+ const selected=photoSelect(wrapRelay(photoStory()));assert.deepEqual(selected.photos,[photoUrl]);assert(!selected.bodies.join('').includes(photoUrl));
+ const h=hydrationEnv([{textContent:JSON.stringify(wrapRelay(photoStory()))}]),r=h.run();assert.equal(r.bound,1);assert.deepEqual(reader.ownPhotoSources(h.w,h.m),[photoUrl]);assert(!JSON.stringify(r).includes(photoUrl));
+ assert.deepEqual(reader.ownPhotoSources({...h.w,document:{}},h.m),[]);assert.deepEqual(reader.ownPhotoSources(h.w,{...h.m,postId:'550000000000092'}),[]);
+});
+test('comment shared profile video and foreign-story photo sources never establish own-photo proof',()=>{
+ for(const key of ['comments','feedback','shared_story','quoted_story','original_story','attached_story','actor','profile_picture','video','caption']){
+  const story={...selectedStory(),[key]:{media:photo()}};assert.deepEqual(photoSelect(story).photos,[],key);
+ }
+ const foreign={...photoStory(),post_id:'550000000000092',permalink_url:link.replace(id,'550000000000092')};
+ assert.deepEqual(photoSelect({...selectedStory(),related:foreign}).photos,[]);
+ assert.deepEqual(photoSelect({...selectedStory(),related:{__typename:'Story',id:'opaque-foreign',attachments:[{media:photo()}]}}).photos,[]);
+ assert.deepEqual(photoSelect({child:photoStory(),__typename:'Story',post_id:'550000000000092'}).photos,[]);
+ assert.deepEqual(photoSelect({child:photoStory(),__typename:'Comment'}).photos,[]);
+});
+test('photo URI requires typed Photo, dimensions and exact safe CDN URL',()=>{
+ for(const kind of ['untyped','small','url','http','host','credentials','fragment','free']){
+  const ph=photo();if(kind==='untyped')delete ph.__typename;if(kind==='small')ph.image.width=40;if(kind==='url'){ph.image.url=ph.image.uri;delete ph.image.uri;}if(kind==='http')ph.image.uri=photoUrl.replace('https:','http:');if(kind==='host')ph.image.uri=photoUrl.replace('scontent.xx.fbcdn.net','fbcdn.net.evil.test');if(kind==='credentials')ph.image.uri=photoUrl.replace('https://','https://user@');if(kind==='fragment')ph.image.uri+='#x';
+  const story={...selectedStory(),attachments:[{media:kind==='free'?ph.image:ph}]};assert.deepEqual(photoSelect(story).photos,[],kind);
+ }
+});
+test('invalid or truncated JSON cannot leave a partial photo proof',()=>{
+ const body=JSON.stringify(photoStory());for(const raw of [body+'x',body.slice(0,-1),'{"story":'+body+',"story":null}']){const r=reader.selectOwnStoryData(raw,group,id,()=>0,500,true);assert.equal(r.valid,false);assert(!r.photos?.length);}
+});
+test('structured identity without a DOM permalink captures only its exact rendered photo end to end',async()=>{
+ const imageApi=require('../../main/extension/review-images.js');
+ for(const kind of ['own','foreign','comment','remap','loading','signedquery','ambiguous','noarticle','lateunload','foreignparent']){
+  const h=hydrationEnv([{textContent:JSON.stringify(wrapRelay(photoStory()))}]);h.w.innerHeight=1600;let waits=0;h.w.setTimeout=fn=>{waits++;if(kind==='loading'&&waits===2)image.complete=true;fn();};
+  const image={ownerDocument:h.doc,isConnected:true,src:kind==='signedquery'?photoUrl+'x':photoUrl,complete:kind!=='loading',naturalWidth:800,naturalHeight:400,closest:s=>s==='[role="article"],article'?h.card:kind==='comment'?{}:null,checkVisibility:()=>true,scrollIntoView(){},getBoundingClientRect:()=>({left:100,top:100,right:900,bottom:500,width:800,height:400}),contains:()=>false};
+  h.card.querySelectorAll=s=>s==='a[href]'?[h.anchor]:s==='img'?[image]:[];const prior=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='img'?[image]:prior(s);h.doc.elementFromPoint=()=>image;
+  const r=h.run();assert.equal(r.bound,1);assert.equal(r.evidence.boundCards,0);if(kind==='foreign')h.anchor.href=link.replace(id,'550000000000092');
+  if(kind==='noarticle')image.closest=()=>null;
+  if(kind==='ambiguous'){const other={...h.card};const second={...image,closest:s=>s==='[role="article"],article'?other:null};const q=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='img'?[image,second]:q(s);}
+  if(kind==='foreignparent'){const outer={querySelectorAll:()=>[{href:link.replace(id,'550000000000092')}],parentElement:null,closest:()=>null};h.card.parentElement={closest:()=>outer};}
+  const calls=[];const result=await imageApi.create().read(h.w,{...h.m,ocrConsent:true},core,p,reader.exact,async q=>{calls.push(q.action);if(q.action==='photos'&&kind==='remap')image.src=photoUrl+'other';if(q.action==='photos'&&kind==='lateunload')image.complete=false;return{accepted:true,count:1,requestId:nonce};});
+  assert.equal(result.count,kind==='own'||kind==='loading'?1:0,kind);if(kind==='remap'||kind==='lateunload')assert.deepEqual(calls,['photos','drop']);
+ }
+});
+
+test('photo proof is capped and a new validated read revokes old sources',()=>{
+ const story={...selectedStory(),attachments:Array.from({length:30},(_,i)=>({media:{...photo(),image:{uri:photoUrl+'&n='+i,width:800,height:400}}}))};
+ assert.equal(photoSelect(story).photos.length,20);
+ const script={textContent:JSON.stringify(photoStory())},h=hydrationEnv([script]);assert.equal(h.run().bound,1);assert.deepEqual(reader.ownPhotoSources(h.w,h.m),[photoUrl]);
+ script.textContent=JSON.stringify(selectedStory());assert.equal(h.run().bound,1);assert.deepEqual(reader.ownPhotoSources(h.w,h.m),[]);
+});

@@ -6,20 +6,40 @@ function create(){const used=new Set();return {async read(w,m,core,preview,exact
  const safe=()=>m.consent===true&&m.ocrConsent===true&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(m.nonce||'')&&w.location.href===m.expectedUrl&&exact(w.location.href,m.groupId,m.postId,m.fixture===true)&&['interactive','complete'].includes(w.document.readyState)&&w.document.visibilityState==='visible'&&!w.document.hidden&&w.document.hasFocus?.()===true&&!/log in|logowanie|captcha|checkpoint|security check/i.test(w.document.title||'')&&!w.document.querySelector('input[type="password"],form[action*="login"],form[action*="checkpoint"],iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="captcha"],[role="alertdialog"]');
  if(!safe()||used.has(m.nonce))return result('STOP');used.add(m.nonce);while(used.size>32)used.delete(used.values().next().value);
  const cards=root.FlipReviewPost.cards(w,m,core,preview);
- if(cards.length!==1)return result('OK');const card=cards[0];let region=card;
- const zone=card.closest('[role="dialog"]')||card.closest('main,[role="main"]');
+ if(cards.length>1)return result('OK');const card=cards[0]||null;let region=card;
+ const sources=()=>root.FlipReviewPost.ownPhotoSources(w,m);
+ const source=n=>n.currentSrc||n.src||'';
+ const proofOwn=n=>{
+  if(!sources().includes(source(n)))return false;
+  let parent=n.closest('[role="article"],article'),depth=0;if(!parent)return false;
+  while(parent&&depth++<20){
+   if(parent.closest(excluded)||/comment|komentarz|reply|odpowiedź/i.test(parent.getAttribute?.('aria-label')||''))return false;
+   const anchors=Array.from(parent.querySelectorAll('a[href]'));if(anchors.length>200)return false;
+   for(const a of anchors){const p=core.parsePostLink(a.href);if(p&&(p.sourceType!=='GROUP'||p.sourceId!==m.groupId||p.postId!==m.postId))return false;}
+   parent=parent.parentElement?.closest('[role="article"],article');
+  }
+  return !parent;
+ };
+ if(!card&&!sources().length)return result('OK');
+ const zone=card?.closest('[role="dialog"]')||card?.closest('main,[role="main"]');
  if(zone&&root.FlipReviewPost.cardId(card,core,preview,m.groupId,w.location.href)===m.postId){const links=Array.from(zone.querySelectorAll('a[href]'));const articles=Array.from(zone.querySelectorAll('[role="article"],article'));if(links.length<=200&&articles.length===1&&articles[0]===card){const posts=links.map(n=>core.parsePostLink(n.href)).filter(Boolean);if(posts.length&&posts.every(p=>p.sourceType==='GROUP'&&p.sourceId===m.groupId&&p.postId===m.postId))region=zone;}}
 
- const own=n=>safe()&&card.isConnected!==false&&root.FlipReviewPost.cards(w,m,core,preview).includes(card)&&n.ownerDocument===w.document&&n.isConnected!==false&&(n.closest('[role="article"],article')===card||region!==card&&!n.closest('[role="article"],article'))&&region.contains(n)&&!n.closest(excluded)&&n.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})!==false;
- const images=Array.from(region.querySelectorAll('img')).slice(0,100).filter(n=>own(n)&&n.complete&&n.naturalWidth>=200&&n.naturalHeight>=120).filter(n=>{const r=n.getBoundingClientRect();return r.width>=120&&r.height>=100;});
+ const own=n=>safe()&&n.ownerDocument===w.document&&n.isConnected!==false&&!n.closest(excluded)&&n.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})!==false&&(
+  card&&card.isConnected!==false&&root.FlipReviewPost.cards(w,m,core,preview).includes(card)&&(n.closest('[role="article"],article')===card||region!==card&&!n.closest('[role="article"],article'))&&region.contains(n)||proofOwn(n));
+ const pool=region?Array.from(region.querySelectorAll('img')).slice(0,100):Array.from(w.document.querySelectorAll('img')).slice(0,500);
+ const images=pool.filter(n=>own(n)).filter(n=>{const r=n.getBoundingClientRect();return r.width>=120&&r.height>=100;});
+ // Reused own photo in multiple unbound cards is ambiguous; never choose the first card.
+ if(!card&&new Set(images.map(n=>n.closest('[role="article"],article'))).size!==1)return result('OK');
  // One image per post gives every unresolved post a chance within the shared 20-image limit.
  // Alt text is only a local ranking hint, never evidence of fields or identity.
  images.sort((a,b)=>Number(/text|napis|tekst|mieszkan|sprzed|cena/i.test(b.alt||''))-Number(/text|napis|tekst|mieszkan|sprzed|cena/i.test(a.alt||''))||b.naturalWidth*b.naturalHeight-a.naturalWidth*a.naturalHeight);
  for(const image of images.slice(0,3)){
   if(!own(image))return result('STOP');image.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});await new Promise(r=>w.setTimeout(r,250));if(!own(image))return result('STOP');
+  for(let attempt=0;attempt<3&&(!image.complete||image.naturalWidth<200||image.naturalHeight<120);attempt++){await new Promise(r=>w.setTimeout(r,250));if(!own(image))return result('STOP');}
+  if(!image.complete||image.naturalWidth<200||image.naturalHeight<120)continue;
   const box=()=>{const v=w.visualViewport,left=Number(v?.offsetLeft)||0,top=Number(v?.offsetTop)||0,width=Number(v?.width)||w.innerWidth,height=Number(v?.height)||w.innerHeight,r=image.getBoundingClientRect();const x=Math.max(left,r.left),y=Math.max(top,r.top),right=Math.min(left+width,r.right),bottom=Math.min(top+height,r.bottom);return {x:x-left,y:y-top,width:right-x,height:bottom-y,vw:width,vh:height,ox:left,oy:top};};
-  const tile=box();if(tile.width<120||tile.height<100)continue;
-  const hit=()=>{const b=box();for(const k of ['x','y','width','height','vw','vh','ox','oy'])if(Math.abs(b[k]-tile[k])>1)return false;for(const [x,y] of [[.2,.2],[.5,.5],[.8,.8]]){const h=w.document.elementFromPoint(tile.ox+tile.x+tile.width*x,tile.oy+tile.y+tile.height*y);if(h!==image&&!image.contains(h)&&!(h?.contains?.(image)&&w.getComputedStyle(image).pointerEvents==='none'))return false;}return own(image);};
+  const tile=box(),capturedSource=source(image);if(tile.width<120||tile.height<100)continue;
+  const hit=()=>{if(!image.complete||image.naturalWidth<200||image.naturalHeight<120||source(image)!==capturedSource)return false;const b=box();for(const k of ['x','y','width','height','vw','vh','ox','oy'])if(Math.abs(b[k]-tile[k])>1)return false;for(const [x,y] of [[.2,.2],[.5,.5],[.8,.8]]){const h=w.document.elementFromPoint(tile.ox+tile.x+tile.width*x,tile.oy+tile.y+tile.height*y);if(h!==image&&!image.contains(h)&&!(h?.contains?.(image)&&w.getComputedStyle(image).pointerEvents==='none'))return false;}return own(image);};
   if(!hit())continue;
   const ack=await request({type:'desktopViewportRequest',nonce:m.nonce,action:'photos',width:tile.vw,height:tile.vh,tiles:[{postId:m.postId,slot:0,x:tile.x,y:tile.y,width:tile.width,height:tile.height}]});
   if(!ack?.accepted)return result(safe()?'OK':'STOP');

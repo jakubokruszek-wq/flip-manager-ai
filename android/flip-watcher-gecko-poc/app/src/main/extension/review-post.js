@@ -1,4 +1,4 @@
-/* Fresh native consent, one exact permalink, rendered DOM only. No network, storage or input values. */
+/* Fresh native consent, one exact permalink, DOM and embedded JSON only. No network, storage or input values. */
 (function(root){'use strict';
 function exact(raw,group,id,fixture=false){try{const u=new URL(raw);return /^\d{5,30}$/.test(id)&&/^[A-Za-z0-9._-]{1,100}$/.test(group)&&!u.username&&!u.password&&!u.search&&!u.hash&&((u.protocol==='https:'&&!u.port&&['www.facebook.com','facebook.com','m.facebook.com'].includes(u.hostname))||(fixture&&u.protocol==='http:'&&u.hostname==='127.0.0.1'))&&['/groups/'+group+'/posts/'+id+'/','/groups/'+group+'/permalink/'+id+'/'].includes(u.pathname.endsWith('/')?u.pathname:u.pathname+'/');}catch{return false;}}
 const blocked='input[type="password"],form[action*="login"],form[action*="checkpoint"],iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="captcha"]';
@@ -68,7 +68,9 @@ function cards(w,m,core,preview,audit=evidence()){
 // Select an own Story from deeply nested JSON without building the full payload
 // object graph. Every ancestor is retained while scanning: comments, shared
 // stories and attachments cannot become root-owned text after projection.
-function selectOwnStoryData(body,group,id,now,deadline){
+const photoProofs=new WeakMap();
+function ownPhotoSources(w,m){const p=photoProofs.get(w.document);return p&&p.url===w.location.href&&p.url===m.expectedUrl&&p.id===m.postId&&p.group===m.groupId?p.sources:[];}
+function selectOwnStoryData(body,group,id,now,deadline,collectPhotos=false){
  const empty=(valid=false,limited=false,unsupported=false)=>({bodies:[],valid,limited,unsupported,rejected:0});
  if(typeof body!=='string'||body.length>4194304)return empty(false,true);
  let i=body.charCodeAt(0)===0xfeff?1:0;
@@ -79,7 +81,7 @@ function selectOwnStoryData(body,group,id,now,deadline){
  if(!['{','['].includes(body[i]))return empty(false,false,true);
  const frames=[],outputs=[];let root=false,members=0,objects=0,rejected=0,limited=false;
  const ids=['post_id','postId','story_fbid','story_id','storyId'],urls=['url','permalink','permalink_url'];
- const interesting=new Set([...ids,'id','__typename','typename',...urls,'message','text','body']);
+ const interesting=new Set([...ids,'id','__typename','typename',...urls,'message','text','body',...(collectPhotos?['uri','width','height']:[])]);
  const forbidden=k=>k!=='commentable_feed_story'&&/(?:comment|feedback|shared|quoted|crosspost|reshare|original_story|attached_story|attachment|media|caption)/i.test(k);
  const fail=()=>({bodies:[],valid:false,limited,unsupported:false,rejected});
  const number=/-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/y;
@@ -107,6 +109,17 @@ function selectOwnStoryData(body,group,id,now,deadline){
   if(!owner.key&&!/story|post/i.test(String(owner.type)))return false;
   return urls.some(k=>{try{const u=new URL(f.own[k]);return u.protocol==='https:'&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&/^\/groups\/[^/]+\/(?:posts|permalink)\/\d{5,30}\/?$/.test(u.pathname)&&!sourceLink(u.href);}catch{return false;}});
  }
+ function finishMedia(f){
+  if(!collectPhotos||f.mediaBlocked)return;
+  const owner=identity(f),type=String(owner.type);
+  if(owner.conflict||foreignPostLink(f,owner)||owner.key&&(!owner.valid||owner.id!==id)||/story|post/i.test(type)&&(!owner.valid||owner.id!==id)||/comment|feedback|shared|quoted|crosspost|reshare|reply|video|actor|profile/i.test(type))return;
+  // A URI is media evidence only below a typed Photo, never a free URL or avatar.
+  if(/^(?:image|photo_image|viewer_image|large_image|full_image|preview_image)$/i.test(f.relation.key||'')&&Number(f.own.width)>=200&&Number(f.own.height)>=120){
+   try{const u=new URL(f.own.uri);if(u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&!u.hash&&/(?:^|\.)fbcdn\.net$/i.test(u.hostname)&&u.href.length<=8192&&f.mediaRaw.size<20)f.mediaRaw.add(u.href);}catch{}
+  }
+  if(type==='Photo'){for(const src of f.mediaRaw)if(f.mediaPhotos.size<20)f.mediaPhotos.add(src);f.mediaRaw.clear();}
+  const p=f.relation.parent;if(p){for(const src of f.mediaPhotos)if(p.mediaPhotos.size<20)p.mediaPhotos.add(src);for(const src of f.mediaRaw)if(p.mediaRaw.size<20)p.mediaRaw.add(src);}
+ }
  function finish(f){
   const owner=identity(f),linkKeys=urls.filter(k=>Object.hasOwn(f.own,k));
   for(const k of linkKeys){const url=sourceLink(f.own[k]);if(url&&f.links.size<8)f.links.add(url);}
@@ -120,7 +133,7 @@ function selectOwnStoryData(body,group,id,now,deadline){
     const result=Object.create(null);result[owner.key]=owner.id;result.permalink_url=[...f.links][0];
     if(f.own.__typename)result.__typename=f.own.__typename;else if(f.own.typename)result.typename=f.own.typename;
     if(text)result.message={text};
-    const candidate={data:result,ancestors:frames.slice()};
+    const candidate={data:result,ancestors:frames.slice(),photos:collectPhotos?[...f.mediaPhotos]:[]};
     if(outputs.length>=8){limited=true;const empty=outputs.findIndex(o=>!o.data.message);if(text&&empty>=0)outputs[empty]=candidate;}
     else outputs.push(candidate);
    }
@@ -164,11 +177,11 @@ function selectOwnStoryData(body,group,id,now,deadline){
   if(c==='{'||c==='['){
    const relation=takeValue();if(!relation)return fail();
    if(frames.length>=128||++objects>20000){limited=true;return fail();}
-   frames.push({kind:c,state:'first',key:null,keys:new Set(),own:Object.create(null),messages:Object.create(null),links:new Set(),childTexts:new Set(),blocked:relation.blocked,relation});i++;continue;
+   frames.push({kind:c,state:'first',key:null,keys:new Set(),own:Object.create(null),messages:Object.create(null),links:new Set(),childTexts:new Set(),blocked:relation.blocked,mediaBlocked:!!relation.parent?.mediaBlocked||/comment|feedback|shared|quoted|crosspost|reshare|original_story|attached_story|actor|profile|avatar|icon|video|caption/i.test(relation.key||'')&&relation.key!=='commentable_feed_story',mediaRaw:new Set(),mediaPhotos:new Set(),relation});i++;continue;
   }
   if(c==='}'||c===']'){
    if(!f||f.kind!==(c==='}'?'{':'[')||!['first','after'].includes(f.state))return fail();
-   frames.pop();if(f.kind==='{'&&finish(f)===false)return fail();i++;continue;
+   frames.pop();finishMedia(f);if(f.kind==='{'&&finish(f)===false)return fail();i++;continue;
   }
   if(c===':'){if(f?.kind!=='{'||f.state!=='colon')return fail();f.state='value';i++;continue;}
   if(c===','){if(!f||f.state!=='after')return fail();f.state=f.kind==='{'?'key':'value';i++;continue;}
@@ -177,14 +190,14 @@ function selectOwnStoryData(body,group,id,now,deadline){
   if(c==='f'&&body.startsWith('false',i)){scalar(relation,null);i+=5;continue;}
   if(c==='n'&&body.startsWith('null',i)){scalar(relation,null);i+=4;continue;}
   number.lastIndex=i;const match=number.exec(body);if(!match)return fail();i=number.lastIndex;
-  const n=Number(match[0]);scalar(relation,Number.isSafeInteger(n)&&/^\d{5,15}$/.test(match[0])?match[0]:null);
+  const n=Number(match[0]);scalar(relation,collectPhotos&&['width','height'].includes(relation.key)&&Number.isSafeInteger(n)?n:Number.isSafeInteger(n)&&/^\d{5,15}$/.test(match[0])?match[0]:null);
  }
  if(frames.length||!root)return fail();
  const accepted=outputs.filter(candidate=>!candidate.ancestors.some(a=>{
   const owner=identity(a);return a.blocked||owner.conflict||foreignPostLink(a,owner)||owner.valid&&owner.id!==id||/comment|feedback|shared|quoted|crosspost|reshare|reply/i.test(String(owner.type));
  }));
  rejected+=outputs.length-accepted.length;
- return {bodies:accepted.map(o=>JSON.stringify(o.data)),valid:true,limited,unsupported:false,rejected};
+ return {bodies:accepted.map(o=>JSON.stringify(o.data)),valid:true,limited,unsupported:false,rejected,...(collectPhotos?{photos:[...new Set(accepted.flatMap(o=>o.photos))].slice(0,20)}:{})};
 }
 
 function create(){const used=new Set();return {read(w,m,core,fields,preview){
@@ -192,6 +205,7 @@ function create(){const used=new Set();return {read(w,m,core,fields,preview){
  try{audit.readerStage=1;
  const safe=()=>m.consent===true&&m.reviewConsent===true&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(m.nonce||'')&&w.location.href===m.expectedUrl&&exact(w.location.href,m.groupId,m.postId,m.fixture===true)&&['interactive','complete'].includes(w.document.readyState)&&w.document.visibilityState==='visible'&&w.document.hidden!==true&&w.document.hasFocus?.()===true&&!/log in|logowanie|captcha|checkpoint|security check|potwierdź.*tożsamość/i.test(w.document.title||'')&&!w.document.querySelector(blocked)&&!w.document.querySelector('[role="alertdialog"]');
  if(!safe()||used.has(m.nonce))return empty();used.add(m.nonce);while(used.size>32)used.delete(used.values().next().value);
+ photoProofs.delete(w.document);const ownPhotos=new Set();
  model=preview.createModel(core,fields,m.groupId);let bound=0,textRead=0;
  audit.readerStage=2;
   if(m.previousRow?.postId!==m.postId||!model.merge(m.previousRow))return empty();
@@ -257,10 +271,10 @@ function create(){const used=new Set();return {read(w,m,core,fields,preview){
    if(identityHint){
     if(sourceChars+body.length>4194304){audit.selectorIncomplete=1;audit.budgetLimited=1;audit.scriptSkipped++;continue;}
     sourceChars+=body.length;audit.sourceKiB=Math.ceil(sourceChars/1024);count('selectedBlocks');
-    const selected=selectOwnStoryData(body,m.groupId,m.postId,now,started+500);count('selectorRejected',selected.rejected);
+    const selected=selectOwnStoryData(body,m.groupId,m.postId,now,started+500,true);count('selectorRejected',selected.rejected);
     if(selected.limited){audit.selectorIncomplete=1;audit.budgetLimited=1;}
     if(selected.valid&&selected.bodies.length){
-     count('selectedStories',selected.bodies.length);audit.scriptMatched++;
+     count('selectedStories',selected.bodies.length);audit.scriptMatched++;for(const src of selected.photos||[])if(ownPhotos.size<20)ownPhotos.add(src);
      for(const payload of selected.bodies){
       // Recheck actual projected source URL evidence with the unchanged parser.
       const ids=preview.explicitIds(payload,m.groupId);if(!ids.has(m.postId))continue;
@@ -280,8 +294,9 @@ function create(){const used=new Set();return {read(w,m,core,fields,preview){
   }
   if(!safe())return empty();const row=model.rows().find(r=>r.postId===m.postId);if(!row)return empty();
   const stats=preview.zero();stats.verified=1;stats.candidates=1;stats.desktop=Number(w.innerWidth>=900);
+  if(bound)photoProofs.set(w.document,{url:w.location.href,id:m.postId,group:m.groupId,sources:Object.freeze([...ownPhotos])});
   audit.readerStage=6;return {status:'OK',reason:'DONE',rows:[row],stats,bound,textRead,evidence:{...audit}};
  }catch{audit.readerErrors=1;return empty('ERROR');}finally{model?.clear();}
 }};}
-const api={exact,create,cards,cardId,canonicalPrimary,selectOwnStoryData,evidenceKeys};if(typeof module!=='undefined')module.exports=api;root.FlipReviewPost=api;
+const api={exact,create,cards,cardId,canonicalPrimary,selectOwnStoryData,ownPhotoSources,evidenceKeys};if(typeof module!=='undefined')module.exports=api;root.FlipReviewPost=api;
 })(globalThis);
