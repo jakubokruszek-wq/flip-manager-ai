@@ -60,8 +60,8 @@ test('fair feed capture takes one image of a post per frame without weakening id
  const shot=rawPhotos(h.w,core,group,nodes,slots,new Set([id]),[],null,null,new Set([id]));
  assert.equal(shot.tiles.length,1);assert(shot.valid());shot.keys[0].done=true;
  const next=rawPhotos(h.w,core,group,nodes,slots,new Set([id]),[],null,null,new Set([id]));
- assert.equal(next.tiles.length,1);assert.equal(next.tiles[0].slot,1);
- h.image.currentSrc+='changed';assert.equal(next.valid(),false);
+ assert.equal(next,null);
+ h.image.currentSrc+='changed';assert.equal(shot.valid(),false);
 });
 
 test('commentable_feed_story is a post container, while actual comment containers remain excluded',()=>{
@@ -80,5 +80,5 @@ test('new manual post is selected before extra images of a previously captured o
  const nodes=card=>[{node:card===other?second:h.image,item:{mediaId:card===other?'880000000000002':'880000000000003'}}];
  const slots=new Map([[offer,new Map([['880000000000001',{slot:0,done:true}]])]]);
  const shot=rawPhotos(h.w,core,group,nodes,slots,new Set([offer,manual]),[],null,null,new Set([manual]));
- assert.deepEqual(shot.tiles.map(t=>t.postId),[manual,offer]);assert(shot.valid());
+ assert.deepEqual(shot.tiles.map(t=>t.postId),[manual]);assert(shot.valid());
 });

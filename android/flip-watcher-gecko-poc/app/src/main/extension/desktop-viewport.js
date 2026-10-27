@@ -181,7 +181,7 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null,
  const captured=id=>[...(slots.get(id)?.values()||[])].some(mark=>mark.done);
  if(preferredIds)targets.sort((a,b)=>Number(captured(a.id))-Number(captured(b.id))||Number(preferredIds.has(b.id))-Number(preferredIds.has(a.id)));
  for(const {card,id,network:fromNetwork,documentSource} of targets){
-  if(preferredIds&&tiles.some(tile=>tile.postId===id))continue;
+  if(preferredIds&&(captured(id)||tiles.some(tile=>tile.postId===id)))continue;
   if(!allowedIds.has(id))continue;
   if(!documentSource)count(fromNetwork?'photoNetworkCards':'photoExactCards');
   if(!slots.has(id)){if(slots.size===20)continue;slots.set(id,new Map());}const media=slots.get(id);
