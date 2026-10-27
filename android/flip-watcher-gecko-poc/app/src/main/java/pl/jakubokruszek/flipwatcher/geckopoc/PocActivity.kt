@@ -268,7 +268,7 @@ class PocActivity : ComponentActivity() {
     }
     private fun cancelReview(code:String){
         if(!reviewBusy)return
-        if(reviewOcrActive){saveOcr((ocrLast?:OcrSummary("INTERRUPTED",reviewTotal,0,0,0,0)).copy(reason=if(code in setOf("PAUSED","CANCELLED"))code else "ERROR",reviewFailure=reviewSnapshot?.stopped(code)));ocrReportPending=true;reviewOcrActive=false}
+        if(reviewOcrActive){saveOcr((ocrLast?:OcrSummary("INTERRUPTED",reviewTotal,0,0,0,0)).copy(reason=if(code in setOf("PAUSED","CANCELLED"))code else if(code=="DEADLINE")"TIMEOUT" else "ERROR",reviewFailure=reviewSnapshot?.stopped(code)));ocrReportPending=true;reviewOcrActive=false}
         saveReviewResult((reviewSnapshot?:ReviewDataSummary("INTERRUPTED",reviewTotal,0,0,0,0,0,0,0)).stopped(code));reviewReportPending=true
         reviewBusy=false;reviewClosing=true;reviewJob?.cancel();clearDesktopDetails()
         output.text="Uzupełnianie zatrzymane: $code. Podgląd wyczyszczony; brak skanu i uploadu.";render()
@@ -320,6 +320,7 @@ class PocActivity : ComponentActivity() {
         saveOcr((ocrLast?:OcrSummary("INTERRUPTED",0,0,0,0,0)).copy(reason=if(reason in setOf("PAUSED","CANCELLED","CONTEXT"))reason else "ERROR"));ocrReportPending=true
     }
     private fun askOcr(){
+        if(ReviewDataGate.queue(desktopRows).isNotEmpty()){askReviewData(withOcr=true);return}
         if(busyForTabs()||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
         val original=session?:return;val source=channel?:return;val generation=source.connectionGeneration;val target=url;val snapshot=desktopRows
         val count=snapshot.count{(DesktopPresentation.reviewable(it)||DesktopSummary.eligible(it))&&desktopThumbnails.ocrRows(it.postId).isNotEmpty()}
@@ -358,20 +359,33 @@ class PocActivity : ComponentActivity() {
     private fun askReviewData(withOcr:Boolean=false){
         val original=session?:return;val snapshot=desktopRows
         val queue=ReviewDataGate.queue(snapshot)
+        val selectedOcr=snapshot.count{DesktopPresentation.reviewable(it)||DesktopSummary.eligible(it)}
+        val cachedChannel=channel;val cachedGeneration=cachedChannel?.connectionGeneration;val cachedUrl=url
         if(busyForTabs()||queue.isEmpty()||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
         reviewConsentDialog?.dismiss()
         reviewConsentDialog=AlertDialog.Builder(this).setTitle(if(withOcr)"Otwórz posty + OCR — nowa zgoda" else "Uzupełnij dane — nowa zgoda")
-            .setMessage((if(withOcr)"OCR: po odczycie treści odczytać lokalnie napisy z jednego widocznego zdjęcia każdego potwierdzonego posta? Maks. 20 obrazów, jeden na post; najpierw posty bez tekstu. Sugestie osobno, DO SPRAWDZENIA, bez nadpisywania pól.\n\n" else "")+"Otworzyć kolejno ${queue.size} dokładnych linków z Do ręcznego sprawdzenia? Jedna zatwierdzona grupa, do 20 postów i 3 minut. Odczyt DOM i osadzonych danych; bez odczytu odpowiedzi sieciowych i bez klikania reakcji, komentarzy lub udostępniania.\n\nBez dodatkowego pobierania mediów, uploadu, skanu i kolektora. Tylko potwierdzone ID; pola heurystyczne. Komentarze, cytaty i cudze posty są wykluczone. Dane i obrazy w RAM; zapis tylko liczników. Logowanie/CAPTCHA/CHECKPOINT, zmiana kontekstu, pauza lub wygaszenie: STOP i wyczyszczenie podglądu. Nowa jednorazowa zgoda; wcześniejsza zgoda na skan nie jest używana.")
+            .setMessage((if(withOcr)"Dwa etapy w jednej próbie: najpierw OCR dostępnych zdjęć z pamięci, następnie otwieranie ${queue.size} postów do sprawdzenia i odczyt treści oraz jednego widocznego zdjęcia potwierdzonego posta. Łącznie do 20 obrazów i 3 minut na oba etapy. Sugestie osobno, DO SPRAWDZENIA, bez nadpisywania pól. Brak powiązania posta zatrzymuje otwieranie; ukończone wyniki OCR z pamięci mogą pozostać tylko przy zachowanej pierwotnej sesji.\n\n" else "")+"Otworzyć kolejno ${queue.size} dokładnych linków z Do ręcznego sprawdzenia? Jedna zatwierdzona grupa, do 20 postów i 3 minut. Odczyt DOM i osadzonych danych; bez odczytu odpowiedzi sieciowych i bez klikania reakcji, komentarzy lub udostępniania.\n\nBez dodatkowego pobierania mediów, uploadu, skanu i kolektora. Tylko potwierdzone ID; pola heurystyczne. Komentarze, cytaty i cudze posty są wykluczone. Dane i obrazy w RAM; zapis tylko liczników. Logowanie/CAPTCHA/CHECKPOINT, zmiana kontekstu, pauza lub wygaszenie: STOP i wyczyszczenie podglądu. Nowa jednorazowa zgoda; wcześniejsza zgoda na skan nie jest używana.")
             .setNegativeButton("Anuluj",null).setPositiveButton("Zgadzam się"){_,_->
                 reviewConsentDialog=null
                 if(busyForTabs()||session!==original||desktopRows!==snapshot||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return@setPositiveButton
-                reviewOcrActive=withOcr;if(withOcr){ocrResults.clear();ocrReportPending=false;saveOcr(OcrSummary("INTERRUPTED",queue.size,0,0,0,0))};stopVisiblePosts();selectContentTab(false);reviewLast=null;reviewTotal=queue.size;reviewPosition=0;reviewReportPending=false;saveReviewResult(ReviewDataSummary("INTERRUPTED",queue.size,0,0,0,0,0,0,0));reviewBusy=true;render()
+                reviewOcrActive=withOcr;if(withOcr){ocrResults.clear();ocrReportPending=false;saveOcr(OcrSummary("INTERRUPTED",selectedOcr,0,0,0,0))};stopVisiblePosts();selectContentTab(false);reviewLast=null;reviewTotal=queue.size;reviewPosition=0;reviewReportPending=false;saveReviewResult(ReviewDataSummary("INTERRUPTED",queue.size,0,0,0,0,0,0,0));reviewBusy=true;render()
                 reviewJob=lifecycleScope.launch{
                     try{
                         delay(200)
-                        val pendingOcr=linkedMapOf<String,DesktopRow>();var ocrImages=0;var ocrTexts=0;var ocrErrors=0
-                        fun ocrProgress(reason:String,failure:ReviewDataSummary?=null){if(withOcr)saveOcr(OcrSummary(reason,queue.size,ocrImages,ocrTexts,pendingOcr.size,ocrErrors,failure))}
-                        val outcome=ReviewDataRunner.run(geckoView,original,snapshot,true,alive={reviewBusy&&session===original&&desktopRows===snapshot&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&geckoView.isAttachedToWindow},progress={index,total->reviewPosition=index;reviewTotal=total;render()},restoreActive={session===original&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)},snapshot={if(reviewBusy)saveReviewResult(it.copy(reason="INTERRUPTED"))},onBoundPost={source,row,current,live->
+                        val pendingOcr=linkedMapOf<String,DesktopRow>();val cachedOcr=linkedMapOf<String,DesktopRow>();var ocrImages=0;var cachedImages=0;var ocrTexts=0;var ocrErrors=0
+                        fun ocrProgress(reason:String,failure:ReviewDataSummary?=null,completed:ReviewDataSummary?=null){if(withOcr)saveOcr(OcrSummary(reason,selectedOcr,ocrImages,ocrTexts,pendingOcr.size,ocrErrors,failure,completed))}
+                        val outcome=kotlinx.coroutines.withTimeout(180000){
+                        if(withOcr&&snapshot.any{desktopThumbnails.ocrRows(it.postId).isNotEmpty()}){
+                            val cacheLive={reviewBusy&&session===original&&desktopRows===snapshot&&channel===cachedChannel&&cachedChannel?.isConnected==true&&cachedChannel.connectionGeneration==cachedGeneration&&url==cachedUrl&&kind==PageKind.APPROVED_GROUP&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&window.decorView.hasWindowFocus()}
+                            val cached=OcrBatch.run(snapshot,true,{desktopThumbnails.ocrRows(it).size},cacheLive,
+                                read={id,index->val photo=desktopThumbnails.ocrRows(id).getOrNull(index);val owned=photo?.takeIf{!it.isRecycled}?.copy(android.graphics.Bitmap.Config.ARGB_8888,false);if(owned==null)null else LocalOcr.readOwned(owned)},
+                                project={id,texts->GeckoHost.background.ocrFields(id,texts,true)},now={android.os.SystemClock.elapsedRealtime()},snapshot={if(reviewBusy)saveOcr(it.copy(reason="INTERRUPTED",selected=selectedOcr))})
+                            if(cached.summary.reason!="DONE"||!cacheLive())throw IllegalStateException("OCR_CACHE_CONTEXT")
+                            cachedOcr.putAll(cached.rows.filterValues{ReviewDataSummary.fields(it)>0});pendingOcr.putAll(cachedOcr)
+                            ocrImages=cached.summary.images;cachedImages=cached.summary.images;ocrTexts=cached.summary.texts;ocrErrors=cached.summary.errors;ocrProgress("INTERRUPTED")
+                        }
+                        // Cached OCR never short-circuits the consented detail-opening stage.
+                        ReviewDataRunner.run(geckoView,original,snapshot,true,alive={reviewBusy&&session===original&&desktopRows===snapshot&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&geckoView.isAttachedToWindow},progress={index,total->reviewPosition=index;reviewTotal=total;render()},restoreActive={session===original&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)},snapshot={if(reviewBusy)saveReviewResult(it.copy(reason="INTERRUPTED"))},onBoundPost={source,row,current,live->
                             if(withOcr&&ocrImages<20&&live()){
                                 val crops=DesktopThumbnails()
                                 try{
@@ -393,14 +407,26 @@ class PocActivity : ComponentActivity() {
                                 }finally{crops.clear()}
                             }
                         })
+                        }
                         if(!reviewBusy)return@launch
                         reviewBusy=false;reviewJob=null;saveReviewResult(outcome.summary);reviewReportPending=true
                         if(outcome.summary.reason=="DONE"){
-                            if(withOcr){ocrResults.putAll(pendingOcr);ocrProgress("DONE");ocrReportPending=true};desktopRows=outcome.rows.take(20);desktopThumbnails.retain(desktopRows.map{it.postId}.toSet())
+                            if(withOcr){ocrResults.putAll(pendingOcr);ocrProgress("DONE",completed=outcome.summary);ocrReportPending=true};desktopRows=outcome.rows.take(20);desktopThumbnails.retain(desktopRows.map{it.postId}.toSet())
                             offersPanel.showRows(desktopRows,"Uzupełniono: ${outcome.summary.enriched} • bez potwierdzonego odczytu: ${outcome.summary.unresolved}",thumbnails={desktopThumbnails.rows(it)})
                             output.text=outcome.summary.report();selectContentTab(true);render()
-                        }else{if(withOcr){ocrProgress("CONTEXT",outcome.summary);ocrReportPending=true};publishReviewFailure(outcome.summary,preservePreview=session===original&&desktopRows===snapshot);output.text=outcome.summary.report();render()}
-                    }catch(e:kotlinx.coroutines.CancellationException){throw e}
+                        }else{
+                            val keep=outcome.summary.reason=="NO_OWN_POST"&&session===original&&desktopRows===snapshot&&haltMessage==null&&kind==PageKind.APPROVED_GROUP&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+                            if(withOcr){pendingOcr.clear();if(keep)pendingOcr.putAll(cachedOcr);ocrProgress(if(keep&&cachedImages>0)"PARTIAL" else "CONTEXT",outcome.summary);ocrReportPending=true}
+                            publishReviewFailure(outcome.summary,preservePreview=keep)
+                            if(withOcr&&keep){
+                                ocrResults.putAll(cachedOcr)
+                                offersPanel.showRows(desktopRows,"OCR z pamięci ukończony; otwieranie zatrzymane. Dotychczasowe wyniki pozostają dostępne.",thumbnails={desktopThumbnails.rows(it)})
+                                selectContentTab(true)
+                            }
+                            output.text=outcome.summary.report();render()
+                        }
+                    }catch(_:kotlinx.coroutines.TimeoutCancellationException){if(reviewBusy)cancelReview("DEADLINE")}
+                    catch(e:kotlinx.coroutines.CancellationException){throw e}
                     catch(_:Exception){if(reviewBusy)cancelReview("ERROR")}
                     finally{reviewClosing=false;reviewOcrActive=false;if(!reviewBusy)reviewJob=null;render();if(withOcr)showPendingOcrReport() else showPendingReviewReport()}
                 }
@@ -1126,7 +1152,8 @@ class PocActivity : ComponentActivity() {
             !open -> "Sesja zamknięta. „Otwórz sesję” uruchamia przeglądarkę tylko dla grupy ${PocPolicy.APPROVED_GROUP_ID}."
             loginRequested && kind == PageKind.LOGIN -> "Logowanie ręczne na stronie Facebooka. Po zalogowaniu użyj „Wróć do grupy”."
             ocrBusy -> "OCR lokalnie • obrazy ${ocrLast?.images?:0}/20 • bez uploadu"
-            reviewBusy -> "Odczyt postów do sprawdzenia: $reviewPosition/$reviewTotal • tylko lokalnie"
+            reviewBusy&&reviewOcrActive&&reviewPosition==0 -> "Etap 1/2: OCR zdjęć z pamięci • tylko lokalnie"
+            reviewBusy -> (if(reviewOcrActive)"Etap 2/2: " else "")+"Odczyt postów do sprawdzenia: $reviewPosition/$reviewTotal • tylko lokalnie"
             desktopBusy -> if(desktopGate?.phase==DesktopTrial.Phase.READING)"Automatyczne przewijanie • do 30 s • tylko lokalnie" else "Ładowanie grupy • automatyczny podgląd • tylko lokalnie"
             shareBusy -> "Sprawdzanie jednego linku: do 20 s. Bez skanu."
             responseBusy -> if (responseReloadGate.active) "Trwa diagnostyka od otwarcia (25 s)." else "Trwa lokalna diagnostyka odpowiedzi (15 s)."

@@ -59,4 +59,24 @@ class OcrBatchTest{
   assertTrue(reads.all{it.second==0});assertEquals(20,out.rows.size)
  }
 
+ @Test fun completedCacheAndFailedSmallerOpeningQueueAreReportedAsPartialWithoutRawData(){
+  val opening=ReviewDataSummary("NO_OWN_POST",14,2,0,0,0,0,2,0)
+  val value=OcrSummary("PARTIAL",18,7,4,4,0,opening)
+  assertEquals(value,OcrSummary.decode(value.encode()))
+  assertTrue(value.report().contains("Otwarto 2/14"));assertTrue(value.report().contains("Wynik częściowy"))
+  assertFalse(value.encode().contains(row().postId))
+  assertNull(OcrSummary.decode(value.copy(reviewFailure=null).encode()))
+  assertNull(OcrSummary.decode(value.copy(selected=13).encode()))
+  assertNull(OcrSummary.decode(value.copy(images=0,texts=0,suggestions=0).encode()))
+ }
+ @Test fun successfulCombinedRunIncludesOpeningCountersAndStillReadsLegacyCacheReports(){
+  val opening=ReviewDataSummary("DONE",2,2,2,2,1,1,0,0)
+  val value=OcrSummary("DONE",3,3,2,2,0,reviewCompleted=opening)
+  assertEquals(value,OcrSummary.decode(value.encode()));assertTrue(value.report().contains("Otwarto 2/2"))
+  assertFalse(value.report().contains("Zatrzymanie"))
+  assertNull(OcrSummary.decode(value.copy(reason="CONTEXT").encode()))
+  assertNull(OcrSummary.decode(value.copy(reviewCompleted=opening.copy(reason="NO_OWN_POST")).encode()))
+  assertNotNull(OcrSummary.decode(OcrSummary("DONE",1,1,1,1,0).encode()))
+ }
+
 }

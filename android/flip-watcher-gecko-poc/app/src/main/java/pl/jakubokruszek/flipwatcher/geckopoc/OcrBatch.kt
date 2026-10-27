@@ -4,14 +4,15 @@ import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 
 /** No business fields in persistent summary. OCR candidates never replace accepted DOM fields. */
-data class OcrSummary(val reason:String,val selected:Int,val images:Int,val texts:Int,val suggestions:Int,val errors:Int,val reviewFailure:ReviewDataSummary?=null){
- fun encode()=JSONObject().put("reason",reason).put("selected",selected).put("images",images).put("texts",texts).put("suggestions",suggestions).put("errors",errors).apply{reviewFailure?.let{put("reviewFailure",JSONObject(it.encode()))}}.toString()
+data class OcrSummary(val reason:String,val selected:Int,val images:Int,val texts:Int,val suggestions:Int,val errors:Int,val reviewFailure:ReviewDataSummary?=null,val reviewCompleted:ReviewDataSummary?=null){
+ fun encode()=JSONObject().put("reason",reason).put("selected",selected).put("images",images).put("texts",texts).put("suggestions",suggestions).put("errors",errors).apply{reviewFailure?.let{put("reviewFailure",JSONObject(it.encode()))};reviewCompleted?.let{put("reviewCompleted",JSONObject(it.encode()))}}.toString()
  fun report()=buildString{
-  appendLine("OCR 0.5.44 • tylko lokalnie • $reason")
+  appendLine("OCR 0.5.45 • tylko lokalnie • $reason")
   appendLine("Posty wybrane: $selected • obrazy: $images • odczytane napisy: $texts • wyniki do sprawdzenia: $suggestions • błędy: $errors")
-  reviewFailure?.let{
-   appendLine("\nPrzyczyna etapu otwierania: ${it.reason}. ${it.explanation()}")
-   appendLine("Otwarto ${it.opened}/${it.selected} • potwierdzono ${it.bound} • tekst ${it.textRead}. Zatrzymanie nie dowodzi braku ofert.")
+  if(reason=="PARTIAL")appendLine("OCR obrazów z pamięci ukończony; etap otwierania pozostałych postów zatrzymany. Wynik częściowy.")
+  (reviewFailure?:reviewCompleted)?.let{
+   appendLine(if(it.reason=="DONE")"\nEtap otwierania zakończony." else "\nPrzyczyna etapu otwierania: ${it.reason}. ${it.explanation()}")
+   appendLine("Otwarto ${it.opened}/${it.selected} • potwierdzono ${it.bound} • tekst ${it.textRead}."+(if(it.reason!="DONE")" Zatrzymanie nie dowodzi braku ofert." else ""))
    append(ReviewEvidence.report(it.evidence))
   }
   append("\n\nPola OCR są heurystyczne, oddzielone od danych tekstowych i DO SPRAWDZENIA (także cena za m² i cena wyliczona). Brak odczytu nie dowodzi braku danych. Obrazy i wyniki tylko w RAM; pauza je usuwa. Bez uploadu, skanu i kolektora.")
@@ -20,13 +21,16 @@ data class OcrSummary(val reason:String,val selected:Int,val images:Int,val text
  companion object{fun decode(raw:String?):OcrSummary?=runCatching{
   if(raw==null||raw.length>2000)return null;val j=JSONObject(raw)
   val keys=j.keys().asSequence().toSet();val required=setOf("reason","selected","images","texts","suggestions","errors")
-  if(keys!=required&&keys!=required+"reviewFailure")return null
+  if(keys!=required&&keys!=required+"reviewFailure"&&keys!=required+"reviewCompleted")return null
   val failure=if(j.has("reviewFailure"))ReviewDataSummary.decode(j.getJSONObject("reviewFailure").toString())?.takeIf{it.reason!="DONE"}?:return null else null
-  if(j.optString("reason") !in setOf("DONE","NO_CONSENT","CONTEXT","TIMEOUT","CANCELLED","PAUSED","ERROR","INTERRUPTED","PROTOCOL"))return null
+  val completed=if(j.has("reviewCompleted"))ReviewDataSummary.decode(j.getJSONObject("reviewCompleted").toString())?.takeIf{it.reason=="DONE"}?:return null else null
+  if(j.optString("reason") !in setOf("DONE","NO_CONSENT","CONTEXT","TIMEOUT","CANCELLED","PAUSED","ERROR","INTERRUPTED","PROTOCOL","PARTIAL"))return null
   val c=listOf("selected","images","texts","suggestions","errors").map{k->val n=j.opt(k);if(n !is Int||n !in 0..20)return null;n}
   if(c[2]>c[1]||c[3]>c[0]||c[4]>c[1]||c[2]+c[4]>c[1]||c[1]>c[0]*3)return null
-  if(failure!=null&&(failure.selected!=c[0]||j.getString("reason")=="DONE"))return null
-  OcrSummary(j.getString("reason"),c[0],c[1],c[2],c[3],c[4],failure)
+  if(failure!=null&&(failure.selected>c[0]||j.getString("reason")=="DONE"))return null
+  if(j.getString("reason")=="PARTIAL"&&(failure?.reason!="NO_OWN_POST"||c[1]==0))return null
+  if(completed!=null&&(completed.selected>c[0]||j.getString("reason")!="DONE"))return null
+  OcrSummary(j.getString("reason"),c[0],c[1],c[2],c[3],c[4],failure,completed)
  }.getOrNull()}
 }
 object OcrProtocol{
