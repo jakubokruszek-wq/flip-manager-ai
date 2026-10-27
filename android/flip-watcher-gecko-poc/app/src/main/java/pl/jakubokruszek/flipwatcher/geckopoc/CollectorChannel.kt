@@ -26,6 +26,8 @@ class CollectorChannel(
     private val onDesktopGesture: (String) -> Unit = {},
     private val onProbe: (PageProbe) -> Unit = {},
 ) {
+    private var closed=false
+    private var boundExtension:WebExtension?=null
     private var shareNonce: String? = null
     private var desktopNonce: String? = null
     internal var viewportBridge:DesktopViewportBridge?=null
@@ -75,6 +77,7 @@ class CollectorChannel(
 
     private val messageDelegate = object : WebExtension.MessageDelegate {
         override fun onConnect(port: WebExtension.Port) {
+            if(closed){runCatching{port.disconnect()};return}
             val sender = port.sender
             if (!PocPolicy.isTrustedSender(sender.url, sender.isTopLevel, fixtureMode)) {
                 untrustedPorts++
@@ -94,7 +97,9 @@ class CollectorChannel(
     }
 
     fun attach(extension: WebExtension) {
+        check(!closed)
         session.webExtensionController.setMessageDelegate(extension, messageDelegate, PocPolicy.NATIVE_APP)
+        boundExtension=extension
     }
 
     suspend fun awaitPort(timeoutMs: Long): Boolean = withTimeoutOrNull(timeoutMs) { portReady.await(); true } ?: false
@@ -268,6 +273,10 @@ class CollectorChannel(
     }
 
     fun close() {
+        if(closed)return
+        closed=true
+        boundExtension?.let{runCatching{session.webExtensionController.setMessageDelegate(it,null,PocPolicy.NATIVE_APP)}}
+        boundExtension=null
         abortDesktop()
         stopShareLinkContext()
         connectedUrl = null

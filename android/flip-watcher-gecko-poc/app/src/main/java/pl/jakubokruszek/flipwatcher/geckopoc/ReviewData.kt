@@ -13,6 +13,16 @@ class ReviewDataGate(private val group:String,private val fixture:Boolean=false,
     var requests=0;private set
     private var seenRequest=false
     private var hasBoundDocument=false
+    private var sessionOpen=false
+    private var sessionGeneration=0
+    fun beginSession():Int{
+        if(!tick()||sessionOpen){stop("CONTEXT");return 0}
+        sessionGeneration++;sessionOpen=true
+        expectedId=null;currentUrl=null;requests=0;seenRequest=false;hasBoundDocument=false
+        return sessionGeneration
+    }
+    fun acceptsSession(generation:Int)=tick()&&sessionOpen&&generation==sessionGeneration
+    fun endSession(generation:Int){if(generation==sessionGeneration)sessionOpen=false}
     fun stop(code:String){if(active){active=false;reason=code}}
     fun tick():Boolean{if(active&&now()-started>=180_000)stop("DEADLINE");return active}
     fun expect(id:String){if(!tick()||!Regex("^[0-9]{5,30}$").matches(id)){stop("INPUT");return};expectedId=id;currentUrl=null;requests=0;seenRequest=false}
@@ -74,8 +84,8 @@ object ReviewDataProtocol{
     }.getOrNull()
 }
 
-data class ReviewDataSummary(val reason:String,val selected:Int,val opened:Int,val bound:Int,val textRead:Int,val enriched:Int,val unchanged:Int,val unresolved:Int,val filtered:Int,val evidence:Map<String,Int> = emptyMap()){
-    fun encode()=JSONObject().put("reason",reason).put("selected",selected).put("opened",opened).put("bound",bound).put("textRead",textRead).put("enriched",enriched).put("unchanged",unchanged).put("unresolved",unresolved).put("filtered",filtered).apply{if(evidence.isNotEmpty())put("evidence",JSONObject(evidence))}.toString()
+data class ReviewDataSummary(val reason:String,val selected:Int,val opened:Int,val bound:Int,val textRead:Int,val enriched:Int,val unchanged:Int,val unresolved:Int,val filtered:Int,val evidence:Map<String,Int> = emptyMap(),val batchSessions:Int=0,val batchSessionsClosed:Int=0){
+    fun encode()=JSONObject().put("reason",reason).put("selected",selected).put("opened",opened).put("bound",bound).put("textRead",textRead).put("enriched",enriched).put("unchanged",unchanged).put("unresolved",unresolved).put("filtered",filtered).apply{if(evidence.isNotEmpty())put("evidence",JSONObject(evidence));if(batchSessions>0||batchSessionsClosed>0){put("batchSessions",batchSessions);put("batchSessionsClosed",batchSessionsClosed)}}.toString()
     fun stopped(code:String)=copy(reason=if(code in setOf("PAUSED","CANCELLED","ERROR","SESSION_CLOSED","ENGINE_KILLED","ENGINE_CRASHED","DEADLINE"))code else "INTERRUPTED")
     fun explanation()=when(reason){
         "DONE"->"Zakończono kolejkę."
@@ -100,17 +110,21 @@ data class ReviewDataSummary(val reason:String,val selected:Int,val opened:Int,v
         "ERROR"->"Zatrzymano: nieoczekiwany błąd aplikacji."
         else->"Próba nie ma potwierdzonego zakończenia."
     }
-    fun report()="UZUPEŁNIANIE 0.5.48 • tylko lokalnie • $reason\n${explanation()}${if(reason!="DONE"&&reason!="NO_OWN_POST") " Podgląd wyczyszczono ochronnie; nie oznacza to znalezienia zera ofert." else ""}\nWybrano $selected • otwarto $opened • potwierdzono w DOM/danych strony $bound • odczytano tekst $textRead\nUzupełniono $enriched • bez nowych pól $unchanged • brak potwierdzonego odczytu $unresolved • poza filtrem $filtered\nBrak odczytu nie dowodzi braku danych w poście. Tylko dokładne ID tej grupy; pola heurystyczne. Bez odczytu odpowiedzi sieciowych, uploadu i kolektora. OCR wymaga osobnej zgody i ma osobny raport. Pauza usuwa dane."+ReviewEvidence.report(evidence)
+    fun report()="UZUPEŁNIANIE 0.5.49 • tylko lokalnie • $reason\n${explanation()}${if(reason!="DONE"&&reason!="NO_OWN_POST") " Podgląd wyczyszczono ochronnie; nie oznacza to znalezienia zera ofert." else ""}\nWybrano $selected • otwarto $opened • potwierdzono w DOM/danych strony $bound • odczytano tekst $textRead\nUzupełniono $enriched • bez nowych pól $unchanged • brak potwierdzonego odczytu $unresolved • poza filtrem $filtered${if(batchSessions>0) "\nPartie: do 3 postów • sesje robocze otwarte $batchSessions • zamknięte $batchSessionsClosed." else ""}\nBrak odczytu nie dowodzi braku danych w poście. Tylko dokładne ID tej grupy; pola heurystyczne. Bez odczytu odpowiedzi sieciowych, uploadu i kolektora. OCR wymaga osobnej zgody i ma osobny raport. Pauza usuwa dane."+ReviewEvidence.report(evidence)
     companion object{
         fun decode(raw:String?):ReviewDataSummary?=runCatching{
             if(raw==null||raw.length>4096)return null
             val j=JSONObject(raw);val keys=setOf("reason","selected","opened","bound","textRead","enriched","unchanged","unresolved","filtered")
-            val actual=j.keys().asSequence().toSet();if(actual!=keys&&actual!=keys+"evidence")return null
+            val actual=j.keys().asSequence().toSet();val batchKeys=setOf("batchSessions","batchSessionsClosed")
+            if(actual!=keys&&actual!=keys+"evidence"&&actual!=keys+batchKeys&&actual!=keys+batchKeys+"evidence")return null
+            val batchSessions=if(j.has("batchSessions")){val n=j.opt("batchSessions");if(n !is Int||n !in 1..7)return null;n}else 0
+            val batchClosed=if(j.has("batchSessionsClosed")){val n=j.opt("batchSessionsClosed");if(n !is Int||n !in 0..batchSessions)return null;n}else 0
             val evidence=if(j.has("evidence"))ReviewEvidence.parse(j.getJSONObject("evidence"))?:return null else emptyMap()
             if(j.optString("reason") !in setOf("DONE","NO_CONSENT_OR_INPUT","INPUT","DEADLINE","NAVIGATION","CONTEXT","PAUSED_OR_CONTEXT","PORT_LOST","LOAD_ERROR","VERIFICATION_OR_LOGIN","ENGINE_LOST","ENGINE_KILLED","ENGINE_CRASHED","NO_OWN_POST","REPLY_TIMEOUT","REPLY_INVALID","READER_ERROR","PAGE_TIMEOUT","LOCATION_TIMEOUT","PORT_TIMEOUT","FOCUS_TIMEOUT","DOM_TIMEOUT","PROTOCOL","CLOSED","INTERRUPTED","PAUSED","CANCELLED","ERROR","SESSION_CLOSED"))return null
             val counts=(keys-"reason").associateWith{k->val v=j.opt(k);if(v !is Int||v !in 0..20)return null;v}
             if(counts.getValue("opened")>counts.getValue("selected")||counts.getValue("bound")>counts.getValue("opened")||counts.getValue("textRead")>counts.getValue("bound"))return null
-            ReviewDataSummary(j.getString("reason"),counts.getValue("selected"),counts.getValue("opened"),counts.getValue("bound"),counts.getValue("textRead"),counts.getValue("enriched"),counts.getValue("unchanged"),counts.getValue("unresolved"),counts.getValue("filtered"),evidence)
+            if(batchSessions>(counts.getValue("selected")+2)/3)return null
+            ReviewDataSummary(j.getString("reason"),counts.getValue("selected"),counts.getValue("opened"),counts.getValue("bound"),counts.getValue("textRead"),counts.getValue("enriched"),counts.getValue("unchanged"),counts.getValue("unresolved"),counts.getValue("filtered"),evidence,batchSessions,batchClosed)
         }.getOrNull()
         fun fields(r:DesktopRow)=listOf(r.price,r.area,r.rooms).count{it!=null}+if(listOf(r.district,r.neighborhood,r.street).any{it!=null})1 else 0}
 }

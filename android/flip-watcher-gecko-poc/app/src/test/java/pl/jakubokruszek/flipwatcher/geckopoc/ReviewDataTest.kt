@@ -112,4 +112,37 @@ class ReviewDataTest{
   assertNull(ReviewEvidence.parse(org.json.JSONObject(e).put("selectedStories","PRIVATE")))
  }
 
+ @Test fun workerEpochRotationRejectsStaleEventsAndAllowsOnlyFreshInitialBlank(){
+  val g=ReviewDataGate(PocPolicy.APPROVED_GROUP_ID){0};val first=g.beginSession()
+  assertTrue(g.acceptsSession(first));g.expect(id);assertTrue(g.request(url));assertTrue(g.location(url))
+  g.endSession(first);assertFalse(g.acceptsSession(first))
+  val second=g.beginSession();assertTrue(second>first);assertNull(g.expectedId);assertNull(g.currentUrl)
+  assertTrue(g.location("about:blank"));assertNull(g.currentUrl);assertFalse(g.acceptsSession(first))
+  g.endSession(first);assertTrue(g.acceptsSession(second))
+  val next="550000000000092";val target=url.replace(id,next);g.expect(next);assertTrue(g.request(target));assertTrue(g.location(target))
+  assertEquals(target,g.currentUrl);assertFalse(g.location("about:blank"));assertEquals("CONTEXT",g.reason)
+ }
+ @Test fun batchesCannotRenewTheDeadlineOrRecoverAfterAnEngineKill(){
+  var now=0L;val g=ReviewDataGate(PocPolicy.APPROVED_GROUP_ID){now}
+  val first=g.beginSession();g.endSession(first);now=179000
+  val second=g.beginSession();assertTrue(g.acceptsSession(second));now=180000
+  assertFalse(g.acceptsSession(second));assertEquals("DEADLINE",g.reason);g.endSession(second);assertEquals(0,g.beginSession());assertEquals("DEADLINE",g.reason)
+  val killed=ReviewDataGate(PocPolicy.APPROVED_GROUP_ID){0};val lease=killed.beginSession();killed.stop("ENGINE_KILLED");killed.endSession(lease)
+  assertEquals(0,killed.beginSession());assertEquals("ENGINE_KILLED",killed.reason)
+ }
+ @Test fun aSecondConcurrentWorkerCannotShareTheCurrentGrant(){
+  val g=ReviewDataGate(PocPolicy.APPROVED_GROUP_ID){0};val first=g.beginSession()
+  assertTrue(g.acceptsSession(first));assertEquals(0,g.beginSession());assertEquals("CONTEXT",g.reason);assertFalse(g.acceptsSession(first))
+ }
+ @Test fun batchCountersRoundTripWithoutChangingLegacyCountReports(){
+  val legacy=ReviewDataSummary("DONE",7,7,7,7,7,0,0,0)
+  assertEquals(legacy,ReviewDataSummary.decode(legacy.encode()))
+  val result=legacy.copy(batchSessions=3,batchSessionsClosed=3)
+  assertEquals(result,ReviewDataSummary.decode(result.encode()));assertTrue(result.report().contains("do 3 postów"))
+  val ocr=OcrSummary("DONE",8,1,1,1,0,reviewCompleted=result)
+  assertEquals(ocr,OcrSummary.decode(ocr.encode()));assertTrue(ocr.report().contains("otwarte 3"))
+  assertFalse(result.encode().contains(id));assertFalse(result.encode().contains("http"))
+  for(j in listOf(org.json.JSONObject(result.encode()).put("batchSessions",8),org.json.JSONObject(result.encode()).put("batchSessionsClosed",4),org.json.JSONObject(result.encode()).apply{remove("batchSessionsClosed")},org.json.JSONObject(result.encode()).put("batchSessions","PRIVATE"),org.json.JSONObject(result.encode()).put("selected",1)))assertNull(ReviewDataSummary.decode(j.toString()))
+ }
+
 }
