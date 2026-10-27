@@ -59,3 +59,22 @@ test('more inspection never exceeds 64 expensive parses or accepts a neighboring
  const stub={...core,extractStructuredRecordsFromText(){calls++;return[{postId:'550000000000092',permalink:link.replace(id,'550000000000092'),text:'Sprzedam mieszkanie 999 m2',media:[]}]}};
  const h=hydrationEnv(scripts),r=reader.create().read(h.w,h.m,stub,f,p);assert.equal(calls,64);assert.equal(r.bound,0);assert.equal(r.rows[0].area,null);assert.equal(r.evidence.budgetLimited,1);
 });
+
+test('matched block with zero parser records is distinguished from rejected records',()=>{
+ const h=hydrationEnv([{getAttribute:()=> 'application/json',textContent:JSON.stringify({url:link})}]);
+ const r=reader.create().read(h.w,h.m,{...core,extractStructuredRecordsFromText:()=>[]},f,p);
+ assert.equal(r.evidence.parsedDataBlocks,1);assert.equal(r.evidence.recordReturned,0);assert.equal(r.evidence.recordAccepted,0);assert.equal(r.bound,0);
+});
+test('record diagnostics distinguish format, other ID, permalink, quoted text and accepted empty text',()=>{
+ const h=hydrationEnv([{textContent:JSON.stringify({url:link})}]);
+ const records=[null,'PRIVATE_RECORD', {postId:'550000000000092',permalink:link.replace(id,'550000000000092')}, {postId:id,permalink:link.replace(group,'foreign')}, {postId:id,permalink:link,text:'PRIVATE_QUOTED',__structuredDiagnostics:{structuredTextPath:'shared_story.message'}}, {postId:id,permalink:link,text:'',media:[]}];
+ const r=reader.create().read(h.w,h.m,{...core,extractStructuredRecordsFromText:()=>records},f,p),e=r.evidence;
+ assert.equal(e.recordReturned,6);assert.equal(e.recordInvalid,2);assert.equal(e.recordOtherId,1);assert.equal(e.recordLinkRejected,1);assert.equal(e.recordShared,1);assert.equal(e.recordAccepted,1);assert.equal(e.recordNoText,1);assert.equal(e.parsedOtherBlocks,1);
+ assert.equal(r.bound,1);assert.equal(r.textRead,0);assert.equal(r.rows[0].price,null);assert(Object.values(e).every(Number.isInteger));assert(!JSON.stringify(e).includes('PRIVATE'));assert(!JSON.stringify(e).includes(id));
+});
+test('record truncation is explicit and never inspects a later record as the requested post',()=>{
+ const h=hydrationEnv([{textContent:JSON.stringify({url:link})}]);
+ const records=Array.from({length:100},()=>({postId:'550000000000092',permalink:link.replace(id,'550000000000092')}));records.push({postId:id,permalink:link,text:'Sprzedam mieszkanie 42m2',media:[]});
+ const r=reader.create().read(h.w,h.m,{...core,extractStructuredRecordsFromText:()=>records},f,p);
+ assert.equal(r.evidence.recordReturned,101);assert.equal(r.evidence.recordOtherId,100);assert.equal(r.evidence.recordLimit,1);assert.equal(r.evidence.budgetLimited,1);assert.equal(r.bound,0);
+});

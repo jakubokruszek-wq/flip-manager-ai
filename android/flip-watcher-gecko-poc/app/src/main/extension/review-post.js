@@ -3,7 +3,7 @@
 function exact(raw,group,id,fixture=false){try{const u=new URL(raw);return /^\d{5,30}$/.test(id)&&/^[A-Za-z0-9._-]{1,100}$/.test(group)&&!u.username&&!u.password&&!u.search&&!u.hash&&((u.protocol==='https:'&&!u.port&&['www.facebook.com','facebook.com','m.facebook.com'].includes(u.hostname))||(fixture&&u.protocol==='http:'&&u.hostname==='127.0.0.1'))&&['/groups/'+group+'/posts/'+id+'/','/groups/'+group+'/permalink/'+id+'/'].includes(u.pathname.endsWith('/')?u.pathname:u.pathname+'/');}catch{return false;}}
 const blocked='input[type="password"],form[action*="login"],form[action*="checkpoint"],iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="captcha"]';
 const excluded='[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],[data-testid*="shared"],[data-ad-rendering-role*="shared"],blockquote,form,input,textarea,[contenteditable="true"]';
-const evidenceKeys=['articleNodes','boundCards','nestedCards','foreignParents','messageNodes','scriptNodes','scriptParsed','scriptMatched','scriptSkipped','budgetLimited','readerStage','readerErrors','hrefExact','attrExact','identityMissing','foreignGroup','foreignPost','commentIdentity','excludedCards','manyLinks','rejectQuery','rejectRegion','canonicalSeen','canonicalExact','canonicalConflict','primaryCandidates','canonicalBound'];
+const evidenceKeys=['articleNodes','boundCards','nestedCards','foreignParents','messageNodes','scriptNodes','scriptParsed','scriptMatched','scriptSkipped','budgetLimited','readerStage','readerErrors','hrefExact','attrExact','identityMissing','foreignGroup','foreignPost','commentIdentity','excludedCards','manyLinks','rejectQuery','rejectRegion','canonicalSeen','canonicalExact','canonicalConflict','primaryCandidates','canonicalBound','recordReturned','recordInvalid','recordOtherId','recordLinkRejected','recordShared','recordAccepted','recordNoText','recordLimit','scriptOversize','scriptByteLimit','scriptTimeLimit','scriptNodeLimit','scriptParseLimit','parsedDataBlocks','parsedOtherBlocks'];
 function evidence(){return Object.fromEntries(evidenceKeys.map(k=>[k,0]));}
 function links(card,core,preview,group,base,audit=null){
  const bump=k=>{if(audit)audit[k]=Math.min(10000,(audit[k]||0)+1);};
@@ -66,7 +66,7 @@ function cards(w,m,core,preview,audit=evidence()){
  if(!result.length)result.push(...canonicalPrimary(w,m,core,preview,audit));audit.boundCards=result.length;return result;
 }
 function create(){const used=new Set();return {read(w,m,core,fields,preview){
- const audit=evidence();let model=null;const empty=(reason='CONTEXT')=>({status:'STOP',reason,rows:[],stats:preview.zero(),bound:0,textRead:0,evidence:{...audit}});
+ const audit=evidence();const count=(key,n=1)=>{audit[key]=Math.min(10000,audit[key]+n);};let model=null;const empty=(reason='CONTEXT')=>({status:'STOP',reason,rows:[],stats:preview.zero(),bound:0,textRead:0,evidence:{...audit}});
  try{audit.readerStage=1;
  const safe=()=>m.consent===true&&m.reviewConsent===true&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(m.nonce||'')&&w.location.href===m.expectedUrl&&exact(w.location.href,m.groupId,m.postId,m.fixture===true)&&['interactive','complete'].includes(w.document.readyState)&&w.document.visibilityState==='visible'&&w.document.hidden!==true&&w.document.hasFocus?.()===true&&!/log in|logowanie|captcha|checkpoint|security check|potwierdź.*tożsamość/i.test(w.document.title||'')&&!w.document.querySelector(blocked)&&!w.document.querySelector('[role="alertdialog"]');
  if(!safe()||used.has(m.nonce))return empty();used.add(m.nonce);while(used.size>32)used.delete(used.values().next().value);
@@ -102,19 +102,24 @@ function create(){const used=new Set();return {read(w,m,core,fields,preview){
    candidates.push({node,priority:Number(!(/^(?:application\/(?:ld\+)?json)$/.test(type)||node.hasAttribute?.('data-sjs')))});
   }
   candidates.sort((a,b)=>a.priority-b.priority);
-  if(scripts.length>256)audit.budgetLimited=1;
-  for(const {node} of candidates){
-   if(now()-started>=500){audit.budgetLimited=1;break;}
-   const body=node.textContent||'';if(!body||body.length>524288){audit.scriptSkipped++;continue;}
-   if(bytes+body.length>2097152){audit.budgetLimited=1;audit.scriptSkipped++;continue;}bytes+=body.length;
+  if(scripts.length>256){audit.budgetLimited=1;audit.scriptNodeLimit=1;}
+  for(const {node,priority} of candidates){
+   if(now()-started>=500){audit.budgetLimited=1;audit.scriptTimeLimit=1;break;}
+   const body=node.textContent||'';if(!body||body.length>524288){if(body.length>524288)count('scriptOversize');audit.scriptSkipped++;continue;}
+   if(bytes+body.length>2097152){audit.budgetLimited=1;audit.scriptByteLimit=1;audit.scriptSkipped++;continue;}bytes+=body.length;
    // This exact-url evidence was already required AFTER parsing. Check it first:
    // unrelated Facebook bootstrap scripts must not monopolize the content thread.
    const ids=preview.explicitIds(body,m.groupId);if(!ids.has(m.postId)){audit.scriptSkipped++;continue;}audit.scriptMatched++;
-   if(audit.scriptParsed>=64){audit.budgetLimited=1;break;}
-   let records=[];try{audit.scriptParsed++;records=core.extractStructuredRecordsFromText(body,'HYDRATION',{sourceType:'GROUP',sourceId:m.groupId,sourceUrl:'https://www.facebook.com/groups/'+m.groupId+'/',allowGroupRedirect:false})||[];}catch{audit.readerErrors=1;return empty('ERROR');}
-   for(const r of records.slice(0,100))if(r.postId===m.postId&&ids.has(m.postId)&&preview.exact(r.permalink,m.groupId)===m.postId){
+   if(audit.scriptParsed>=64){audit.budgetLimited=1;audit.scriptParseLimit=1;break;}
+   let records=[];try{audit.scriptParsed++;count(priority===0?'parsedDataBlocks':'parsedOtherBlocks');records=core.extractStructuredRecordsFromText(body,'HYDRATION',{sourceType:'GROUP',sourceId:m.groupId,sourceUrl:'https://www.facebook.com/groups/'+m.groupId+'/',allowGroupRedirect:false})||[];if(!Array.isArray(records))throw Error('PARSER_SHAPE');}catch{audit.readerErrors=1;return empty('ERROR');}
+   count('recordReturned',records.length);if(records.length>100){audit.recordLimit=1;audit.budgetLimited=1;}
+   for(const r of records.slice(0,100)){
+    if(!r||typeof r!=='object'){count('recordInvalid');continue;}
+    if(r.postId!==m.postId){count('recordOtherId');continue;}
+    if(!ids.has(m.postId)||preview.exact(r.permalink,m.groupId)!==m.postId){count('recordLinkRejected');continue;}
     const path=r.__structuredDiagnostics?.structuredTextPath;
-    if(typeof path==='string'&&/(?:shared|quoted|crosspost|reshare|original_story|attached_story)/i.test(path))continue;
+    if(typeof path==='string'&&/(?:shared|quoted|crosspost|reshare|original_story|attached_story)/i.test(path)){count('recordShared');continue;}
+    count('recordAccepted');if(typeof r.text!=='string'||!r.text.trim())count('recordNoText');
     bound=1;if(typeof r.text==='string'&&r.text.trim())textRead=1;model.add(r,'HYDRATION');
    }
   }

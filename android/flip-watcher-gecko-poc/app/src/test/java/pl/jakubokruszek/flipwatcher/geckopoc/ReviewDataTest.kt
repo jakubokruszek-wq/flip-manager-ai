@@ -89,4 +89,18 @@ class ReviewDataTest{
   assertTrue(value.report().contains("NO_OWN_POST"))
  }
 
+ @Test fun parserEvidenceIsVersionedBoundedAndFitsCountOnlyPartialHistory(){
+  for(keys in listOf(ReviewEvidence.legacyKeys,ReviewEvidence.v540Keys,ReviewEvidence.v541Keys,ReviewEvidence.keys))assertNotNull(ReviewEvidence.parse(org.json.JSONObject(keys.associateWith{0})))
+  val e=ReviewEvidence.keys.associateWith{10000}.toMutableMap()
+  for(k in listOf("readerErrors","budgetLimited","canonicalExact","canonicalBound","recordLimit","scriptByteLimit","scriptTimeLimit","scriptNodeLimit","scriptParseLimit"))e[k]=1
+  e["readerStage"]=6
+  val opening=ReviewDataSummary("NO_OWN_POST",13,2,0,0,0,0,2,0,e)
+  assertEquals(opening,ReviewDataSummary.decode(opening.encode()))
+  val value=OcrSummary("PARTIAL",15,4,2,0,0,opening)
+  assertTrue(value.encode().length<=4096);assertEquals(value,OcrSummary.decode(value.encode()))
+  assertTrue(value.report().contains("zwrócone rekordy"));assertFalse(value.encode().contains(id))
+  assertNull(ReviewEvidence.parse(org.json.JSONObject(e).put("scriptTimeLimit",2)))
+  assertNull(ReviewEvidence.parse(org.json.JSONObject(e).put("recordReturned","PRIVATE")))
+ }
+
 }
