@@ -25,8 +25,8 @@ test('interactive own DOM is readable without waiting for media completion; load
 test('an exact nested article is readable inside an unlabelled wrapper without borrowing parent fields',()=>{const h=env();const wrapper={ownerDocument:h.doc,parentElement:null,closest:()=>null,querySelectorAll:()=>[]};h.card.parentElement={closest:()=>wrapper};const r=h.run();assert.equal(r.bound,1);assert.equal(r.textRead,1);assert.equal(r.evidence.nestedCards,1);assert.equal(r.rows[0].price,319000);});
 test('a foreign parent article rejects an otherwise exact nested card',()=>{const h=env();const wrapper={ownerDocument:h.doc,parentElement:null,closest:()=>null};const a={href:link.replace(id,'550000000000092'),closest:()=>wrapper};wrapper.querySelectorAll=()=>[a];h.card.parentElement={closest:()=>wrapper};const r=h.run();assert.equal(r.bound,0);assert.equal(r.evidence.foreignParents,1);assert.equal(r.rows[0].price,null);});
 test('unrelated bootstrap scripts never enter the expensive structured parser',()=>{const h=env();const prior=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='script:not([src])'?[{textContent:'{"bootstrap":"no own permalink"}'}]:prior(s);let calls=0;const stub={...core,extractStructuredRecordsFromText(){calls++;throw Error('must not parse unrelated script')}};const r=reader.create().read(h.w,h.m,stub,f,p);assert.equal(r.status,'OK');assert.equal(calls,0);assert.equal(r.evidence.scriptSkipped,1);assert.equal(r.evidence.scriptParsed,0);});
-test('parser exception becomes a bounded ERROR reply without exception text or post content',()=>{const h=env();const prior=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='script:not([src])'?[{textContent:JSON.stringify({url:link})}]:prior(s);const stub={...core,extractStructuredRecordsFromText(){throw Error('PRIVATE_EXCEPTION_AND_TOKEN')}};const r=reader.create().read(h.w,h.m,stub,f,p);assert.equal(r.status,'STOP');assert.equal(r.reason,'ERROR');assert.equal(r.evidence.readerStage,5);assert.equal(r.evidence.readerErrors,1);assert.equal(r.rows.length,0);assert(!JSON.stringify(r).includes('PRIVATE_EXCEPTION'));assert(!JSON.stringify(r).includes('Sprzedam'));});
-test('a bounded script work budget returns an honest incomplete result instead of blocking the port',()=>{const h=env();let tick=0;h.w.performance={now:()=>tick+=501};const prior=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='script:not([src])'?[{textContent:JSON.stringify({url:link})}]:prior(s);const r=h.run();assert.equal(r.status,'OK');assert.equal(r.evidence.budgetLimited,1);assert.equal(r.evidence.scriptParsed,0);});
+test('parser exception becomes a bounded ERROR reply without exception text or post content',()=>{const h=env();const prior=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='script:not([src])'?[{textContent:'window.payload='+JSON.stringify({url:link})+';'}]:prior(s);const stub={...core,extractStructuredRecordsFromText(){throw Error('PRIVATE_EXCEPTION_AND_TOKEN')}};const r=reader.create().read(h.w,h.m,stub,f,p);assert.equal(r.status,'STOP');assert.equal(r.reason,'ERROR');assert.equal(r.evidence.readerStage,5);assert.equal(r.evidence.readerErrors,1);assert.equal(r.rows.length,0);assert(!JSON.stringify(r).includes('PRIVATE_EXCEPTION'));assert(!JSON.stringify(r).includes('Sprzedam'));});
+test('a bounded script work budget returns an honest incomplete result instead of blocking the port',()=>{const h=env();let tick=0;h.w.performance={now:()=>tick+=501};const prior=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='script:not([src])'?[{textContent:'window.payload='+JSON.stringify({url:link})+';'}]:prior(s);const r=h.run();assert.equal(r.status,'OK');assert.equal(r.evidence.budgetLimited,1);assert.equal(r.evidence.scriptParsed,0);});
 
 test('a nested article under an identified same-post parent is not mistaken for the main post comment',()=>{const h=env();const wrapper={ownerDocument:h.doc,parentElement:null,closest:()=>null};const a={href:link,closest:()=>wrapper};wrapper.querySelectorAll=()=>[a];h.card.parentElement={closest:()=>wrapper};const r=h.run();assert.equal(r.bound,0);assert.equal(r.rows[0].price,null);});
 
@@ -40,7 +40,7 @@ test('canonical fallback refuses conflicting metadata, foreign own links or ambi
 test('URL and a sole card without head canonical metadata never establish this alternative proof',()=>{const h=canonicalEnv();delete h.doc.head;assert.equal(h.run().bound,0);});
 test('an explicitly labelled comment cannot become a canonical primary post',()=>{const h=canonicalEnv();h.card.getAttribute=()=> 'Comment by someone';assert.equal(h.run().bound,0);});
 
-function hydrationEnv(scripts){const h=env();h.anchor.href='https://www.facebook.com/';const prior=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='script:not([src])'?scripts:prior(s);return h;}
+function hydrationEnv(scripts){const h=env();h.w.performance={now:()=>0};h.anchor.href='https://www.facebook.com/';const prior=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='script:not([src])'?scripts:prior(s);return h;}
 const ownHydration=()=>JSON.stringify({__typename:'Story',post_id:id,permalink_url:link,message:{text:'Sprzedam mieszkanie 42 m2. Cena 319000 zł. 2 pokoje.'}});
 test('exact own JSON after 64 bootstrap scripts is read with the real structured parser',()=>{
  const scripts=Array.from({length:150},()=>({textContent:'{"bootstrap":true}'}));scripts.push({textContent:ownHydration()});
@@ -55,26 +55,97 @@ test('inspection never reads past 256 script nodes and reports incomplete covera
  const r=hydrationEnv(scripts).run();assert.equal(outside,0);assert.equal(r.bound,0);assert.equal(r.evidence.budgetLimited,1);assert.equal(r.evidence.scriptParsed,0);
 });
 test('more inspection never exceeds 64 expensive parses or accepts a neighboring post',()=>{
- const scripts=Array.from({length:100},()=>({textContent:JSON.stringify({url:link})}));let calls=0;
+ const scripts=Array.from({length:100},()=>({textContent:'window.payload='+JSON.stringify({url:link})+';'}));let calls=0;
  const stub={...core,extractStructuredRecordsFromText(){calls++;return[{postId:'550000000000092',permalink:link.replace(id,'550000000000092'),text:'Sprzedam mieszkanie 999 m2',media:[]}]}};
  const h=hydrationEnv(scripts),r=reader.create().read(h.w,h.m,stub,f,p);assert.equal(calls,64);assert.equal(r.bound,0);assert.equal(r.rows[0].area,null);assert.equal(r.evidence.budgetLimited,1);
 });
 
 test('matched block with zero parser records is distinguished from rejected records',()=>{
- const h=hydrationEnv([{getAttribute:()=> 'application/json',textContent:JSON.stringify({url:link})}]);
+ const h=hydrationEnv([{getAttribute:()=> 'application/json',textContent:ownHydration()}]);
  const r=reader.create().read(h.w,h.m,{...core,extractStructuredRecordsFromText:()=>[]},f,p);
  assert.equal(r.evidence.parsedDataBlocks,1);assert.equal(r.evidence.recordReturned,0);assert.equal(r.evidence.recordAccepted,0);assert.equal(r.bound,0);
 });
 test('record diagnostics distinguish format, other ID, permalink, quoted text and accepted empty text',()=>{
- const h=hydrationEnv([{textContent:JSON.stringify({url:link})}]);
+ const h=hydrationEnv([{textContent:'window.payload='+JSON.stringify({url:link})+';'}]);
  const records=[null,'PRIVATE_RECORD', {postId:'550000000000092',permalink:link.replace(id,'550000000000092')}, {postId:id,permalink:link.replace(group,'foreign')}, {postId:id,permalink:link,text:'PRIVATE_QUOTED',__structuredDiagnostics:{structuredTextPath:'shared_story.message'}}, {postId:id,permalink:link,text:'',media:[]}];
  const r=reader.create().read(h.w,h.m,{...core,extractStructuredRecordsFromText:()=>records},f,p),e=r.evidence;
  assert.equal(e.recordReturned,6);assert.equal(e.recordInvalid,2);assert.equal(e.recordOtherId,1);assert.equal(e.recordLinkRejected,1);assert.equal(e.recordShared,1);assert.equal(e.recordAccepted,1);assert.equal(e.recordNoText,1);assert.equal(e.parsedOtherBlocks,1);
  assert.equal(r.bound,1);assert.equal(r.textRead,0);assert.equal(r.rows[0].price,null);assert(Object.values(e).every(Number.isInteger));assert(!JSON.stringify(e).includes('PRIVATE'));assert(!JSON.stringify(e).includes(id));
 });
 test('record truncation is explicit and never inspects a later record as the requested post',()=>{
- const h=hydrationEnv([{textContent:JSON.stringify({url:link})}]);
+ const h=hydrationEnv([{textContent:'window.payload='+JSON.stringify({url:link})+';'}]);
  const records=Array.from({length:100},()=>({postId:'550000000000092',permalink:link.replace(id,'550000000000092')}));records.push({postId:id,permalink:link,text:'Sprzedam mieszkanie 42m2',media:[]});
  const r=reader.create().read(h.w,h.m,{...core,extractStructuredRecordsFromText:()=>records},f,p);
  assert.equal(r.evidence.recordReturned,101);assert.equal(r.evidence.recordOtherId,100);assert.equal(r.evidence.recordLimit,1);assert.equal(r.evidence.budgetLimited,1);assert.equal(r.bound,0);
+});
+
+function wrapRelay(story,n=15){let value=story;for(let i=0;i<n;i++)value={__bbox:{result:{data:value}}};return value;}
+const selectedStory=()=>({__typename:'Story',post_id:id,permalink_url:link,message:{text:'Sprzedam mieszkanie 42 m2. Cena 319000 zł. 2 pokoje. Retkinia. ul. Testowa 12.'}});
+const selectData=body=>reader.selectOwnStoryData(body,group,id,()=>0,500);
+test('large deeply nested Relay data recovers fields without sending the large payload to the parser',()=>{
+ const body=JSON.stringify({padding:'x'.repeat(900000),require:[['RelayPrefetchedStreamCache','next',[],[wrapRelay(selectedStory())]]]});
+ assert.equal(core.extractStructuredRecordsFromText(body,'HYDRATION',{sourceType:'GROUP',sourceId:group,sourceUrl:`https://www.facebook.com/groups/${group}/`,allowGroupRedirect:false}).length,0);
+ let max=0;const stub={...core,extractStructuredRecordsFromText(payload,...args){max=Math.max(max,payload.length);assert(payload.length<=131072);return core.extractStructuredRecordsFromText(payload,...args)}};
+ const h=hydrationEnv([{getAttribute:()=> 'application/json',textContent:body}]),r=reader.create().read(h.w,h.m,stub,f,p);
+ assert.equal(r.bound,1);assert.equal(r.textRead,1);assert.equal(r.rows[0].price,319000);assert.equal(r.rows[0].area,42);assert.equal(r.rows[0].rooms,2);assert.equal(r.rows[0].street,'Testowa 12');assert(max<1000);assert.equal(r.evidence.scriptOversize,1);assert.equal(r.evidence.selectedStories,1);assert(r.evidence.selectedCoreRecords>0);
+});
+test('two large data blocks and exhausted legacy inspection do not discard a selected own story',()=>{
+ const scripts=[{getAttribute:()=> 'application/json',textContent:JSON.stringify({padding:'x'.repeat(1500000)})},{getAttribute:()=> 'application/json',textContent:JSON.stringify({padding:'y'.repeat(1500000),data:wrapRelay(selectedStory())})}];
+ const r=hydrationEnv(scripts).run();assert.equal(r.bound,1);assert.equal(r.rows[0].price,319000);assert.equal(r.evidence.scriptOversize,2);assert.equal(r.evidence.selectedStories,1);
+});
+test('a small story beyond the legacy depth cap is also selected',()=>{const r=hydrationEnv([{textContent:JSON.stringify(wrapRelay(selectedStory()))}]).run();assert.equal(r.bound,1);assert.equal(r.rows[0].area,42);});
+test('same-owner content and timestamp sections may establish one root story without taking foreign text',()=>{
+ const story={__typename:'Story',id,comet_sections:{content:{story:{__typename:'Story',id,message:{text:'Sprzedam mieszkanie 42 m2 za 319000 zł'}}},timestamp:{story:{__typename:'Story',id,url:link}}}};
+ const r=hydrationEnv([{textContent:JSON.stringify(wrapRelay(story))}]).run();assert.equal(r.bound,1);assert.equal(r.rows[0].price,319000);assert.equal(r.rows[0].area,42);
+});
+test('comment, feedback, quote, shared and attachment ancestors cannot become an own post after projection',()=>{
+ for(const key of ['comments','feedback','quoted_story','shared_story','attachments','media','caption']){
+  const body=JSON.stringify({data:{[key]:selectedStory()}}),r=hydrationEnv([{textContent:body}]).run();assert.equal(r.bound,0,key);assert.equal(r.rows[0].price,null,key);assert(r.evidence.selectorRejected>0,key);
+ }
+});
+test('an enclosing foreign story or comment discovered after the target subtree still rejects it',()=>{
+ for(const parent of [{child:selectedStory(),post_id:'550000000000092',__typename:'Story'},{child:selectedStory(),__typename:'Comment'}]){
+  const r=hydrationEnv([{textContent:JSON.stringify(parent)}]).run();assert.equal(r.bound,0);assert.equal(r.rows[0].price,null);assert(r.evidence.selectorRejected>0);
+ }
+});
+test('serialized story text, duplicate keys and malformed JSON never create projected identity',()=>{
+ const cases=[JSON.stringify({caption:JSON.stringify(selectedStory())}),'{"data":'+JSON.stringify(selectedStory())+',"data":{}}','{"data":'+JSON.stringify(selectedStory())+',}',JSON.stringify({data:selectedStory()}).slice(0,-1)];
+ for(const body of cases){const r=hydrationEnv([{getAttribute:()=> 'application/json',textContent:body}]).run();assert.equal(r.bound,0);assert.equal(r.rows[0].price,null);}
+});
+test('projection respects exact group, conflicting IDs, structural depth and deadline caps',()=>{
+ for(const story of [{...selectedStory(),permalink_url:link.replace(group,'foreign')},{...selectedStory(),id:'550000000000092'}])assert.equal(selectData(JSON.stringify(story)).bodies.length,0);
+ const deep=selectData(JSON.stringify(wrapRelay(selectedStory(),50)));assert.equal(deep.valid,false);assert.equal(deep.limited,true);
+ const timed=reader.selectOwnStoryData(JSON.stringify(selectedStory()),group,id,()=>501,500);assert.equal(timed.valid,false);assert.equal(timed.bodies.length,0);
+ assert.equal(selectData('x'.repeat(4194305)).limited,true);
+});
+test('escaped delimiters and unicode ID strings keep JSON boundaries exact',()=>{
+ const story=selectedStory();story.message.text+=' { escaped "quote" and \\ slash }';const body=JSON.stringify({padding:'{"fake":"}"}',data:story}).replace('"post_id":"'+id+'"','"post_id":"\\u0035'+id.slice(1)+'"');
+ const selected=selectData(body);assert.equal(selected.valid,true);assert.equal(selected.bodies.length,1);assert.equal(JSON.parse(selected.bodies[0]).post_id,id);
+});
+
+test('a neighboring story message cannot fill a target story with no own text',()=>{
+ const story={__typename:'Story',post_id:id,permalink_url:link,neighbor:{...selectedStory(),post_id:'550000000000092',permalink_url:link.replace(id,'550000000000092')}};
+ const r=hydrationEnv([{textContent:JSON.stringify(wrapRelay(story))}]).run();assert.equal(r.bound,1);assert.equal(r.textRead,0);assert.equal(r.rows[0].price,null);
+});
+test('bounded projections retain a text-bearing own root after textless duplicate scopes',()=>{
+ const story={...selectedStory(),sections:Array.from({length:12},()=>({__typename:'Story',post_id:id,url:link}))};
+ const r=hydrationEnv([{textContent:JSON.stringify(wrapRelay(story))}]).run();assert.equal(r.bound,1);assert.equal(r.rows[0].price,319000);assert.equal(r.evidence.selectorIncomplete,1);assert(r.evidence.selectedStories<=8);
+});
+
+test('a huge navigation block containing only the target URL cannot spend the structural story budget',()=>{
+ const scripts=[{getAttribute:()=> 'application/json',textContent:JSON.stringify({url:link,padding:'x'.repeat(3000000)})},{getAttribute:()=> 'application/json',textContent:JSON.stringify({padding:'y'.repeat(3000000),data:wrapRelay(selectedStory())})}];
+ const r=hydrationEnv(scripts).run();assert.equal(r.bound,1);assert.equal(r.rows[0].price,319000);assert.equal(r.evidence.selectedBlocks,1);assert(r.evidence.sourceKiB<4096);
+});
+
+test('a foreign parent permalink rejects a nested target even when the parent GraphQL ID is opaque',()=>{
+ const parent={child:selectedStory(),__typename:'Story',id:'opaque-graphql-id',url:link.replace(id,'550000000000092')};
+ const r=hydrationEnv([{textContent:JSON.stringify(parent)}]).run();assert.equal(r.bound,0);assert.equal(r.rows[0].price,null);assert(r.evidence.selectorRejected>0);
+});
+
+test('tracking on an actual structured permalink is canonicalized but comment/reply/hash targets remain rejected',()=>{
+ const tracked={...selectedStory(),permalink_url:link+'?__cft__[0]=PRIVATE_TRACKING&__tn__=X'};
+ const r=hydrationEnv([{textContent:JSON.stringify(wrapRelay(tracked))}]).run();assert.equal(r.bound,1);assert.equal(r.rows[0].price,319000);assert.equal(r.rows[0].permalink,link);assert(!JSON.stringify(r).includes('PRIVATE_TRACKING'));
+ for(const suffix of ['?comment_id=999999','?reply_comment_id=999999','#comment']){
+  const bad=hydrationEnv([{textContent:JSON.stringify(wrapRelay({...selectedStory(),permalink_url:link+suffix}))}]).run();assert.equal(bad.bound,0);assert.equal(bad.rows[0].price,null);
+ }
 });
