@@ -50,4 +50,13 @@ class OcrBatchTest{
   assertNotNull(OcrSummary.decode(old));assertNull(OcrSummary.decode(OcrSummary("CONTEXT",9,0,0,0,0,ReviewDataSummary("DONE",9,1,0,0,0,0,0,0)).encode()))
  }
 
+ @Test fun missingDataGetsPriorityAndEveryPostGetsOneImageBeforeExtraViews()=runBlocking{
+  val manual=(1..19).map{row(it)};val offer=suggestion(row(20).postId)
+  val reads=mutableListOf<Pair<String,Int>>()
+  val out=OcrBatch.run(listOf(offer)+manual,true,{3},{true},{id,index->reads.add(id to index);"x"},{id,_->suggestion(id)},{0})
+  assertEquals("DONE",out.summary.reason);assertEquals(20,reads.size)
+  assertEquals(manual.map{it.postId}+offer.postId,reads.map{it.first})
+  assertTrue(reads.all{it.second==0});assertEquals(20,out.rows.size)
+ }
+
 }

@@ -43,6 +43,16 @@ class OcrInstrumentedTest{
    }
   }
  }
+ @Test fun newPostFirstCropReplacesExtraCropBeforeLosingOcrCoverage(){
+  val store=DesktopThumbnails()
+  try{
+   for(i in 1..10)for(slot in 0..1)assertTrue(store.put((550000000000080+i).toString(),slot,Bitmap.createBitmap(10,10,Bitmap.Config.ARGB_8888),Bitmap.createBitmap(20,20,Bitmap.Config.ARGB_8888)))
+   val first=store.ocrRows("550000000000081").first()
+   assertTrue(store.put("550000000000099",0,Bitmap.createBitmap(10,10,Bitmap.Config.ARGB_8888),Bitmap.createBitmap(20,20,Bitmap.Config.ARGB_8888)))
+   assertEquals(1,store.ocrRows("550000000000099").size);assertFalse(first.isRecycled)
+   assertEquals(20,(1..10).sumOf{store.ocrRows((550000000000080+it).toString()).size}+store.ocrRows("550000000000099").size)
+  }finally{store.clear()}
+ }
  @Test fun cacheIsBoundedSeparateAndErasedAlongWithPreview(){
   val store=DesktopThumbnails();val held=mutableListOf<Bitmap>()
   for(i in 1..9){val o=Bitmap.createBitmap(1024,1024,Bitmap.Config.ARGB_8888);held.add(o);assertTrue(store.put((550000000000080+i).toString(),0,Bitmap.createBitmap(100,100,Bitmap.Config.ARGB_8888),o))}

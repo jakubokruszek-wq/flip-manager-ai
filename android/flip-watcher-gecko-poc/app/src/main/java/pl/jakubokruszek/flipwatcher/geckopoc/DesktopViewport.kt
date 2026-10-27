@@ -51,6 +51,13 @@ class DesktopThumbnails {
         if(slot !in 0..2||!Regex("[0-9]{5,30}").matches(id)||image.isRecycled||image.width>192||image.height>144||!images.containsKey(id)&&images.size>=20){if(!image.isRecycled)image.recycle();ocrImage?.let{if(!it.isRecycled)it.recycle()};return false}
         val slots=images.getOrPut(id){linkedMapOf()};if(slots.containsKey(slot)){image.recycle();ocrImage?.let{if(!it.isRecycled)it.recycle()};return false};slots[slot]=image
         ocrImage?.let{b->
+            // Preserve one OCR crop per post before extra views of the same post.
+            if(b!==image&&!b.isRecycled&&b.width in 1..1024&&b.height in 1..1024&&ocr[id].isNullOrEmpty()){
+                while(ocr.values.sumOf{it.size}>=20||ocrBytes+b.allocationByteCount>24*1024*1024){
+                    val extras=ocr.values.firstOrNull{it.size>1}?:break
+                    val key=extras.keys.last();extras.remove(key)?.recycle()
+                }
+            }
             if(b!==image&&!b.isRecycled&&b.width in 1..1024&&b.height in 1..1024&&ocr.values.sumOf{it.size}<20&&ocrBytes+b.allocationByteCount<=24*1024*1024)ocr.getOrPut(id){linkedMapOf()}[slot]=b
             else if(b!==image&&!b.isRecycled)b.recycle()
         }

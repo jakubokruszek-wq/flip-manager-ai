@@ -16,7 +16,7 @@ function transport(port,w){
 }
 function cards(w,core,group){
  const all=Array.from(w.document.querySelectorAll('[role="article"],article'));if(all.length>100)return[];
- return all.filter(c=>!c.parentElement?.closest('[role="article"],article')&&c.isConnected!==false&&c.ownerDocument===w.document&&!c.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]')).flatMap(card=>{
+ return all.filter(c=>!c.parentElement?.closest('[role="article"],article')&&c.isConnected!==false&&c.ownerDocument===w.document&&!c.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"])')).flatMap(card=>{
   const links=Array.from(card.querySelectorAll('a[href]')).slice(0,100).filter(a=>a.closest('[role="article"],article')===card).map(a=>core.parsePostLink(a.href)).filter(Boolean);
   if(!links.length||links.some(p=>p.sourceType!=='GROUP'||p.sourceId!==group)||new Set(links.map(p=>p.postId)).size!==1)return[];
   return [{card,id:links[0].postId}];
@@ -24,7 +24,7 @@ function cards(w,core,group){
 }
 function scrollCards(w,core,group){
  const all=Array.from(w.document.querySelectorAll('[role="article"],article'));if(all.length>100)return[];
- return all.filter(card=>card.isConnected!==false&&card.ownerDocument===w.document&&!card.parentElement?.closest('[role="article"],article')&&!card.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]')).filter(card=>
+ return all.filter(card=>card.isConnected!==false&&card.ownerDocument===w.document&&!card.parentElement?.closest('[role="article"],article')&&!card.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"])')).filter(card=>
   !Array.from(card.querySelectorAll('a[href]')).slice(0,100).some(a=>{const p=core.parsePostLink(a.href);return p&&(p.sourceType!=='GROUP'||p.sourceId!==group);})).map(card=>({card}));
 }
 // A top ancestor hit proves delegated input only along the actual, unclipped
@@ -56,7 +56,7 @@ function point(w,core,group,lastMoved=null,audit=null){
  const all=Array.from(w.document.querySelectorAll('[role="article"],article')).slice(0,100);
  const bound=scrollCards(w,core,group);
  const recent=lastMoved&&lastMoved.isConnected!==false&&lastMoved.ownerDocument===w.document&&!lastMoved.closest?.('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]')?
-  all.filter(card=>card.ownerDocument===w.document&&card.isConnected!==false&&!card.parentElement?.closest('[role="article"],article')&&!card.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]')&&lastMoved.contains(card)).map(card=>({card})):[];
+  all.filter(card=>card.ownerDocument===w.document&&card.isConnected!==false&&!card.parentElement?.closest('[role="article"],article')&&!card.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"])')&&lastMoved.contains(card)).map(card=>({card})):[];
  diag.pointCacheCards=recent.length;
  const inputCards=[...bound,...recent],regions=[],probes=[];
  const clipped=r=>{if(!r)return null;const l=Math.max(left+width*.1,r.left),right=Math.min(left+width*.9,r.right),t=Math.max(top+height*.1,r.top),bottom=Math.min(top+height*.9,r.bottom);return right-l>=20&&bottom-t>=20?{left:l,right,top:t,bottom}:null;};
@@ -159,7 +159,7 @@ function documentImages(w,core,group,helpers,owners,allowedIds,audit){
  }
  return result;
 }
-function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null,helpers=null){
+function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null,helpers=null,preferredIds=null){
  const count=k=>{if(audit)audit[k]=Math.min(10000,(audit[k]||0)+1);};
  if(!allowedIds||typeof allowedIds.has!=='function')return null;
  const vp=w.visualViewport,width=Number(vp?.width)||w.innerWidth,height=Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight),left=Number(vp?.offsetLeft)||0,top=Number(vp?.offsetTop)||0;
@@ -177,7 +177,11 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null,
 
  for(const p of documentImages(w,core,group,helpers,owners,allowedIds,audit))targets.push({card:p.container,id:p.id,network:true,documentSource:p});
  const result=()=>({width,height,tiles,keys,network,valid:(currentBindings=bindings)=>Math.abs((Number(w.visualViewport?.width)||w.innerWidth)-width)<1&&Math.abs(Math.min(w.innerHeight,Number(w.visualViewport?.height)||w.innerHeight)-height)<1&&Math.abs((Number(w.visualViewport?.offsetLeft)||0)-left)<1&&Math.abs((Number(w.visualViewport?.offsetTop)||0)-top)<1&&checks.every(check=>check(mediaOwners(currentBindings,allowedIds)))});
+ // A new unresolved post gets a frame before extra photos of a captured post.
+ const captured=id=>[...(slots.get(id)?.values()||[])].some(mark=>mark.done);
+ if(preferredIds)targets.sort((a,b)=>Number(captured(a.id))-Number(captured(b.id))||Number(preferredIds.has(b.id))-Number(preferredIds.has(a.id)));
  for(const {card,id,network:fromNetwork,documentSource} of targets){
+  if(preferredIds&&tiles.some(tile=>tile.postId===id))continue;
   if(!allowedIds.has(id))continue;
   if(!documentSource)count(fromNetwork?'photoNetworkCards':'photoExactCards');
   if(!slots.has(id)){if(slots.size===20)continue;slots.set(id,new Map());}const media=slots.get(id);
@@ -208,6 +212,7 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null,
    checks.push(lookup=>{const after=node.getBoundingClientRect();return node.isConnected!==false&&node.ownerDocument===w.document&&(documentSource?identity(item,lookup)===id:needsNetwork?scrollCards(w,core,group).some(p=>p.card===card)&&identity(photoNodes(card,id,group,core).find(p=>p.node===node)?.item||{},lookup)===id:cards(w,core,group).some(p=>p.card===card&&p.id===id))&&["left","top","right","bottom"].every(k=>Math.abs(after[k]-r[k])<1)&&source===sourceValue()&&(!ready||ready())&&uncovered();});
    count('photoSelected');if(documentSource)count('photoDocumentSelected');network=network||needsNetwork;tiles.push({postId:id,slot:mark.slot,x,y,width:right-x,height:bottom-y});keys.push(mark);
    if(tiles.length===3)return result();
+   if(preferredIds)break;
   }
  }
  return tiles.length?result():null;

@@ -36,6 +36,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
         if(onEnrich!=null&&reviewCount>0)content.addView(Button(context).apply{
             tag="poc.review.enrich";text="Uzupełnij do ręcznego sprawdzenia ($reviewCount)";isAllCaps=false;isSaveEnabled=false;setOnClickListener{onEnrich.invoke()}
         })
+        if(reviewCount>0)content.addView(label("Do sprawdzenia — obraz do OCR: ${rows.count{DesktopPresentation.reviewable(it)&&ocrAvailable(it.postId)}}/$reviewCount. Brak obrazu oznacza brak przechwycenia, nie brak danych.",14f))
         if(onOcr!=null&&(reviewCount>0||rows.any{DesktopSummary.eligible(it)&&ocrAvailable(it.postId)}))content.addView(Button(context).apply{
             tag="poc.ocr.start";text="Odczytaj dane ze zdjęć (OCR)";isAllCaps=false;isSaveEnabled=false;setOnClickListener{onOcr.invoke()}
         })

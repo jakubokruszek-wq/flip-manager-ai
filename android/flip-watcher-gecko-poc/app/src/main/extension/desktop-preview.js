@@ -543,7 +543,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
     // A cold or still-changing first frame must not be lost by scrolling away.
     // One bounded retry, still inside the original capture/time budgets.
     for(let attempt=0;attempt<2&&model.stats.photoPreviewFrames<20&&w.performance.now()<scrollEnd-5000;attempt++){
-     const shot=viewport.photos(w,core,m.groupId,photoNodes,photoSlots,new Set(model.rows().map(r=>r.postId)),mediaBindings,model.stats,{imageURL,photoLinkId,photoAnchorHref,opaquePhotoLink});if(!shot)break;
+     const shot=viewport.photos(w,core,m.groupId,photoNodes,photoSlots,new Set(model.rows().map(r=>r.postId)),mediaBindings,model.stats,{imageURL,photoLinkId,photoAnchorHref,opaquePhotoLink},new Set(model.rows().filter(r=>!r.usable||r.price===null||r.area===null).map(r=>r.postId)));if(!shot)break;
      model.stats.photoPreviewFrames++;const ack=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:'photos',width:shot.width,height:shot.height,tiles:shot.tiles});
      if(invalid||!safe(m))return empty('CONTEXT');
      if(ack?.accepted===true&&ack.count===shot.tiles.length){model.stats.viewportReady=1;model.stats.viewportProbeCode=0;

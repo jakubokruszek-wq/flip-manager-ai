@@ -53,3 +53,32 @@ test('photo selection audit distinguishes geometry, loading, occlusion and compl
 test('small unlinked tiles require exact network media proof both before and after capture',()=>{const h=env();const item={url:'https://scontent.fbcdn.net/a.jpg',networkRequired:true},postId='550000000000091',nodes=()=>[{node:h.image,item}],bindings=[{postId,urls:[item.url],ids:[]}],allowed=new Set([postId]);assert.equal(rawPhotos(h.w,core,group,nodes,new Map(),allowed,[]),null);const shot=rawPhotos(h.w,core,group,nodes,new Map(),allowed,bindings);assert(shot);assert.equal(shot.network,true);assert(shot.valid(bindings));assert.equal(shot.valid([]),false);assert.equal(shot.valid([...bindings,{postId:'550000000000092',urls:[item.url],ids:[]}]),false);});
 test('CSS source replacement or loss of loaded proof invalidates a pending photo',()=>{const h=env();let source='existing-source',ready=true;const shot=photos(h.w,core,group,()=>[{node:h.image,item:{mediaId:'880000000000001'},source:()=>source,ready:()=>ready}],new Map());assert(shot.valid());ready=false;assert.equal(shot.valid(),false);ready=true;source='new-source';assert.equal(shot.valid(),false);});
 test('opaque photo wrapper fallback is not accepted by an exact DOM card without a current unique network media owner',()=>{const h=env(),postId='550000000000091',item={url:'https://scontent.fbcdn.net/a.jpg',mediaId:null,networkRequired:true},nodes=()=>[{node:h.image,item}],allowed=new Set([postId]),bound=[{postId,urls:[item.url],ids:[]}];assert.equal(rawPhotos(h.w,core,group,nodes,new Map(),allowed,[]),null);const shot=rawPhotos(h.w,core,group,nodes,new Map(),allowed,bound);assert(shot.valid());assert.equal(shot.valid([]),false);assert.equal(shot.valid([...bound,{postId:'550000000000092',urls:[item.url],ids:[]}]),false);});
+
+test('fair feed capture takes one image of a post per frame without weakening identity checks',()=>{
+ const h=env(),id='550000000000091',slots=new Map();
+ const nodes=()=>[1,2,3].map(i=>({node:h.image,item:{mediaId:'88000000000000'+i}}));
+ const shot=rawPhotos(h.w,core,group,nodes,slots,new Set([id]),[],null,null,new Set([id]));
+ assert.equal(shot.tiles.length,1);assert(shot.valid());shot.keys[0].done=true;
+ const next=rawPhotos(h.w,core,group,nodes,slots,new Set([id]),[],null,null,new Set([id]));
+ assert.equal(next.tiles.length,1);assert.equal(next.tiles[0].slot,1);
+ h.image.currentSrc+='changed';assert.equal(next.valid(),false);
+});
+
+test('commentable_feed_story is a post container, while actual comment containers remain excluded',()=>{
+ for(const actualComment of [false,true]){
+  const h=env();h.card.closest=selector=>selector.includes('[data-testid*="comment"]')&&(actualComment||!selector.includes(':not([data-testid="commentable_feed_story"])'))?h.card:null;
+  const shot=photos(h.w,core,group,()=>[{node:h.image,item:{mediaId:'880000000000001'}}],new Map());
+  assert.equal(!!shot,!actualComment);if(shot)assert(shot.valid());
+ }
+});
+
+test('new manual post is selected before extra images of a previously captured offer',()=>{
+ const h=env(),offer='550000000000091',manual='550000000000092';
+ const other={...h.card,querySelectorAll:()=>[{href:`https://www.facebook.com/groups/${group}/posts/${manual}/`,closest:()=>other}]};
+ const second={...h.image,getBoundingClientRect:()=>({...h.rect,left:400,right:700})};
+ h.w.document.querySelectorAll=()=>[h.card,other];h.w.document.elementFromPoint=x=>x>=400?second:h.image;
+ const nodes=card=>[{node:card===other?second:h.image,item:{mediaId:card===other?'880000000000002':'880000000000003'}}];
+ const slots=new Map([[offer,new Map([['880000000000001',{slot:0,done:true}]])]]);
+ const shot=rawPhotos(h.w,core,group,nodes,slots,new Set([offer,manual]),[],null,null,new Set([manual]));
+ assert.deepEqual(shot.tiles.map(t=>t.postId),[manual,offer]);assert(shot.valid());
+});
