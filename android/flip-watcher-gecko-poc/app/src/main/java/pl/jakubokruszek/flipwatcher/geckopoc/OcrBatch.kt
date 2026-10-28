@@ -4,11 +4,12 @@ import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 
 /** No business fields in persistent summary. OCR candidates never replace accepted DOM fields. */
-data class OcrSummary(val reason:String,val selected:Int,val images:Int,val texts:Int,val suggestions:Int,val errors:Int,val reviewFailure:ReviewDataSummary?=null,val reviewCompleted:ReviewDataSummary?=null){
- fun encode()=JSONObject().put("reason",reason).put("selected",selected).put("images",images).put("texts",texts).put("suggestions",suggestions).put("errors",errors).apply{reviewFailure?.let{put("reviewFailure",JSONObject(it.encode()))};reviewCompleted?.let{put("reviewCompleted",JSONObject(it.encode()))}}.toString()
+data class OcrSummary(val reason:String,val selected:Int,val images:Int,val texts:Int,val suggestions:Int,val errors:Int,val reviewFailure:ReviewDataSummary?=null,val reviewCompleted:ReviewDataSummary?=null,val imageChecks:Map<String,Int> = emptyMap()){
+ fun encode()=JSONObject().put("reason",reason).put("selected",selected).put("images",images).put("texts",texts).put("suggestions",suggestions).put("errors",errors).apply{reviewFailure?.let{put("reviewFailure",JSONObject(it.encode()))};reviewCompleted?.let{put("reviewCompleted",JSONObject(it.encode()))};if(imageChecks.isNotEmpty())put("imageChecks",JSONObject(imageChecks))}.toString()
  fun report()=buildString{
-  appendLine("OCR 0.5.51 • tylko lokalnie • $reason")
+  appendLine("OCR 0.5.52 • tylko lokalnie • $reason")
   appendLine("Posty wybrane: $selected • obrazy: $images • odczytane napisy: $texts • wyniki do sprawdzenia: $suggestions • błędy: $errors")
+  if(imageChecks.isNotEmpty())appendLine(ReviewImageChecks.report(imageChecks))
   if(reason=="PARTIAL")appendLine("OCR obrazów z pamięci ukończony; etap otwierania pozostałych postów zatrzymany. Wynik częściowy.")
   (reviewFailure?:reviewCompleted)?.let{
    appendLine(if(it.reason=="DONE")"\nEtap otwierania zakończony." else "\nPrzyczyna etapu otwierania: ${it.reason}. ${it.explanation()}")
@@ -23,16 +24,19 @@ data class OcrSummary(val reason:String,val selected:Int,val images:Int,val text
  companion object{fun decode(raw:String?):OcrSummary?=runCatching{
   if(raw==null||raw.length>4096)return null;val j=JSONObject(raw)
   val keys=j.keys().asSequence().toSet();val required=setOf("reason","selected","images","texts","suggestions","errors")
-  if(keys!=required&&keys!=required+"reviewFailure"&&keys!=required+"reviewCompleted")return null
+  val allowed=listOf(required,required+"reviewFailure",required+"reviewCompleted")
+  if(keys !in allowed&&keys !in allowed.map{it+"imageChecks"})return null
+  val imageChecks=if(j.has("imageChecks"))ReviewImageChecks.parse(j.optJSONObject("imageChecks"))?:return null else emptyMap()
   val failure=if(j.has("reviewFailure"))ReviewDataSummary.decode(j.getJSONObject("reviewFailure").toString())?.takeIf{it.reason!="DONE"}?:return null else null
   val completed=if(j.has("reviewCompleted"))ReviewDataSummary.decode(j.getJSONObject("reviewCompleted").toString())?.takeIf{it.reason=="DONE"}?:return null else null
   if(j.optString("reason") !in setOf("DONE","NO_CONSENT","CONTEXT","TIMEOUT","CANCELLED","PAUSED","ERROR","INTERRUPTED","PROTOCOL","PARTIAL"))return null
   val c=listOf("selected","images","texts","suggestions","errors").map{k->val n=j.opt(k);if(n !is Int||n !in 0..20)return null;n}
+  if(imageChecks.isNotEmpty()&&imageChecks.getValue("checked")>c[0])return null
   if(c[2]>c[1]||c[3]>c[0]||c[4]>c[1]||c[2]+c[4]>c[1]||c[1]>c[0]*3)return null
   if(failure!=null&&(failure.selected>c[0]||j.getString("reason")=="DONE"))return null
   if(j.getString("reason")=="PARTIAL"&&(failure?.reason!="NO_OWN_POST"||c[1]==0))return null
   if(completed!=null&&(completed.selected>c[0]||j.getString("reason")!="DONE"))return null
-  OcrSummary(j.getString("reason"),c[0],c[1],c[2],c[3],c[4],failure,completed)
+  OcrSummary(j.getString("reason"),c[0],c[1],c[2],c[3],c[4],failure,completed,imageChecks)
  }.getOrNull()}
 }
 object OcrProtocol{

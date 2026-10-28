@@ -145,3 +145,15 @@ test('priority admission cannot forget a known foreign-city exclusion and later 
  assert(m.rows().some(r=>r.postId===id&&r.qualification==='FOREIGN_CITY'));
  m.add({...record(id),media:[]},'DOM');assert.equal(m.rows().find(r=>r.postId===id).usable,false);assert.equal(m.rows().length,20);
 });
+
+test('area unit cannot prepend its digit to the following total price or become a house number',()=>{
+ for(const unit of ['m2','m²'])for(const amount of ['260 000 zł','260000 PLN']){
+  const r=fields.previewFields({postText:`Sprzedam mieszkanie Łódź ul. Różyckiego 45,8 ${unit} ${amount}`});assert.equal(r.price,260000);assert.equal(r.area,45.8);assert.equal(r.street,'Różyckiego');
+ }
+ const named=fields.previewFields({postText:'Sprzedam mieszkanie ul. Testowa 12. 42m2 319 000 zł'});assert.equal(named.street,'Testowa 12');assert.equal(named.price,319000);assert.equal(named.area,42);
+});
+test('bare M3 area is sale-scoped and never interprets a distance or conflicting areas',()=>{
+ const r=fields.previewFields({postText:'Sprzedam M3 40m rozkładowe po remoncie 3piętro niski blok Łódź Dąbrowa 355 tys'});assert.equal(r.area,40);assert.equal(r.rooms,2);assert.equal(r.price,355000);assert.equal(fields.previewFields({postText:'Na sprzedaż M3 40m po remoncie 355 tys'}).area,40);
+ for(const text of ['Sprzedam M3 200m do przystanku 355 tys','Sprzedam M3 200m od tramwaju 355 tys','Sprzedam M3 40m i M3 50m 355 tys','M3 40m 355 tys','Sprzedam M3 9m 355 tys','Sprzedam M3 301m 355 tys'])assert.equal(fields.previewFields({postText:text}).area,null,text);
+ const explicit=fields.previewFields({postText:'Sprzedam M3 40m. Powierzchnia 44m2. Cena 355 tys'});assert.equal(explicit.area,44);
+});

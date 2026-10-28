@@ -114,7 +114,7 @@ function selectOwnStoryData(body,group,id,now,deadline,collectPhotos=false){
   const owner=identity(f),type=String(owner.type);
   if(owner.conflict||foreignPostLink(f,owner)||owner.key&&(!owner.valid||owner.id!==id)||/story|post/i.test(type)&&(!owner.valid||owner.id!==id)||/comment|feedback|shared|quoted|crosspost|reshare|reply|video|actor|profile/i.test(type))return;
   // A URI is media evidence only below a typed Photo, never a free URL or avatar.
-  if(/^(?:image|photo_image|viewer_image|large_image|full_image|preview_image)$/i.test(f.relation.key||'')&&Number(f.own.width)>=200&&Number(f.own.height)>=120){
+  if(/^(?:image|photo_image|viewer_image|large_image|full_image|preview_image|large_share_image|thumbnail_image)$/i.test(f.relation.key||'')&&Number(f.own.width)>=200&&Number(f.own.height)>=120){
    try{const u=new URL(f.own.uri);if(u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&!u.hash&&/(?:^|\.)fbcdn\.net$/i.test(u.hostname)&&u.href.length<=8192&&f.mediaRaw.size<20)f.mediaRaw.add(u.href);}catch{}
   }
   if(type==='Photo'){for(const src of f.mediaRaw)if(f.mediaPhotos.size<20)f.mediaPhotos.add(src);f.mediaRaw.clear();}

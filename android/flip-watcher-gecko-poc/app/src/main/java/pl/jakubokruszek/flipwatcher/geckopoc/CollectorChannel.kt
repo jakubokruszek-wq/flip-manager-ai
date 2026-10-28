@@ -133,14 +133,17 @@ class CollectorChannel(
         val parsed=ReviewDataProtocol.parse(reply,nonce,row.postId,group);reviewFailureReason=when{reply==null->"REPLY_TIMEOUT";parsed==null->"REPLY_INVALID";!parsed.safe&&parsed.reason=="ERROR"->"READER_ERROR";!parsed.safe->"CONTEXT";else->null};observe(if(parsed==null)"PARSE_STOP" else "PARSE_OK");return parsed
     }
 
+    var reviewImageOutcome:String="PROTOCOL";private set
     suspend fun reviewImages(row:DesktopRow,expectedUrl:String,view:org.mozilla.geckoview.GeckoView,images:DesktopThumbnails,consent:Boolean=false,group:String=PocPolicy.APPROVED_GROUP_ID,alive:()->Boolean):Boolean{
+        reviewImageOutcome="PROTOCOL"
         if(!consent||!alive()||!ReviewDataGate.matches(expectedUrl,group,row.postId,fixtureMode))return false
         val nonce=UUID.randomUUID().toString();val generation=connectionGeneration
         fun live()=alive()&&isConnected&&connectionGeneration==generation&&connectedUrl==expectedUrl
         val bridge=DesktopViewportBridge(view,nonce,images,::live);viewportBridge=bridge
         return try{
             val reply=request(nonce,JSONObject().put("type","reviewImages").put("nonce",nonce).put("consent",true).put("ocrConsent",true).put("groupId",group).put("postId",row.postId).put("expectedUrl",expectedUrl).put("fixture",fixtureMode),7_000)
-            live()&&reply!=null&&reply.keys().asSequence().toSet()==setOf("type","nonce","status","count")&&reply.optString("type")=="reviewImagesResult"&&reply.optString("nonce")==nonce&&reply.optString("status")=="OK"&&reply.opt("count") is Int&&reply.getInt("count") in 0..1
+            val outcome=ReviewImageChecks.reply(reply,nonce);reviewImageOutcome=outcome?:"PROTOCOL"
+            live()&&outcome!=null&&outcome!="CONTEXT"
         }finally{bridge.close();if(viewportBridge===bridge)viewportBridge=null}
     }
 

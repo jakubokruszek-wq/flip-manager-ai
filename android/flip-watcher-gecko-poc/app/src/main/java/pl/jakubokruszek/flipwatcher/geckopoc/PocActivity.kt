@@ -372,8 +372,8 @@ class PocActivity : ComponentActivity() {
                 reviewJob=lifecycleScope.launch{
                     try{
                         delay(200)
-                        val pendingOcr=linkedMapOf<String,DesktopRow>();val cachedOcr=linkedMapOf<String,DesktopRow>();var ocrImages=0;var cachedImages=0;var ocrTexts=0;var ocrErrors=0
-                        fun ocrProgress(reason:String,failure:ReviewDataSummary?=null,completed:ReviewDataSummary?=null){if(withOcr)saveOcr(OcrSummary(reason,selectedOcr,ocrImages,ocrTexts,pendingOcr.size,ocrErrors,failure,completed))}
+                        val pendingOcr=linkedMapOf<String,DesktopRow>();val cachedOcr=linkedMapOf<String,DesktopRow>();var ocrImages=0;var cachedImages=0;var ocrTexts=0;var ocrErrors=0;var imageChecks:Map<String,Int> = emptyMap()
+                        fun ocrProgress(reason:String,failure:ReviewDataSummary?=null,completed:ReviewDataSummary?=null){if(withOcr)saveOcr(OcrSummary(reason,selectedOcr,ocrImages,ocrTexts,pendingOcr.size,ocrErrors,failure,completed,imageChecks))}
                         val outcome=kotlinx.coroutines.withTimeout(180000){
                         if(withOcr&&snapshot.any{desktopThumbnails.ocrRows(it.postId).isNotEmpty()}){
                             val cacheLive={reviewBusy&&session===original&&desktopRows===snapshot&&channel===cachedChannel&&cachedChannel?.isConnected==true&&cachedChannel.connectionGeneration==cachedGeneration&&url==cachedUrl&&kind==PageKind.APPROVED_GROUP&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&window.decorView.hasWindowFocus()}
@@ -389,7 +389,9 @@ class PocActivity : ComponentActivity() {
                             if(withOcr&&ocrImages<20&&live()){
                                 val crops=DesktopThumbnails()
                                 try{
-                                    if(!source.reviewImages(row,current,geckoView,crops,true,alive=live))throw IllegalStateException("OCR_CONTEXT")
+                                    val imageSafe=source.reviewImages(row,current,geckoView,crops,true,alive=live)
+                                    imageChecks=ReviewImageChecks.add(imageChecks,source.reviewImageOutcome);ocrProgress("INTERRUPTED")
+                                    if(!imageSafe)throw IllegalStateException("OCR_CONTEXT")
                                     if(!live())throw IllegalStateException("OCR_CONTEXT")
                                     val photo=crops.ocrRows(row.postId).firstOrNull()
                                     if(photo!=null){

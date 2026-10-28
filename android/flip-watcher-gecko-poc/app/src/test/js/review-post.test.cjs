@@ -161,6 +161,7 @@ const photo=()=>({__typename:'Photo',id:'880000000000001',image:{uri:photoUrl,wi
 const photoStory=()=>({...selectedStory(),attachments:[{media:photo()}]});
 const photoSelect=value=>reader.selectOwnStoryData(JSON.stringify(value),group,id,()=>0,500,true);
 test('photo proof crosses attachment arrays but never enters text projection or native rows',()=>{
+ for(const key of ['large_share_image','thumbnail_image']){const ph=photo();ph[key]=ph.image;delete ph.image;assert.deepEqual(photoSelect({...selectedStory(),attachments:[{media:ph}]}).photos,[photoUrl]);}
  const selected=photoSelect(wrapRelay(photoStory()));assert.deepEqual(selected.photos,[photoUrl]);assert(!selected.bodies.join('').includes(photoUrl));
  const h=hydrationEnv([{textContent:JSON.stringify(wrapRelay(photoStory()))}]),r=h.run();assert.equal(r.bound,1);assert.deepEqual(reader.ownPhotoSources(h.w,h.m),[photoUrl]);assert(!JSON.stringify(r).includes(photoUrl));
  assert.deepEqual(reader.ownPhotoSources({...h.w,document:{}},h.m),[]);assert.deepEqual(reader.ownPhotoSources(h.w,{...h.m,postId:'550000000000092'}),[]);
