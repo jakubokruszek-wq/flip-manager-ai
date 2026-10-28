@@ -225,15 +225,25 @@ test('a typed own Photo may omit rendition dimensions but explicit undersized di
 });
 test('section-owned photo without metadata dimensions reaches two-phase pixels only after actual loaded-image proof',async()=>{
  const imageApi=require('../../main/extension/review-images.js'),opaque='Uzpf-same-post';
- for(const kind of ['own','foreign','small','missing']){
+ for(const kind of ['own','foreign','small','missing','sibling']){
   const ph=photo();delete ph.image.width;delete ph.image.height;
-  const story={...selectedStory(),id:opaque,comet_sections:{content:{story:{__typename:'Story',id:kind==='foreign'?'Uzpf-other-post':opaque,attachments:[{media:ph}]}}}};
+  const story=kind==='sibling'?{__typename:'Story',id:opaque,comet_sections:{identity:{story:{...selectedStory(),id:opaque}},content:{story:{__typename:'Story',id:opaque,attachments:[{media:ph}]}}}}:{...selectedStory(),id:opaque,comet_sections:{content:{story:{__typename:'Story',id:kind==='foreign'?'Uzpf-other-post':opaque,attachments:[{media:ph}]}}}};
   const h=hydrationEnv([{textContent:JSON.stringify(wrapRelay(story))}]);h.w.innerHeight=1600;h.w.setTimeout=fn=>fn();
   const image={ownerDocument:h.doc,isConnected:true,src:photoUrl,complete:true,naturalWidth:kind==='small'?50:800,naturalHeight:400,closest:s=>s==='[role="article"],article'?h.card:null,checkVisibility:()=>true,scrollIntoView(){},getBoundingClientRect:()=>({left:100,top:100,right:900,bottom:500,width:800,height:400}),contains:()=>false};
   h.card.querySelectorAll=s=>s==='a[href]'?[h.anchor]:[];const q=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='img'?(kind==='missing'?[]:[image]):q(s);h.doc.elementFromPoint=()=>image;
   const read=h.run();assert.equal(read.bound,1);assert.equal(read.evidence.boundCards,0);
   const calls=[];const r=await imageApi.create().read(h.w,{...h.m,ocrConsent:true},core,p,reader.exact,async m=>{calls.push(m.action);return{accepted:true,count:1,requestId:nonce}});
-  assert.equal(r.count,kind==='own'?1:0,kind);assert.equal(r.reason,kind==='own'?'CAPTURED':kind==='foreign'?'NO_PROOF':kind==='small'?'UNLOADED':'NO_IMAGE');
-  assert.deepEqual(calls,kind==='own'?['photos','commit']:[]);assert(!JSON.stringify(read).includes(opaque));assert(!JSON.stringify(r).includes(photoUrl));
+  assert.equal(r.count,kind==='own'||kind==='sibling'?1:0,kind);assert.equal(r.reason,kind==='own'||kind==='sibling'?'CAPTURED':kind==='foreign'?'NO_PROOF':kind==='small'?'UNLOADED':'NO_IMAGE');
+  assert.deepEqual(calls,kind==='own'||kind==='sibling'?['photos','commit']:[]);assert(!JSON.stringify(read).includes(opaque));assert(!JSON.stringify(r).includes(photoUrl));
  }
+});
+
+test('same-Story sibling media can use a numeric section owner only inside its matching opaque ancestor',()=>{
+ const opaque='Uzpf-owner';const numeric={...selectedStory(),id:opaque};
+ const section={__typename:'Story',id:opaque,comet_sections:{identity:{story:numeric},attachment:{story:{__typename:'Story',id:opaque,attachments:[{media:photo()}]}}}};
+ assert.deepEqual(photoSelect(section).photos,[photoUrl]);
+ assert.deepEqual(photoSelect({...section,id:'Uzpf-other'}).photos,[]);
+ const other=JSON.parse(JSON.stringify(section));other.comet_sections.identity.story.id='Uzpf-unrelated';assert.deepEqual(photoSelect(other).photos,[]);
+ assert.deepEqual(photoSelect({numeric,unrelated:{__typename:'Story',id:opaque,attachments:[{media:photo()}]}}).photos,[]);
+ const foreign=JSON.parse(JSON.stringify(section));foreign.comet_sections.attachment.story.post_id='550000000000092';foreign.comet_sections.attachment.story.permalink_url=link.replace(id,'550000000000092');assert.deepEqual(photoSelect(foreign).photos,[]);
 });

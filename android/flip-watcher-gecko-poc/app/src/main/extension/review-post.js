@@ -140,7 +140,7 @@ function selectOwnStoryData(body,group,id,now,deadline,collectPhotos=false){
     const result=Object.create(null);result[owner.key]=owner.id;result.permalink_url=[...f.links][0];
     if(f.own.__typename)result.__typename=f.own.__typename;else if(f.own.typename)result.typename=f.own.typename;
     if(text)result.message={text};
-    const candidate={data:result,ancestors:frames.slice(),photos:collectPhotos?[...f.mediaPhotos]:[],photoOwners:collectPhotos?f.mediaOpaque:null,frame:f};
+    const candidate={data:result,ancestors:frames.slice(),frame:f};
     if(outputs.length>=8){limited=true;const empty=outputs.findIndex(o=>!o.data.message);if(text&&empty>=0)outputs[empty]=candidate;}
     else outputs.push(candidate);
    }
@@ -206,7 +206,10 @@ function selectOwnStoryData(body,group,id,now,deadline,collectPhotos=false){
  rejected+=outputs.length-accepted.length;
  return {bodies:accepted.map(o=>JSON.stringify(o.data)),valid:true,limited,unsupported:false,rejected,...(collectPhotos?{photos:[...new Set(accepted.flatMap(o=>{
   const trusted=new Set([o.frame,...o.ancestors].filter(a=>{const owner=identity(a);return owner.valid&&!owner.conflict&&owner.id===id&&a.links.size>0&&urls.filter(k=>Object.hasOwn(a.own,k)).every(k=>sourceLink(a.own[k]))&&!foreignPostLink(a,owner)&&!a.blocked;}).map(opaque).filter(Boolean));
-  return o.photos.filter(src=>[...(o.photoOwners?.get(src)||[])].every(key=>trusted.has(key)));
+  // A numeric identity section can establish its enclosing literal same-Story
+  // owner. Only that ancestor can supply sibling media; never a global ID join.
+  const scopes=[o.frame,...o.ancestors.filter(a=>trusted.has(opaque(a))&&/story|post/i.test(String(identity(a).type))&&!a.blocked&&urls.filter(k=>Object.hasOwn(a.own,k)).every(k=>sourceLink(a.own[k])))];
+  return scopes.flatMap(a=>[...a.mediaPhotos].filter(src=>[...(a.mediaOpaque.get(src)||[])].every(key=>trusted.has(key))));
  }))].slice(0,20)}:{})};
 }
 
