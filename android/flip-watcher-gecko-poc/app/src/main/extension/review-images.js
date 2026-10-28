@@ -20,7 +20,7 @@ function create(){const used=new Set();return {async read(w,m,core,preview,exact
   }
   return !parent;
  };
- if(!card&&!sources().length)return result('OK',0,'NO_PROOF');
+ if(!card&&!sources().length)return result('OK',0,root.FlipReviewPost.ownPhotoStatus(w,m));
  const zone=card?.closest('[role="dialog"]')||card?.closest('main,[role="main"]');
  if(zone&&root.FlipReviewPost.cardId(card,core,preview,m.groupId,w.location.href)===m.postId){const links=Array.from(zone.querySelectorAll('a[href]'));const articles=Array.from(zone.querySelectorAll('[role="article"],article'));if(links.length<=200&&articles.length===1&&articles[0]===card){const posts=links.map(n=>core.parsePostLink(n.href)).filter(Boolean);if(posts.length&&posts.every(p=>p.sourceType==='GROUP'&&p.sourceId===m.groupId&&p.postId===m.postId))region=zone;}}
 

@@ -4,7 +4,8 @@ import org.json.JSONObject
 
 /** Count-only outcomes: never accept source URLs, identifiers or OCR text. */
 object ReviewImageChecks{
- val outcomes=setOf("CAPTURED","NO_PROOF","NO_IMAGE","UNLOADED","OCCLUDED","NO_ACK","AMBIGUOUS","CONTEXT","PROTOCOL")
+ private val legacyOutcomes=setOf("CAPTURED","NO_PROOF","NO_IMAGE","UNLOADED","OCCLUDED","NO_ACK","AMBIGUOUS","CONTEXT","PROTOCOL")
+ val outcomes=legacyOutcomes+setOf("NO_MEDIA_DATA","NO_RENDITION","OWNER_FILTER")
  private val keys=outcomes+"checked"
  fun reply(j:JSONObject?,nonce:String):String?{
   if(j==null||j.keys().asSequence().toSet()!=setOf("type","nonce","status","count","reason")||j.optString("type")!="reviewImagesResult"||j.optString("nonce")!=nonce)return null
@@ -19,10 +20,11 @@ object ReviewImageChecks{
   require(value.getValue("checked")<20);value["checked"]=value.getValue("checked")+1;value[reason]=value.getValue(reason)+1;return value.toMap()
  }
  fun parse(j:JSONObject?):Map<String,Int>?{
-  if(j==null||j.keys().asSequence().toSet()!=keys)return null
-  val counts=keys.associateWith{k->val n=j.opt(k);if(n !is Int||n !in 0..20)return null;n}
+  if(j==null)return null
+  val actual=j.keys().asSequence().toSet();if(actual!=keys&&actual!=legacyOutcomes+"checked")return null
+  val counts=keys.associateWith{k->val n=if(k in actual)j.opt(k)else 0;if(n !is Int||n !in 0..20)return null;n}
   if(counts.getValue("checked") !in 1..20||outcomes.sumOf{counts.getValue(it)}!=counts.getValue("checked"))return null
   return counts
  }
- fun report(v:Map<String,Int>)="Zdjęcia otwartych postów: sprawdzono ${v.getValue("checked")} • wycinki ${v.getValue("CAPTURED")} • brak powiązania ${v.getValue("NO_PROOF")} • brak kwalifikującego obrazu ${v.getValue("NO_IMAGE")} • niezaładowane/za małe ${v.getValue("UNLOADED")} • geometria/zasłonięcie ${v.getValue("OCCLUDED")} • brak ACK ${v.getValue("NO_ACK")} • niejednoznaczne ${v.getValue("AMBIGUOUS")} • utrata kontekstu ${v.getValue("CONTEXT")} • protokół ${v.getValue("PROTOCOL")}."
+ fun report(v:Map<String,Int>)="Zdjęcia otwartych postów: sprawdzono ${v.getValue("checked")} • wycinki ${v.getValue("CAPTURED")} • brak powiązania bez szczegółów ${v.getValue("NO_PROOF")} • brak Photo/Image w analizowanych danych ${v.getValue("NO_MEDIA_DATA")} • brak URI obrazu ${v.getValue("NO_RENDITION")} • odrzucone media ${v.getValue("OWNER_FILTER")} • brak kwalifikującego obrazu ${v.getValue("NO_IMAGE")} • niezaładowane/za małe ${v.getValue("UNLOADED")} • geometria/zasłonięcie ${v.getValue("OCCLUDED")} • brak ACK ${v.getValue("NO_ACK")} • niejednoznaczne ${v.getValue("AMBIGUOUS")} • utrata kontekstu ${v.getValue("CONTEXT")} • protokół ${v.getValue("PROTOCOL")}."
 }

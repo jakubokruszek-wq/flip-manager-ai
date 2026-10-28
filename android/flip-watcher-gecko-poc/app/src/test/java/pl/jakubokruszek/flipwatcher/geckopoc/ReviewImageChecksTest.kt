@@ -26,4 +26,12 @@ class ReviewImageChecksTest{
   assertTrue(summary.encode().length<=4096);assertEquals(summary,OcrSummary.decode(summary.encode()))
   try{ReviewImageChecks.add(counts,"NO_IMAGE");fail("21st check accepted")}catch(_:IllegalArgumentException){}
  }
+ @Test fun detailedStagesAreValidatedAndOlderImageMapsRemainReadable(){
+  for(code in listOf("NO_MEDIA_DATA","NO_RENDITION","OWNER_FILTER")){
+   assertEquals(code,ReviewImageChecks.reply(reply(code),nonce));assertNull(ReviewImageChecks.reply(reply(code,1),nonce))
+  }
+  val counts=ReviewImageChecks.add(emptyMap(),"NO_PROOF");val old=JSONObject(counts);for(k in listOf("NO_MEDIA_DATA","NO_RENDITION","OWNER_FILTER"))old.remove(k)
+  assertEquals(counts,ReviewImageChecks.parse(old));val summary=JSONObject(OcrSummary("DONE",1,0,0,0,0).encode()).put("imageChecks",old)
+  val decoded=OcrSummary.decode(summary.toString())!!;assertEquals(counts,decoded.imageChecks);assertTrue(decoded.report().contains("brak powiązania bez szczegółów 1"))
+ }
 }

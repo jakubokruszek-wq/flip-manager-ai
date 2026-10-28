@@ -70,6 +70,7 @@ function cards(w,m,core,preview,audit=evidence()){
 // stories and attachments cannot become root-owned text after projection.
 const photoProofs=new WeakMap();
 function ownPhotoSources(w,m){const p=photoProofs.get(w.document);return p&&p.url===w.location.href&&p.url===m.expectedUrl&&p.id===m.postId&&p.group===m.groupId?p.sources:[];}
+function ownPhotoStatus(w,m){const p=photoProofs.get(w.document);return p&&p.url===w.location.href&&p.url===m.expectedUrl&&p.id===m.postId&&p.group===m.groupId?p.status:'NO_PROOF';}
 function selectOwnStoryData(body,group,id,now,deadline,collectPhotos=false){
  const empty=(valid=false,limited=false,unsupported=false)=>({bodies:[],valid,limited,unsupported,rejected:0});
  if(typeof body!=='string'||body.length>4194304)return empty(false,true);
@@ -79,7 +80,7 @@ function selectOwnStoryData(body,group,id,now,deadline,collectPhotos=false){
  if(body.startsWith('for(;;);',i))i+=8;
  if(!whitespace())return empty(false,true);
  if(!['{','['].includes(body[i]))return empty(false,false,true);
- const frames=[],outputs=[];let root=false,members=0,objects=0,rejected=0,limited=false;
+ const frames=[],outputs=[],photoStages={typed:0,renditions:0};let root=false,members=0,objects=0,rejected=0,limited=false;
  const ids=['post_id','postId','story_fbid','story_id','storyId'],urls=['url','permalink','permalink_url'];
  const interesting=new Set([...ids,'id','__typename','typename',...urls,'message','text','body',...(collectPhotos?['uri','width','height']:[])]);
  const forbidden=k=>k!=='commentable_feed_story'&&/(?:comment|feedback|shared|quoted|crosspost|reshare|original_story|attached_story|attachment|media|caption)/i.test(k);
@@ -111,14 +112,20 @@ function selectOwnStoryData(body,group,id,now,deadline,collectPhotos=false){
  }
  function opaque(f){const raw=f.own.id;return typeof raw==='string'&&raw.length<=512&&/^[A-Za-z0-9+/=_:-]+$/.test(raw)&&!/^\d+$/.test(raw)?raw:null;}
  function finishMedia(f){
-  if(!collectPhotos||f.mediaBlocked)return;
-  const owner=identity(f),type=String(owner.type),story=/story|post/i.test(type),opaqueStory=story&&!owner.key?opaque(f):null;
-  if(owner.conflict||foreignPostLink(f,owner)||owner.key&&(!owner.valid||owner.id!==id)||story&&!opaqueStory&&(!owner.valid||owner.id!==id)||/comment|feedback|shared|quoted|crosspost|reshare|reply|video|actor|profile/i.test(type))return;
-  // A URI is media evidence only below a typed Photo, never a free URL or avatar.
-  if(/^(?:image|photo_image|viewer_image|large_image|full_image|preview_image|large_share_image|thumbnail_image)$/i.test(f.relation.key||'')&&(f.own.width==null||Number(f.own.width)>=200)&&(f.own.height==null||Number(f.own.height)>=120)){
-   try{const u=new URL(f.own.uri);if(u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&!u.hash&&/(?:^|\.)fbcdn\.net$/i.test(u.hostname)&&u.href.length<=8192&&f.mediaRaw.size<20)f.mediaRaw.add(u.href);}catch{}
-  }
-  if(type==='Photo'){for(const src of f.mediaRaw)if(f.mediaPhotos.size<20)f.mediaPhotos.add(src);f.mediaRaw.clear();}
+  if(!collectPhotos)return;
+  const owner=identity(f),type=String(owner.type),typedPhoto=/^(?:Photo|Image)$/.test(type);
+  if(typedPhoto)photoStages.typed=Math.min(10000,photoStages.typed+1);
+  const imageField=/^(?:image|photo_image|viewer_image|large_image|full_image|preview_image|large_share_image|thumbnail_image)$/i.test(f.relation.key||'');
+  let imageURI=null;
+  if(imageField||typedPhoto&&f.mediaAttachment){try{const u=new URL(f.own.uri);if(u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&!u.hash&&/(?:^|\.)fbcdn\.net$/i.test(u.hostname)&&u.href.length<=8192)imageURI=u.href;}catch{}}
+  if(imageURI)photoStages.renditions=Math.min(10000,photoStages.renditions+1);
+  if(f.mediaBlocked)return;
+  // UI attachment strategies are containers, not Story identity boundaries.
+  const renderer=type.length<=200&&(/^Comet(?:Feed)?Story/.test(type)&&/Attachment/.test(type)&&/(?:Strategy|Renderer)$/.test(type)||/^(?:Comet)?StoryAttachmentStyleRenderer$/.test(type));
+  const story=/story|post/i.test(type)&&!renderer,opaqueStory=story&&!owner.key?opaque(f):null;
+  if(owner.conflict||foreignPostLink(f,owner)||owner.key&&(!owner.valid||owner.id!==id)||story&&!opaqueStory&&(!owner.valid||owner.id!==id)||/comment|feedback|shared|quoted|crosspost|reshare|reply|video|actor|profile|user|page/i.test(type))return;
+  if(imageURI&&(f.own.width==null||Number(f.own.width)>=200)&&(f.own.height==null||Number(f.own.height)>=120)&&f.mediaRaw.size<20)f.mediaRaw.add(imageURI);
+  if(type==='Photo'||type==='Image'&&f.mediaAttachment){for(const src of f.mediaRaw)if(f.mediaPhotos.size<20)f.mediaPhotos.add(src);f.mediaRaw.clear();}
   // Opaque Story IDs are never decoded into post IDs. Carry a constraint until
   // the complete numeric owner and its source permalink have been validated.
   if(opaqueStory){f.mediaRaw.clear();for(const src of f.mediaPhotos){const owners=f.mediaOpaque.get(src)||new Set();if(owners.size<8)owners.add(opaqueStory);else owners.add('!LIMIT');f.mediaOpaque.set(src,owners);}}
@@ -184,7 +191,7 @@ function selectOwnStoryData(body,group,id,now,deadline,collectPhotos=false){
   if(c==='{'||c==='['){
    const relation=takeValue();if(!relation)return fail();
    if(frames.length>=128||++objects>20000){limited=true;return fail();}
-   frames.push({kind:c,state:'first',key:null,keys:new Set(),own:Object.create(null),messages:Object.create(null),links:new Set(),childTexts:new Set(),blocked:relation.blocked,mediaBlocked:!!relation.parent?.mediaBlocked||/comment|feedback|shared|quoted|crosspost|reshare|original_story|attached_story|actor|profile|avatar|icon|video|caption/i.test(relation.key||'')&&relation.key!=='commentable_feed_story',mediaRaw:new Set(),mediaPhotos:new Set(),mediaOpaque:new Map(),relation});i++;continue;
+   frames.push({kind:c,state:'first',key:null,keys:new Set(),own:Object.create(null),messages:Object.create(null),links:new Set(),childTexts:new Set(),blocked:relation.blocked,mediaBlocked:!!relation.parent?.mediaBlocked||/comment|feedback|shared|quoted|crosspost|reshare|original_story|attached_story|actor|author|owner|profile|avatar|icon|video|caption/i.test(relation.key||'')&&relation.key!=='commentable_feed_story',mediaAttachment:!!relation.parent?.mediaAttachment||/^(?:attachments|attachment|all_subattachments|subattachments|media|photo)$/.test(relation.key||''),mediaRaw:new Set(),mediaPhotos:new Set(),mediaOpaque:new Map(),relation});i++;continue;
   }
   if(c==='}'||c===']'){
    if(!f||f.kind!==(c==='}'?'{':'[')||!['first','after'].includes(f.state))return fail();
@@ -204,7 +211,7 @@ function selectOwnStoryData(body,group,id,now,deadline,collectPhotos=false){
   const owner=identity(a);return a.blocked||owner.conflict||foreignPostLink(a,owner)||owner.valid&&owner.id!==id||/comment|feedback|shared|quoted|crosspost|reshare|reply/i.test(String(owner.type));
  }));
  rejected+=outputs.length-accepted.length;
- return {bodies:accepted.map(o=>JSON.stringify(o.data)),valid:true,limited,unsupported:false,rejected,...(collectPhotos?{photos:[...new Set(accepted.flatMap(o=>{
+ return {bodies:accepted.map(o=>JSON.stringify(o.data)),valid:true,limited,unsupported:false,rejected,...(collectPhotos?{photoStages,photos:[...new Set(accepted.flatMap(o=>{
   const trusted=new Set([o.frame,...o.ancestors].filter(a=>{const owner=identity(a);return owner.valid&&!owner.conflict&&owner.id===id&&a.links.size>0&&urls.filter(k=>Object.hasOwn(a.own,k)).every(k=>sourceLink(a.own[k]))&&!foreignPostLink(a,owner)&&!a.blocked;}).map(opaque).filter(Boolean));
   // A numeric identity section can establish its enclosing literal same-Story
   // owner. Only that ancestor can supply sibling media; never a global ID join.
@@ -218,7 +225,7 @@ function create(){const used=new Set();return {read(w,m,core,fields,preview){
  try{audit.readerStage=1;
  const safe=()=>m.consent===true&&m.reviewConsent===true&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(m.nonce||'')&&w.location.href===m.expectedUrl&&exact(w.location.href,m.groupId,m.postId,m.fixture===true)&&['interactive','complete'].includes(w.document.readyState)&&w.document.visibilityState==='visible'&&w.document.hidden!==true&&w.document.hasFocus?.()===true&&!/log in|logowanie|captcha|checkpoint|security check|potwierdź.*tożsamość/i.test(w.document.title||'')&&!w.document.querySelector(blocked)&&!w.document.querySelector('[role="alertdialog"]');
  if(!safe()||used.has(m.nonce))return empty();used.add(m.nonce);while(used.size>32)used.delete(used.values().next().value);
- photoProofs.delete(w.document);const ownPhotos=new Set();
+ photoProofs.delete(w.document);const ownPhotos=new Set(),photoStages={typed:0,renditions:0};
  model=preview.createModel(core,fields,m.groupId);let bound=0,textRead=0;
  audit.readerStage=2;
   if(m.previousRow?.postId!==m.postId||!model.merge(m.previousRow))return empty();
@@ -286,6 +293,7 @@ function create(){const used=new Set();return {read(w,m,core,fields,preview){
     sourceChars+=body.length;audit.sourceKiB=Math.ceil(sourceChars/1024);count('selectedBlocks');
     const selected=selectOwnStoryData(body,m.groupId,m.postId,now,started+500,true);count('selectorRejected',selected.rejected);
     if(selected.limited){audit.selectorIncomplete=1;audit.budgetLimited=1;}
+    if(selected.valid&&selected.photoStages){for(const key of ['typed','renditions'])photoStages[key]=Math.min(10000,photoStages[key]+selected.photoStages[key]);}
     if(selected.valid&&selected.bodies.length){
      count('selectedStories',selected.bodies.length);audit.scriptMatched++;for(const src of selected.photos||[])if(ownPhotos.size<20)ownPhotos.add(src);
      for(const payload of selected.bodies){
@@ -307,9 +315,9 @@ function create(){const used=new Set();return {read(w,m,core,fields,preview){
   }
   if(!safe())return empty();const row=model.rows().find(r=>r.postId===m.postId);if(!row)return empty();
   const stats=preview.zero();stats.verified=1;stats.candidates=1;stats.desktop=Number(w.innerWidth>=900);
-  if(bound)photoProofs.set(w.document,{url:w.location.href,id:m.postId,group:m.groupId,sources:Object.freeze([...ownPhotos])});
+  if(bound)photoProofs.set(w.document,{url:w.location.href,id:m.postId,group:m.groupId,sources:Object.freeze([...ownPhotos]),status:ownPhotos.size?'CAPTURED':photoStages.typed===0?'NO_MEDIA_DATA':photoStages.renditions===0?'NO_RENDITION':'OWNER_FILTER'});
   audit.readerStage=6;return {status:'OK',reason:'DONE',rows:[row],stats,bound,textRead,evidence:{...audit}};
  }catch{audit.readerErrors=1;return empty('ERROR');}finally{model?.clear();}
 }};}
-const api={exact,create,cards,cardId,canonicalPrimary,selectOwnStoryData,ownPhotoSources,evidenceKeys};if(typeof module!=='undefined')module.exports=api;root.FlipReviewPost=api;
+const api={exact,create,cards,cardId,canonicalPrimary,selectOwnStoryData,ownPhotoSources,ownPhotoStatus,evidenceKeys};if(typeof module!=='undefined')module.exports=api;root.FlipReviewPost=api;
 })(globalThis);

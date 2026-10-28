@@ -225,16 +225,16 @@ test('a typed own Photo may omit rendition dimensions but explicit undersized di
 });
 test('section-owned photo without metadata dimensions reaches two-phase pixels only after actual loaded-image proof',async()=>{
  const imageApi=require('../../main/extension/review-images.js'),opaque='Uzpf-same-post';
- for(const kind of ['own','foreign','small','missing','sibling']){
-  const ph=photo();delete ph.image.width;delete ph.image.height;
-  const story=kind==='sibling'?{__typename:'Story',id:opaque,comet_sections:{identity:{story:{...selectedStory(),id:opaque}},content:{story:{__typename:'Story',id:opaque,attachments:[{media:ph}]}}}}:{...selectedStory(),id:opaque,comet_sections:{content:{story:{__typename:'Story',id:kind==='foreign'?'Uzpf-other-post':opaque,attachments:[{media:ph}]}}}};
+ for(const kind of ['own','foreign','small','missing','sibling','directImage','renderer']){
+  const ph=kind==='directImage'?{__typename:'Image',uri:photoUrl}:photo();if(ph.image){delete ph.image.width;delete ph.image.height;}
+  const story=kind==='renderer'?{...selectedStory(),attachments:[{__typename:'CometFeedStoryDefaultAttachmentStrategy',media:ph}]}:kind==='sibling'?{__typename:'Story',id:opaque,comet_sections:{identity:{story:{...selectedStory(),id:opaque}},content:{story:{__typename:'Story',id:opaque,attachments:[{media:ph}]}}}}:{...selectedStory(),id:opaque,comet_sections:{content:{story:{__typename:'Story',id:kind==='foreign'?'Uzpf-other-post':opaque,attachments:[{media:ph}]}}}};
   const h=hydrationEnv([{textContent:JSON.stringify(wrapRelay(story))}]);h.w.innerHeight=1600;h.w.setTimeout=fn=>fn();
   const image={ownerDocument:h.doc,isConnected:true,src:photoUrl,complete:true,naturalWidth:kind==='small'?50:800,naturalHeight:400,closest:s=>s==='[role="article"],article'?h.card:null,checkVisibility:()=>true,scrollIntoView(){},getBoundingClientRect:()=>({left:100,top:100,right:900,bottom:500,width:800,height:400}),contains:()=>false};
   h.card.querySelectorAll=s=>s==='a[href]'?[h.anchor]:[];const q=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='img'?(kind==='missing'?[]:[image]):q(s);h.doc.elementFromPoint=()=>image;
   const read=h.run();assert.equal(read.bound,1);assert.equal(read.evidence.boundCards,0);
   const calls=[];const r=await imageApi.create().read(h.w,{...h.m,ocrConsent:true},core,p,reader.exact,async m=>{calls.push(m.action);return{accepted:true,count:1,requestId:nonce}});
-  assert.equal(r.count,kind==='own'||kind==='sibling'?1:0,kind);assert.equal(r.reason,kind==='own'||kind==='sibling'?'CAPTURED':kind==='foreign'?'NO_PROOF':kind==='small'?'UNLOADED':'NO_IMAGE');
-  assert.deepEqual(calls,kind==='own'||kind==='sibling'?['photos','commit']:[]);assert(!JSON.stringify(read).includes(opaque));assert(!JSON.stringify(r).includes(photoUrl));
+  const capture=['own','sibling','directImage','renderer'].includes(kind);assert.equal(r.count,capture?1:0,kind);assert.equal(r.reason,capture?'CAPTURED':kind==='foreign'?'OWNER_FILTER':kind==='small'?'UNLOADED':'NO_IMAGE');
+  assert.deepEqual(calls,capture?['photos','commit']:[]);assert(!JSON.stringify(read).includes(opaque));assert(!JSON.stringify(r).includes(photoUrl));
  }
 });
 
@@ -246,4 +246,25 @@ test('same-Story sibling media can use a numeric section owner only inside its m
  const other=JSON.parse(JSON.stringify(section));other.comet_sections.identity.story.id='Uzpf-unrelated';assert.deepEqual(photoSelect(other).photos,[]);
  assert.deepEqual(photoSelect({numeric,unrelated:{__typename:'Story',id:opaque,attachments:[{media:photo()}]}}).photos,[]);
  const foreign=JSON.parse(JSON.stringify(section));foreign.comet_sections.attachment.story.post_id='550000000000092';foreign.comet_sections.attachment.story.permalink_url=link.replace(id,'550000000000092');assert.deepEqual(photoSelect(foreign).photos,[]);
+});
+
+
+test('typed attachment Image and direct Photo URIs use the same exact own-Story proof',()=>{
+ for(const type of ['Photo','Image']){
+  const media={__typename:type,uri:photoUrl};const story={...selectedStory(),attachments:[{media}]};
+  assert.deepEqual(photoSelect(story).photos,[photoUrl]);
+  for(const key of ['author','owner','actor','profile','comments','feedback','shared_story'])assert.deepEqual(photoSelect({...selectedStory(),[key]:{attachments:[{media}]}}).photos,[],key);
+ }
+ assert.deepEqual(photoSelect({...selectedStory(),outside:{__typename:'Image',uri:photoUrl}}).photos,[]);
+});
+test('attachment UI strategies do not masquerade as unknown Story entities',()=>{
+ for(const type of ['CometFeedStoryDefaultAttachmentStrategy','CometStoryAttachmentStyleRenderer','StoryAttachmentStyleRenderer']){
+  const story={...selectedStory(),attachments:[{__typename:type,id:'strategy-instance',media:photo()}]};assert.deepEqual(photoSelect(story).photos,[photoUrl],type);
+  story.attachments[0].post_id='550000000000092';assert.deepEqual(photoSelect(story).photos,[]);
+ }
+ assert.deepEqual(photoSelect({...selectedStory(),attachments:[{__typename:'UnknownStory',media:photo()}]}).photos,[]);
+});
+test('missing media data, missing rendition and rejected ownership have distinct document-scoped outcomes',()=>{
+ const cases=[['NO_MEDIA_DATA',selectedStory()],['NO_RENDITION',{...selectedStory(),attachments:[{media:{__typename:'Photo'}}]}],['OWNER_FILTER',{...selectedStory(),comments:[{media:photo()}]}],['CAPTURED',photoStory()]];
+ for(const [expected,story] of cases){const h=hydrationEnv([{textContent:JSON.stringify(story)}]);assert.equal(h.run().bound,1);assert.equal(reader.ownPhotoStatus(h.w,h.m),expected);assert.equal(reader.ownPhotoStatus({...h.w,document:{}},h.m),'NO_PROOF');}
 });
