@@ -1,5 +1,11 @@
 package pl.jakubokruszek.flipwatcher.geckopoc
 
+import android.app.AlertDialog
+import android.text.InputType
+import android.widget.EditText
+import android.widget.CheckBox
+import android.widget.Spinner
+import android.widget.ArrayAdapter
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
@@ -16,6 +22,8 @@ import java.util.Locale
 
 /** Cards are RAM-only. Erase text and listeners even from detached views held by old callbacks. */
 class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private val onReport:()->Unit,private val onEnrich:(()->Unit)?=null,private val onOcr:(()->Unit)?=null,private val ocrAvailable:(String)->Boolean={false},private val ocrResult:(String)->DesktopRow?={null}):ScrollView(context){
+    private var filter=OfferFilter()
+    private var filterDialog:AlertDialog?=null
     private val content=LinearLayout(context).apply{orientation=LinearLayout.VERTICAL;isSaveEnabled=false}
     init{tag="poc.offers";isSaveEnabled=false;addView(content)}
     private fun erase(view:View){
@@ -26,12 +34,25 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
     }
     private fun numberFormat(value:Number?)=value?.let{NumberFormat.getNumberInstance(Locale.forLanguageTag("pl-PL")).apply{maximumFractionDigits=2}.format(it)}?:"—"
     fun showRows(rows:List<DesktopRow>,notice:String?=null,thumbnails:(String)->List<Bitmap> = {emptyList()}){
+        filterDialog?.dismiss();filterDialog=null
+        if(rows.isEmpty())filter=OfferFilter()
         erase(content);content.removeAllViews()
         val dp=resources.displayMetrics.density
         content.setPadding((12*dp).toInt(),(8*dp).toInt(),(12*dp).toInt(),(12*dp).toInt())
         fun label(text:String,size:Float=16f)=TextView(context).apply{this.text=text;textSize=size;isSaveEnabled=false;setPadding(0,6,0,6)}
-        val offers=rows.filter{DesktopSummary.eligible(it)}
+        val visible=rows.filter{filter.matches(it)}
+        val offers=visible.filter{DesktopSummary.eligible(it)}
         content.addView(label("Oferty (${offers.size})",22f).apply{setTypeface(null,Typeface.BOLD)})
+        content.addView(Button(context).apply{
+            tag="poc.offers.filters";text="Filtry: ${visible.size}/${rows.size} postów • ${filter.section.label}";isAllCaps=false;isSaveEnabled=false
+            setOnClickListener{showFilters{showRows(rows,notice,thumbnails)}}
+        })
+        if(filter!=OfferFilter())content.addView(Button(context).apply{
+            text="Wyczyść filtry";isAllCaps=false;isSaveEnabled=false
+            setOnClickListener{filter=OfferFilter();showRows(rows,notice,thumbnails)}
+        })
+        content.addView(label("Filtry zmieniają tylko widok. Uzupełnianie i OCR obejmują całą zachowaną listę. Sugestie OCR nie są używane do filtrowania.",13f))
+        if(visible.isEmpty()&&rows.isNotEmpty())content.addView(label("Żaden post nie pasuje do filtrów. Zmień lub wyczyść filtry; zachowane posty nie zostały usunięte."))
         val reviewCount=rows.count{DesktopPresentation.reviewable(it)}
         if(onEnrich!=null&&reviewCount>0)content.addView(Button(context).apply{
             tag="poc.review.enrich";text="Uzupełnij do ręcznego sprawdzenia ($reviewCount)";isAllCaps=false;isSaveEnabled=false;setOnClickListener{onEnrich.invoke()}
@@ -84,7 +105,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
             })
             content.addView(card)
         }
-        val review=rows.filter{DesktopPresentation.reviewable(it)}
+        val review=visible.filter{DesktopPresentation.reviewable(it)}
         if(review.isNotEmpty()){
             content.addView(label("Do ręcznego sprawdzenia (${review.size})",22f).apply{tag="poc.offers.review"})
             content.addView(label("Te posty mają dokładny link, ale nie zostały rozpoznane jako oferty. Napisy na grafikach mogą być niedostępne jako tekst. OCR wymaga osobnej zgody i dostępnego wycinka zdjęcia w RAM; jego wyniki są oznaczone do sprawdzenia.",14f))
@@ -111,7 +132,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
                 })
             }
         }
-        val excluded=rows.filter{!DesktopSummary.eligible(it)&&!DesktopPresentation.reviewable(it)}
+        val excluded=visible.filter{!DesktopSummary.eligible(it)&&!DesktopPresentation.reviewable(it)}
         if(excluded.isNotEmpty()){
             content.addView(label("Poza filtrem (${excluded.size})",18f))
             for((reason,items) in excluded.groupBy{DesktopPresentation.explanation(it)})content.addView(label("${items.size} × $reason",13f))
@@ -120,4 +141,46 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
         content.addView(Button(context).apply{tag="poc.offers.report";text="Raport i powody pozostałych postów";isAllCaps=false;isSaveEnabled=false;setOnClickListener{onReport()}})
         scrollTo(0,0)
     }
+    private fun showFilters(refresh:()->Unit){
+        val form=LinearLayout(context).apply{orientation=LinearLayout.VERTICAL;isSaveEnabled=false;setPadding(24,12,24,12)}
+        val section=Spinner(context).apply{
+            isSaveEnabled=false;adapter=ArrayAdapter(context,android.R.layout.simple_spinner_dropdown_item,OfferFilter.Section.values().map{it.label})
+            setSelection(filter.section.ordinal)
+        };form.addView(section)
+        fun field(hint:String,value:String,numeric:Boolean=true)=EditText(context).apply{
+            this.hint=hint;isSaveEnabled=false;setSingleLine();setText(value)
+            inputType=if(numeric)InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL else InputType.TYPE_CLASS_TEXT
+            form.addView(this)
+        }
+        val minPrice=field("Cena od (zł)",filter.minPrice?.toString().orEmpty())
+        val maxPrice=field("Cena do (zł)",filter.maxPrice?.toString().orEmpty())
+        val minArea=field("Metraż od (m²)",filter.minArea?.toString().orEmpty())
+        val maxArea=field("Metraż do (m²)",filter.maxArea?.toString().orEmpty())
+        val rooms=field("Liczba pokoi",filter.rooms?.toString().orEmpty())
+        val location=field("Dzielnica / osiedle / ulica",filter.location,false)
+        val unknown=CheckBox(context).apply{text="Uwzględnij brak danych w wybranych kryteriach";isChecked=filter.includeUnknown;isSaveEnabled=false};form.addView(unknown)
+        val scroll=ScrollView(context).apply{isSaveEnabled=false;addView(form)}
+        val dialog=AlertDialog.Builder(context).setTitle("Filtry lokalnej listy").setView(scroll).setNegativeButton("Anuluj",null).setPositiveButton("Zastosuj",null).create()
+        filterDialog=dialog
+        dialog.setOnDismissListener{erase(form);if(filterDialog===dialog)filterDialog=null}
+        dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
+            fun read(field:EditText):Double? {
+                val raw=field.text.toString().trim()
+                if(raw.isEmpty())return null
+                val value=raw.replace(',','.').toDoubleOrNull()
+                if(value==null||!value.isFinite()||value<0){field.error="Podaj poprawną nieujemną liczbę";throw IllegalArgumentException()}
+                return value
+            }
+            try{
+                val lo=read(minPrice);val hi=read(maxPrice);val a=read(minArea);val b=read(maxArea);val r=read(rooms)
+                if(lo!=null&&hi!=null&&lo>hi){maxPrice.error="Cena do musi być ≥ cenie od";return@setOnClickListener}
+                if(a!=null&&b!=null&&a>b){maxArea.error="Metraż do musi być ≥ metrażowi od";return@setOnClickListener}
+                if(r!=null&&(r<1||r>100||r%1.0!=0.0)){rooms.error="Podaj całkowitą liczbę pokoi 1–100";return@setOnClickListener}
+                filter=OfferFilter(lo,hi,a,b,r?.toInt(),location.text.toString().trim(),unknown.isChecked,OfferFilter.Section.values()[section.selectedItemPosition])
+                dialog.dismiss();refresh()
+            }catch(_:IllegalArgumentException){/* Keep invalid input visible for correction. */}
+        }}
+        dialog.show()
+    }
+
 }
