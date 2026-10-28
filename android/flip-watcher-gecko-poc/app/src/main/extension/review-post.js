@@ -109,16 +109,23 @@ function selectOwnStoryData(body,group,id,now,deadline,collectPhotos=false){
   if(!owner.key&&!/story|post/i.test(String(owner.type)))return false;
   return urls.some(k=>{try{const u=new URL(f.own[k]);return u.protocol==='https:'&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&/^\/groups\/[^/]+\/(?:posts|permalink)\/\d{5,30}\/?$/.test(u.pathname)&&!sourceLink(u.href);}catch{return false;}});
  }
+ function opaque(f){const raw=f.own.id;return typeof raw==='string'&&raw.length<=512&&/^[A-Za-z0-9+/=_:-]+$/.test(raw)&&!/^\d+$/.test(raw)?raw:null;}
  function finishMedia(f){
   if(!collectPhotos||f.mediaBlocked)return;
-  const owner=identity(f),type=String(owner.type);
-  if(owner.conflict||foreignPostLink(f,owner)||owner.key&&(!owner.valid||owner.id!==id)||/story|post/i.test(type)&&(!owner.valid||owner.id!==id)||/comment|feedback|shared|quoted|crosspost|reshare|reply|video|actor|profile/i.test(type))return;
+  const owner=identity(f),type=String(owner.type),story=/story|post/i.test(type),opaqueStory=story&&!owner.key?opaque(f):null;
+  if(owner.conflict||foreignPostLink(f,owner)||owner.key&&(!owner.valid||owner.id!==id)||story&&!opaqueStory&&(!owner.valid||owner.id!==id)||/comment|feedback|shared|quoted|crosspost|reshare|reply|video|actor|profile/i.test(type))return;
   // A URI is media evidence only below a typed Photo, never a free URL or avatar.
-  if(/^(?:image|photo_image|viewer_image|large_image|full_image|preview_image|large_share_image|thumbnail_image)$/i.test(f.relation.key||'')&&Number(f.own.width)>=200&&Number(f.own.height)>=120){
+  if(/^(?:image|photo_image|viewer_image|large_image|full_image|preview_image|large_share_image|thumbnail_image)$/i.test(f.relation.key||'')&&(f.own.width==null||Number(f.own.width)>=200)&&(f.own.height==null||Number(f.own.height)>=120)){
    try{const u=new URL(f.own.uri);if(u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&!u.hash&&/(?:^|\.)fbcdn\.net$/i.test(u.hostname)&&u.href.length<=8192&&f.mediaRaw.size<20)f.mediaRaw.add(u.href);}catch{}
   }
   if(type==='Photo'){for(const src of f.mediaRaw)if(f.mediaPhotos.size<20)f.mediaPhotos.add(src);f.mediaRaw.clear();}
-  const p=f.relation.parent;if(p){for(const src of f.mediaPhotos)if(p.mediaPhotos.size<20)p.mediaPhotos.add(src);for(const src of f.mediaRaw)if(p.mediaRaw.size<20)p.mediaRaw.add(src);}
+  // Opaque Story IDs are never decoded into post IDs. Carry a constraint until
+  // the complete numeric owner and its source permalink have been validated.
+  if(opaqueStory){f.mediaRaw.clear();for(const src of f.mediaPhotos){const owners=f.mediaOpaque.get(src)||new Set();if(owners.size<8)owners.add(opaqueStory);else owners.add('!LIMIT');f.mediaOpaque.set(src,owners);}}
+  const p=f.relation.parent;if(p){for(const src of f.mediaPhotos)if(p.mediaPhotos.size<20||p.mediaPhotos.has(src)){
+   p.mediaPhotos.add(src);const owners=p.mediaOpaque.get(src)||new Set();for(const key of f.mediaOpaque.get(src)||[])if(owners.size<8)owners.add(key);else owners.add('!LIMIT');p.mediaOpaque.set(src,owners);
+  }for(const src of f.mediaRaw)if(p.mediaRaw.size<20)p.mediaRaw.add(src);}
+
  }
  function finish(f){
   const owner=identity(f),linkKeys=urls.filter(k=>Object.hasOwn(f.own,k));
@@ -133,7 +140,7 @@ function selectOwnStoryData(body,group,id,now,deadline,collectPhotos=false){
     const result=Object.create(null);result[owner.key]=owner.id;result.permalink_url=[...f.links][0];
     if(f.own.__typename)result.__typename=f.own.__typename;else if(f.own.typename)result.typename=f.own.typename;
     if(text)result.message={text};
-    const candidate={data:result,ancestors:frames.slice(),photos:collectPhotos?[...f.mediaPhotos]:[]};
+    const candidate={data:result,ancestors:frames.slice(),photos:collectPhotos?[...f.mediaPhotos]:[],photoOwners:collectPhotos?f.mediaOpaque:null,frame:f};
     if(outputs.length>=8){limited=true;const empty=outputs.findIndex(o=>!o.data.message);if(text&&empty>=0)outputs[empty]=candidate;}
     else outputs.push(candidate);
    }
@@ -177,7 +184,7 @@ function selectOwnStoryData(body,group,id,now,deadline,collectPhotos=false){
   if(c==='{'||c==='['){
    const relation=takeValue();if(!relation)return fail();
    if(frames.length>=128||++objects>20000){limited=true;return fail();}
-   frames.push({kind:c,state:'first',key:null,keys:new Set(),own:Object.create(null),messages:Object.create(null),links:new Set(),childTexts:new Set(),blocked:relation.blocked,mediaBlocked:!!relation.parent?.mediaBlocked||/comment|feedback|shared|quoted|crosspost|reshare|original_story|attached_story|actor|profile|avatar|icon|video|caption/i.test(relation.key||'')&&relation.key!=='commentable_feed_story',mediaRaw:new Set(),mediaPhotos:new Set(),relation});i++;continue;
+   frames.push({kind:c,state:'first',key:null,keys:new Set(),own:Object.create(null),messages:Object.create(null),links:new Set(),childTexts:new Set(),blocked:relation.blocked,mediaBlocked:!!relation.parent?.mediaBlocked||/comment|feedback|shared|quoted|crosspost|reshare|original_story|attached_story|actor|profile|avatar|icon|video|caption/i.test(relation.key||'')&&relation.key!=='commentable_feed_story',mediaRaw:new Set(),mediaPhotos:new Set(),mediaOpaque:new Map(),relation});i++;continue;
   }
   if(c==='}'||c===']'){
    if(!f||f.kind!==(c==='}'?'{':'[')||!['first','after'].includes(f.state))return fail();
@@ -197,7 +204,10 @@ function selectOwnStoryData(body,group,id,now,deadline,collectPhotos=false){
   const owner=identity(a);return a.blocked||owner.conflict||foreignPostLink(a,owner)||owner.valid&&owner.id!==id||/comment|feedback|shared|quoted|crosspost|reshare|reply/i.test(String(owner.type));
  }));
  rejected+=outputs.length-accepted.length;
- return {bodies:accepted.map(o=>JSON.stringify(o.data)),valid:true,limited,unsupported:false,rejected,...(collectPhotos?{photos:[...new Set(accepted.flatMap(o=>o.photos))].slice(0,20)}:{})};
+ return {bodies:accepted.map(o=>JSON.stringify(o.data)),valid:true,limited,unsupported:false,rejected,...(collectPhotos?{photos:[...new Set(accepted.flatMap(o=>{
+  const trusted=new Set([o.frame,...o.ancestors].filter(a=>{const owner=identity(a);return owner.valid&&!owner.conflict&&owner.id===id&&a.links.size>0&&urls.filter(k=>Object.hasOwn(a.own,k)).every(k=>sourceLink(a.own[k]))&&!foreignPostLink(a,owner)&&!a.blocked;}).map(opaque).filter(Boolean));
+  return o.photos.filter(src=>[...(o.photoOwners?.get(src)||[])].every(key=>trusted.has(key)));
+ }))].slice(0,20)}:{})};
 }
 
 function create(){const used=new Set();return {read(w,m,core,fields,preview){

@@ -206,3 +206,34 @@ test('photo proof is capped and a new validated read revokes old sources',()=>{
  const script={textContent:JSON.stringify(photoStory())},h=hydrationEnv([script]);assert.equal(h.run().bound,1);assert.deepEqual(reader.ownPhotoSources(h.w,h.m),[photoUrl]);
  script.textContent=JSON.stringify(selectedStory());assert.equal(h.run().bound,1);assert.deepEqual(reader.ownPhotoSources(h.w,h.m),[]);
 });
+
+test('opaque same-Story media sections require a literal mapping from a numeric own owner',()=>{
+ const opaque='Uzpf-actual-source-id';
+ const section=(key=opaque)=>({__typename:'Story',id:key,attachments:[{media:photo()}]});
+ const own={...selectedStory(),id:opaque,comet_sections:{content:{story:section()}}};
+ assert.deepEqual(photoSelect(own).photos,[photoUrl]);
+ assert.deepEqual(photoSelect({...own,comet_sections:{content:{story:section('Uzpf-foreign')}}}).photos,[]);
+ assert.deepEqual(photoSelect({...selectedStory(),comet_sections:own.comet_sections}).photos,[]);
+ const noNumeric={...own};delete noNumeric.post_id;assert.deepEqual(photoSelect(noNumeric).photos,[]);
+ const bad={...own,post_id:'550000000000092',permalink_url:link.replace(id,'550000000000092')};assert.deepEqual(photoSelect({child:own,...bad}).photos,[]);
+ assert.deepEqual(photoSelect({...own,url:'https://example.invalid/'}).photos,[]);
+ const repeated={...own};delete repeated.permalink_url;repeated.timestamp={story:{__typename:'Story',id,permalink_url:link}};assert.deepEqual(photoSelect(repeated).photos,[photoUrl]);
+});
+test('a typed own Photo may omit rendition dimensions but explicit undersized dimensions remain rejected',()=>{
+ for(const key of ['width','height','both']){const ph=photo();if(key==='both'){delete ph.image.width;delete ph.image.height;}else delete ph.image[key];assert.deepEqual(photoSelect({...selectedStory(),attachments:[{media:ph}]}).photos,[photoUrl]);}
+ const ph=photo();ph.image.height=50;assert.deepEqual(photoSelect({...selectedStory(),attachments:[{media:ph}]}).photos,[]);
+});
+test('section-owned photo without metadata dimensions reaches two-phase pixels only after actual loaded-image proof',async()=>{
+ const imageApi=require('../../main/extension/review-images.js'),opaque='Uzpf-same-post';
+ for(const kind of ['own','foreign','small','missing']){
+  const ph=photo();delete ph.image.width;delete ph.image.height;
+  const story={...selectedStory(),id:opaque,comet_sections:{content:{story:{__typename:'Story',id:kind==='foreign'?'Uzpf-other-post':opaque,attachments:[{media:ph}]}}}};
+  const h=hydrationEnv([{textContent:JSON.stringify(wrapRelay(story))}]);h.w.innerHeight=1600;h.w.setTimeout=fn=>fn();
+  const image={ownerDocument:h.doc,isConnected:true,src:photoUrl,complete:true,naturalWidth:kind==='small'?50:800,naturalHeight:400,closest:s=>s==='[role="article"],article'?h.card:null,checkVisibility:()=>true,scrollIntoView(){},getBoundingClientRect:()=>({left:100,top:100,right:900,bottom:500,width:800,height:400}),contains:()=>false};
+  h.card.querySelectorAll=s=>s==='a[href]'?[h.anchor]:[];const q=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='img'?(kind==='missing'?[]:[image]):q(s);h.doc.elementFromPoint=()=>image;
+  const read=h.run();assert.equal(read.bound,1);assert.equal(read.evidence.boundCards,0);
+  const calls=[];const r=await imageApi.create().read(h.w,{...h.m,ocrConsent:true},core,p,reader.exact,async m=>{calls.push(m.action);return{accepted:true,count:1,requestId:nonce}});
+  assert.equal(r.count,kind==='own'?1:0,kind);assert.equal(r.reason,kind==='own'?'CAPTURED':kind==='foreign'?'NO_PROOF':kind==='small'?'UNLOADED':'NO_IMAGE');
+  assert.deepEqual(calls,kind==='own'?['photos','commit']:[]);assert(!JSON.stringify(read).includes(opaque));assert(!JSON.stringify(r).includes(photoUrl));
+ }
+});
