@@ -225,15 +225,15 @@ test('a typed own Photo may omit rendition dimensions but explicit undersized di
 });
 test('section-owned photo without metadata dimensions reaches two-phase pixels only after actual loaded-image proof',async()=>{
  const imageApi=require('../../main/extension/review-images.js'),opaque='Uzpf-same-post';
- for(const kind of ['own','foreign','small','missing','sibling','directImage','renderer']){
+ for(const kind of ['own','foreign','small','missing','sibling','directImage','renderer','entityAttachment']){
   const ph=kind==='directImage'?{__typename:'Image',uri:photoUrl}:photo();if(ph.image){delete ph.image.width;delete ph.image.height;}
-  const story=kind==='renderer'?{...selectedStory(),attachments:[{__typename:'CometFeedStoryDefaultAttachmentStrategy',media:ph}]}:kind==='sibling'?{__typename:'Story',id:opaque,comet_sections:{identity:{story:{...selectedStory(),id:opaque}},content:{story:{__typename:'Story',id:opaque,attachments:[{media:ph}]}}}}:{...selectedStory(),id:opaque,comet_sections:{content:{story:{__typename:'Story',id:kind==='foreign'?'Uzpf-other-post':opaque,attachments:[{media:ph}]}}}};
-  const h=hydrationEnv([{textContent:JSON.stringify(wrapRelay(story))}]);h.w.innerHeight=1600;h.w.setTimeout=fn=>fn();
+  const story=kind==='entityAttachment'?{...selectedStory(),attachments:[{__typename:'StoryAttachment',id:'990000000000001',styles:{media:ph}}]}:kind==='renderer'?{...selectedStory(),attachments:[{__typename:'CometFeedStoryDefaultAttachmentStrategy',media:ph}]}:kind==='sibling'?{__typename:'Story',id:opaque,comet_sections:{identity:{story:{...selectedStory(),id:opaque}},content:{story:{__typename:'Story',id:opaque,attachments:[{media:ph}]}}}}:{...selectedStory(),id:opaque,comet_sections:{content:{story:{__typename:'Story',id:kind==='foreign'?'Uzpf-other-post':opaque,attachments:[{media:ph}]}}}};
+  const body=JSON.stringify(kind==='entityAttachment'?{padding:'x'.repeat(700000),data:wrapRelay(story)}:wrapRelay(story));const h=hydrationEnv([{textContent:body}]);h.w.innerHeight=1600;h.w.setTimeout=fn=>fn();
   const image={ownerDocument:h.doc,isConnected:true,src:photoUrl,complete:true,naturalWidth:kind==='small'?50:800,naturalHeight:400,closest:s=>s==='[role="article"],article'?h.card:null,checkVisibility:()=>true,scrollIntoView(){},getBoundingClientRect:()=>({left:100,top:100,right:900,bottom:500,width:800,height:400}),contains:()=>false};
   h.card.querySelectorAll=s=>s==='a[href]'?[h.anchor]:[];const q=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='img'?(kind==='missing'?[]:[image]):q(s);h.doc.elementFromPoint=()=>image;
   const read=h.run();assert.equal(read.bound,1);assert.equal(read.evidence.boundCards,0);
   const calls=[];const r=await imageApi.create().read(h.w,{...h.m,ocrConsent:true},core,p,reader.exact,async m=>{calls.push(m.action);return{accepted:true,count:1,requestId:nonce}});
-  const capture=['own','sibling','directImage','renderer'].includes(kind);assert.equal(r.count,capture?1:0,kind);assert.equal(r.reason,capture?'CAPTURED':kind==='foreign'?'OWNER_FILTER':kind==='small'?'UNLOADED':'NO_IMAGE');
+  const capture=['own','sibling','directImage','renderer','entityAttachment'].includes(kind);assert.equal(r.count,capture?1:0,kind);assert.equal(r.reason,capture?'CAPTURED':kind==='foreign'?'OWNER_FILTER':kind==='small'?'UNLOADED':'NO_IMAGE');
   assert.deepEqual(calls,capture?['photos','commit']:[]);assert(!JSON.stringify(read).includes(opaque));assert(!JSON.stringify(r).includes(photoUrl));
  }
 });
@@ -279,4 +279,29 @@ test('photo rule flags identify exclusions and never export paths or identities'
   ['RULE_SCOPE',{numeric:selectedStory(),unrelated:{__typename:'Photo',image:{uri:photoUrl}}}]
  ];
  for(const [key,story] of cases){const h=hydrationEnv([{textContent:JSON.stringify(story)}]);assert.equal(h.run().bound,1);const flags=reader.ownPhotoFilters(h.w,h.m);assert.equal(flags[key],1,key);assert.deepEqual(Object.keys(flags).sort(),reader.photoRuleKeys.slice().sort());assert(Object.values(flags).every(n=>n===0||n===1));assert(!JSON.stringify(flags).includes(photoUrl));assert(!JSON.stringify(flags).includes(id));}
+});
+
+test('real attachment entities are containers, not independent posts, even with their own numeric id',()=>{
+ for(const type of ['StoryAttachment','CometFeedStoryAttachmentSection','CometStoryAttachment','StoryAttachmentStyleRenderer'])for(const attachmentId of [undefined,'990000000000001','opaque-attachment']){
+  const attachment={__typename:type,...(attachmentId?{id:attachmentId}:{}),media:photo()};const story={...selectedStory(),attachments:[attachment]};
+  const body=JSON.stringify(story),source={sourceType:'GROUP',sourceId:group,sourceUrl:`https://www.facebook.com/groups/${group}/`,allowGroupRedirect:false};
+  const records=core.extractStructuredRecordsFromText(body,'HYDRATION',source);assert(p.networkMedia(records,body,source,core).some(r=>r.media?.length));
+  assert.deepEqual(photoSelect(story).photos,[photoUrl],type+' '+attachmentId);
+ }
+});
+
+
+test('attachment ownership never comes from an attachment id or the expected page URL',()=>{
+ const att=()=>({__typename:'StoryAttachment',id:'990000000000001',media:photo()});
+ const own=()=>({...selectedStory(),attachments:[att()]});
+ for(const change of [n=>delete n.permalink_url,n=>n.permalink_url=link.replace(group,'foreign'),n=>n.post_id='550000000000092',n=>n.attachments[0].post_id='550000000000092',n=>n.attachments[0].url=link.replace(id,'550000000000092'),n=>{n.attachments[0].post_id=id;n.attachments[0].story_id='550000000000092';}]){const n=own();change(n);assert.deepEqual(photoSelect(n).photos,[]);}
+ for(const key of ['comments','feedback','shared_story','quoted_story','author','owner','actor','video'])assert.deepEqual(photoSelect({...selectedStory(),[key]:{attachments:[att()]}}).photos,[],key);
+ assert.deepEqual(photoSelect({own:selectedStory(),unrelated:{attachments:[att()]}}).photos,[]);
+ const noOwner=own();delete noOwner.post_id;noOwner.attachments[0].id=id;noOwner.attachments[0].media.id=id;assert.deepEqual(photoSelect(noOwner).photos,[]);
+});
+test('explicit post metadata constrains a media owner without mistaking its Photo id for the post',()=>{
+ for(const type of ['Photo','Image']){
+  const media={...photo(),__typename:type,post_id:id};const story={...selectedStory(),attachments:[{__typename:'StoryAttachment',id:'990000000000001',post_id:id,media}]};
+  assert.deepEqual(photoSelect(story).photos,[photoUrl]);media.post_id='550000000000092';assert.deepEqual(photoSelect(story).photos,[]);
+ }
 });

@@ -109,25 +109,29 @@ function selectOwnStoryData(body,group,id,now,deadline,collectPhotos=false){
   const key=explicit||typed&&present.includes('id')&&'id';
   return {key,id:key?f.own[key]:null,type,valid:!!key&&(!type||typed),conflict:!!key&&present.some(k=>f.own[k]!==f.own[key])};
  }
- function foreignPostLink(f,owner){
-  if(!owner.key&&!/story|post/i.test(String(owner.type)))return false;
+ function anyForeignPostLink(f){
   return urls.some(k=>{try{const u=new URL(f.own[k]);return u.protocol==='https:'&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&/^\/groups\/[^/]+\/(?:posts|permalink)\/\d{5,30}\/?$/.test(u.pathname)&&!sourceLink(u.href);}catch{return false;}});
  }
+ function foreignPostLink(f,owner){return !!(owner.key||/story|post/i.test(String(owner.type)))&&anyForeignPostLink(f);}
  function opaque(f){const raw=f.own.id;return typeof raw==='string'&&raw.length<=512&&/^[A-Za-z0-9+/=_:-]+$/.test(raw)&&!/^\d+$/.test(raw)?raw:null;}
  function finishMedia(f){
   if(!collectPhotos)return;
-  const owner=identity(f),type=String(owner.type),typedPhoto=/^(?:Photo|Image)$/.test(type);
+  const type=String(f.own.__typename||f.own.typename||''),typedPhoto=/^(?:Photo|Image)$/.test(type);
+  const attachmentContainer=f.mediaAttachment&&type.length<=200&&!/(?:Story|Post)$/.test(type)&&(/^(?:Comet(?:Feed)?)?StoryAttachment[A-Za-z0-9_]*$/.test(type)||/^Comet(?:Feed)?Story[A-Za-z0-9_]*Attachment[A-Za-z0-9_]*(?:Strategy|Renderer|Section)$/.test(type));
+  let owner=identity(f);
+  // Photo and attachment IDs identify media nodes, never posts. Only explicit
+  // post-id fields constrain their inherited owner; they cannot establish one.
+  if(typedPhoto||attachmentContainer){const present=ids.filter(k=>typeof f.own[k]==='string'&&/^\d{5,30}$/.test(f.own[k]));const values=present.map(k=>f.own[k]);owner={key:present[0]||null,id:values[0]||null,valid:present.length>0,conflict:new Set(values).size>1,type};}
+
   if(typedPhoto)photoStages.typed=Math.min(10000,photoStages.typed+1);
   const imageField=/^(?:image|photo_image|viewer_image|large_image|full_image|preview_image|large_share_image|thumbnail_image)$/i.test(f.relation.key||'');
   let imageURI=null;
   if(imageField||typedPhoto&&f.mediaAttachment){try{const u=new URL(f.own.uri);if(u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&!u.hash&&/(?:^|\.)fbcdn\.net$/i.test(u.hostname)&&u.href.length<=8192)imageURI=u.href;}catch{}}
   if(imageURI)photoStages.renditions=Math.min(10000,photoStages.renditions+1);
   if(f.mediaBlocked){if(typedPhoto||imageURI)photoStages.rules.RULE_PATH=1;return;}
-  // UI attachment strategies are containers, not Story identity boundaries.
-  const renderer=type.length<=200&&(/^Comet(?:Feed)?Story/.test(type)&&/Attachment/.test(type)&&/(?:Strategy|Renderer)$/.test(type)||/^(?:Comet)?StoryAttachmentStyleRenderer$/.test(type));
-  const story=/story|post/i.test(type)&&!renderer,opaqueStory=story&&!owner.key?opaque(f):null;
+  const story=/story|post/i.test(type)&&!attachmentContainer,opaqueStory=story&&!owner.key?opaque(f):null;
   const carries=!!imageURI||f.mediaRaw.size>0||f.mediaPhotos.size>0;
-  if(owner.conflict||foreignPostLink(f,owner)||owner.key&&(!owner.valid||owner.id!==id)){if(carries)photoStages.rules.RULE_FOREIGN=1;return;}
+  if(owner.conflict||anyForeignPostLink(f)||owner.key&&(!owner.valid||owner.id!==id)){if(carries)photoStages.rules.RULE_FOREIGN=1;return;}
   if(story&&!opaqueStory&&(!owner.valid||owner.id!==id)){if(carries)photoStages.rules.RULE_STORY=1;return;}
   if(/comment|feedback|shared|quoted|crosspost|reshare|reply|video|actor|profile|user|page/i.test(type)){if(carries)photoStages.rules.RULE_PATH=1;return;}
   if(imageURI&&(f.own.width!=null&&Number(f.own.width)<200||f.own.height!=null&&Number(f.own.height)<120))photoStages.rules.RULE_SIZE=1;
