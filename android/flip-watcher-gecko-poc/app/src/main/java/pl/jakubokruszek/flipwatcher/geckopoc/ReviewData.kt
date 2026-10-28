@@ -86,7 +86,7 @@ object ReviewDataProtocol{
 
 data class ReviewDataSummary(val reason:String,val selected:Int,val opened:Int,val bound:Int,val textRead:Int,val enriched:Int,val unchanged:Int,val unresolved:Int,val filtered:Int,val evidence:Map<String,Int> = emptyMap(),val batchSessions:Int=0,val batchSessionsClosed:Int=0){
     fun encode()=JSONObject().put("reason",reason).put("selected",selected).put("opened",opened).put("bound",bound).put("textRead",textRead).put("enriched",enriched).put("unchanged",unchanged).put("unresolved",unresolved).put("filtered",filtered).apply{if(evidence.isNotEmpty())put("evidence",JSONObject(evidence));if(batchSessions>0||batchSessionsClosed>0){put("batchSessions",batchSessions);put("batchSessionsClosed",batchSessionsClosed)}}.toString()
-    fun stopped(code:String)=copy(reason=if(code in setOf("PAUSED","CANCELLED","ERROR","SESSION_CLOSED","ENGINE_KILLED","ENGINE_CRASHED","DEADLINE"))code else "INTERRUPTED")
+    fun stopped(code:String)=copy(reason=if(code in setOf("PAUSED","CANCELLED","ERROR","SESSION_CLOSED","ENGINE_KILLED","ENGINE_CRASHED","ORIGINAL_ENGINE_KILLED","ORIGINAL_ENGINE_CRASHED","WORKER_ENGINE_KILLED","WORKER_ENGINE_CRASHED","DEADLINE"))code else "INTERRUPTED")
     fun explanation()=when(reason){
         "DONE"->"Zakończono kolejkę."
         "NAVIGATION","CONTEXT"->"Zatrzymano: adres lub kontekst posta nie przeszedł weryfikacji."
@@ -104,13 +104,15 @@ data class ReviewDataSummary(val reason:String,val selected:Int,val opened:Int,v
         "VERIFICATION_OR_LOGIN"->"Zatrzymano: logowanie lub weryfikacja Facebooka."
         "PAUSED","PAUSED_OR_CONTEXT"->"Zatrzymano: aplikacja utraciła aktywny widok lub poprawny kontekst."
         "CANCELLED"->"Przerwano przyciskiem operatora."
+        "ORIGINAL_ENGINE_KILLED","ORIGINAL_ENGINE_CRASHED"->"Zgłoszenie z pierwotnej sesji grupy. Sesje mogą współdzielić proces; raport nie ustala przyczyny zamknięcia."
+        "WORKER_ENGINE_KILLED","WORKER_ENGINE_CRASHED"->"Zgłoszenie z sesji roboczej posta. Sesje mogą współdzielić proces; raport nie ustala przyczyny zamknięcia."
         "ENGINE_KILLED"->"Gecko zgłosił zamknięcie procesu strony; raport nie ustala przyczyny zamknięcia."
         "ENGINE_CRASHED"->"Gecko zgłosił awarię procesu strony."
         "SESSION_CLOSED","ENGINE_LOST","CLOSED"->"Zatrzymano: zamknięcie lub utrata sesji."
         "ERROR"->"Zatrzymano: nieoczekiwany błąd aplikacji."
         else->"Próba nie ma potwierdzonego zakończenia."
     }
-    fun report()="UZUPEŁNIANIE 0.5.54 • tylko lokalnie • $reason\n${explanation()}${if(reason!="DONE"&&reason!="NO_OWN_POST") " Podgląd wyczyszczono ochronnie; nie oznacza to znalezienia zera ofert." else ""}\nWybrano $selected • otwarto $opened • potwierdzono w DOM/danych strony $bound • odczytano tekst $textRead\nUzupełniono $enriched • bez nowych pól $unchanged • brak potwierdzonego odczytu $unresolved • poza filtrem $filtered${if(batchSessions>0) "\nSesje robocze otwarte $batchSessions • zamknięte $batchSessionsClosed." else ""}\nBrak odczytu nie dowodzi braku danych w poście. Tylko dokładne ID tej grupy; pola heurystyczne. Bez odczytu odpowiedzi sieciowych, uploadu i kolektora. OCR wymaga osobnej zgody i ma osobny raport. Pauza usuwa dane."+ReviewEvidence.report(evidence)
+    fun report()="UZUPEŁNIANIE 0.5.55 • tylko lokalnie • $reason\n${explanation()}${if(reason!="DONE"&&reason!="NO_OWN_POST") " Podgląd wyczyszczono ochronnie; nie oznacza to znalezienia zera ofert." else ""}\nWybrano $selected • otwarto $opened • potwierdzono w DOM/danych strony $bound • odczytano tekst $textRead\nUzupełniono $enriched • bez nowych pól $unchanged • brak potwierdzonego odczytu $unresolved • poza filtrem $filtered${if(batchSessions>0) "\nSesje robocze otwarte $batchSessions • zamknięte $batchSessionsClosed." else ""}\nBrak odczytu nie dowodzi braku danych w poście. Tylko dokładne ID tej grupy; pola heurystyczne. Bez odczytu odpowiedzi sieciowych, uploadu i kolektora. OCR wymaga osobnej zgody i ma osobny raport. Pauza usuwa dane."+ReviewEvidence.report(evidence)
     companion object{
         fun decode(raw:String?):ReviewDataSummary?=runCatching{
             if(raw==null||raw.length>4096)return null
@@ -120,7 +122,7 @@ data class ReviewDataSummary(val reason:String,val selected:Int,val opened:Int,v
             val batchSessions=if(j.has("batchSessions")){val n=j.opt("batchSessions");if(n !is Int||n !in 1..20)return null;n}else 0
             val batchClosed=if(j.has("batchSessionsClosed")){val n=j.opt("batchSessionsClosed");if(n !is Int||n !in 0..batchSessions)return null;n}else 0
             val evidence=if(j.has("evidence"))ReviewEvidence.parse(j.getJSONObject("evidence"))?:return null else emptyMap()
-            if(j.optString("reason") !in setOf("DONE","NO_CONSENT_OR_INPUT","INPUT","DEADLINE","NAVIGATION","CONTEXT","PAUSED_OR_CONTEXT","PORT_LOST","LOAD_ERROR","VERIFICATION_OR_LOGIN","ENGINE_LOST","ENGINE_KILLED","ENGINE_CRASHED","NO_OWN_POST","REPLY_TIMEOUT","REPLY_INVALID","READER_ERROR","PAGE_TIMEOUT","LOCATION_TIMEOUT","PORT_TIMEOUT","FOCUS_TIMEOUT","DOM_TIMEOUT","PROTOCOL","CLOSED","INTERRUPTED","PAUSED","CANCELLED","ERROR","SESSION_CLOSED"))return null
+            if(j.optString("reason") !in setOf("DONE","NO_CONSENT_OR_INPUT","INPUT","DEADLINE","NAVIGATION","CONTEXT","PAUSED_OR_CONTEXT","PORT_LOST","LOAD_ERROR","VERIFICATION_OR_LOGIN","ENGINE_LOST","ENGINE_KILLED","ENGINE_CRASHED","ORIGINAL_ENGINE_KILLED","ORIGINAL_ENGINE_CRASHED","WORKER_ENGINE_KILLED","WORKER_ENGINE_CRASHED","NO_OWN_POST","REPLY_TIMEOUT","REPLY_INVALID","READER_ERROR","PAGE_TIMEOUT","LOCATION_TIMEOUT","PORT_TIMEOUT","FOCUS_TIMEOUT","DOM_TIMEOUT","PROTOCOL","CLOSED","INTERRUPTED","PAUSED","CANCELLED","ERROR","SESSION_CLOSED"))return null
             val counts=(keys-"reason").associateWith{k->val v=j.opt(k);if(v !is Int||v !in 0..20)return null;v}
             if(counts.getValue("opened")>counts.getValue("selected")||counts.getValue("bound")>counts.getValue("opened")||counts.getValue("textRead")>counts.getValue("bound"))return null
             if(batchSessions>counts.getValue("selected"))return null

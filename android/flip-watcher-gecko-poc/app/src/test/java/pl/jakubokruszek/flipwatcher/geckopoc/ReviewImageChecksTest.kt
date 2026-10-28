@@ -30,8 +30,16 @@ class ReviewImageChecksTest{
   for(code in listOf("NO_MEDIA_DATA","NO_RENDITION","OWNER_FILTER")){
    assertEquals(code,ReviewImageChecks.reply(reply(code),nonce));assertNull(ReviewImageChecks.reply(reply(code,1),nonce))
   }
-  val counts=ReviewImageChecks.add(emptyMap(),"NO_PROOF");val old=JSONObject(counts);for(k in listOf("NO_MEDIA_DATA","NO_RENDITION","OWNER_FILTER"))old.remove(k)
+  val counts=ReviewImageChecks.add(emptyMap(),"NO_PROOF");val old=JSONObject(counts);for(k in listOf("NO_MEDIA_DATA","NO_RENDITION","OWNER_FILTER")+ReviewImageChecks.ruleKeys)old.remove(k)
   assertEquals(counts,ReviewImageChecks.parse(old));val summary=JSONObject(OcrSummary("DONE",1,0,0,0,0).encode()).put("imageChecks",old)
   val decoded=OcrSummary.decode(summary.toString())!!;assertEquals(counts,decoded.imageChecks);assertTrue(decoded.report().contains("brak powiązania bez szczegółów 1"))
+ }
+ @Test fun ruleFlagsMayOverlapButMustRemainBoundedAndStrict(){
+  val flags=ReviewImageChecks.ruleKeys.associateWith{if(it in setOf("RULE_PATH","RULE_FOREIGN"))1 else 0}
+  val r=reply("OWNER_FILTER").put("filters",JSONObject(flags));assertEquals("OWNER_FILTER",ReviewImageChecks.reply(r,nonce));assertEquals(flags,ReviewImageChecks.filters(r))
+  val counts=ReviewImageChecks.add(emptyMap(),"OWNER_FILTER",flags);assertEquals(1,counts.getValue("checked"));assertEquals(counts,ReviewImageChecks.parse(JSONObject(counts)))
+  assertNull(ReviewImageChecks.reply(reply("OWNER_FILTER").put("filters",JSONObject(flags).put("RULE_PATH",2)),nonce))
+  assertNull(ReviewImageChecks.reply(reply("OWNER_FILTER").put("filters",JSONObject(flags).put("RAW_URL","PRIVATE")),nonce))
+  assertNull(ReviewImageChecks.parse(JSONObject(counts).put("RULE_PATH",2)))
  }
 }

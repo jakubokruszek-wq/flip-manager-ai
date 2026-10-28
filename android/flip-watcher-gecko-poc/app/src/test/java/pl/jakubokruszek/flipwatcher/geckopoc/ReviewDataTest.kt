@@ -152,4 +152,11 @@ class ReviewDataTest{
   for(j in listOf(org.json.JSONObject(result.encode()).put("batchSessions",8),org.json.JSONObject(result.encode()).put("batchSessionsClosed",4),org.json.JSONObject(result.encode()).apply{remove("batchSessionsClosed")},org.json.JSONObject(result.encode()).put("batchSessions","PRIVATE"),org.json.JSONObject(result.encode()).put("selected",1)))assertNull(ReviewDataSummary.decode(j.toString()))
  }
 
+ @Test fun engineCallbackOriginSurvivesHistoryAndCannotRestartQueue(){
+  for(code in listOf("ORIGINAL_ENGINE_KILLED","ORIGINAL_ENGINE_CRASHED","WORKER_ENGINE_KILLED","WORKER_ENGINE_CRASHED")){
+   val value=ReviewDataSummary("INTERRUPTED",9,8,7,2,2,0,5,0).stopped(code)
+   assertEquals(code,value.reason);assertEquals(value,ReviewDataSummary.decode(value.encode()));assertTrue(value.report().contains("mogą współdzielić proces"))
+   val gate=ReviewDataGate(PocPolicy.APPROVED_GROUP_ID,now={0});gate.beginSession();gate.stop(code);assertEquals(0,gate.beginSession());assertEquals(code,gate.reason)
+  }
+ }
 }

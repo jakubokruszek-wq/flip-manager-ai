@@ -48,8 +48,8 @@ object ReviewDataRunner{
             }
             browser.contentDelegate=object:GeckoSession.ContentDelegate{
                 override fun onTitleChange(s:GeckoSession,t:String?){if(gate.acceptsSession(epoch)&&Regex("log in|logowanie|captcha|checkpoint|security check|potwierdź.*tożsamość",RegexOption.IGNORE_CASE).containsMatchIn(t.orEmpty()))gate.stop("VERIFICATION_OR_LOGIN")}
-                override fun onCrash(s:GeckoSession){if(gate.acceptsSession(epoch))gate.stop("ENGINE_CRASHED")}
-                override fun onKill(s:GeckoSession){if(gate.acceptsSession(epoch))gate.stop("ENGINE_KILLED")}
+                override fun onCrash(s:GeckoSession){if(gate.acceptsSession(epoch))gate.stop("WORKER_ENGINE_CRASHED")}
+                override fun onKill(s:GeckoSession){if(gate.acceptsSession(epoch))gate.stop("WORKER_ENGINE_KILLED")}
             }
             try{
                 channel.attach(GeckoHost.collectorExtension(view.context));if(!live())return gate.reason

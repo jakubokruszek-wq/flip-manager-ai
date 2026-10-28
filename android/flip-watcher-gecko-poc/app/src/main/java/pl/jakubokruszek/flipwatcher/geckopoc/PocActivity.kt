@@ -390,7 +390,7 @@ class PocActivity : ComponentActivity() {
                                 val crops=DesktopThumbnails()
                                 try{
                                     val imageSafe=source.reviewImages(row,current,geckoView,crops,true,alive=live)
-                                    imageChecks=ReviewImageChecks.add(imageChecks,source.reviewImageOutcome);ocrProgress("INTERRUPTED")
+                                    imageChecks=ReviewImageChecks.add(imageChecks,source.reviewImageOutcome,source.reviewImageFilters);ocrProgress("INTERRUPTED")
                                     if(!imageSafe)throw IllegalStateException("OCR_CONTEXT")
                                     if(!live())throw IllegalStateException("OCR_CONTEXT")
                                     val photo=crops.ocrRows(row.postId).firstOrNull()
@@ -668,6 +668,7 @@ class PocActivity : ComponentActivity() {
         channel?.close()
         channel = null
         session?.let { current ->
+            runCatching{current.contentDelegate=null;current.navigationDelegate=null;current.progressDelegate=null}
             runCatching { geckoView.releaseSession() }
             runCatching { current.close() }
         }
@@ -1053,14 +1054,15 @@ class PocActivity : ComponentActivity() {
 
     private val contentDelegate = object : GeckoSession.ContentDelegate {
         override fun onTitleChange(session: GeckoSession, title: String?) {
+            if(session!==this@PocActivity.session)return
             if (shareBusy && Regex("log in|logowanie|captcha|checkpoint|security check|potwierdź.*tożsamość", RegexOption.IGNORE_CASE).containsMatchIn(title.orEmpty())) finishShare("VERIFICATION_OR_LOGIN")
             if(Regex("log in|logowanie|captcha|checkpoint|security check|potwierdź.*tożsamość",RegexOption.IGNORE_CASE).containsMatchIn(title.orEmpty())){if(desktopBusy)finishDesktop("CONTEXT") else if(desktopRows.isNotEmpty())clearDesktopDetails()}
             this@PocActivity.title = title?.take(120)
             render()
         }
 
-        override fun onCrash(session: GeckoSession) = lostEngine("Proces strony uległ awarii","ENGINE_CRASHED")
-        override fun onKill(session: GeckoSession) = lostEngine("System zamknął proces strony","ENGINE_KILLED")
+        override fun onCrash(session: GeckoSession){if(session===this@PocActivity.session)lostEngine("Proces strony uległ awarii","ORIGINAL_ENGINE_CRASHED")}
+        override fun onKill(session: GeckoSession){if(session===this@PocActivity.session)lostEngine("System zamknął proces strony","ORIGINAL_ENGINE_KILLED")}
     }
 
     private val navigationDelegate = object : GeckoSession.NavigationDelegate {

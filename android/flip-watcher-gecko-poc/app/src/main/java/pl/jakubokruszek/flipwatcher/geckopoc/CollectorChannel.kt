@@ -134,15 +134,16 @@ class CollectorChannel(
     }
 
     var reviewImageOutcome:String="PROTOCOL";private set
+    var reviewImageFilters:Map<String,Int> = emptyMap();private set
     suspend fun reviewImages(row:DesktopRow,expectedUrl:String,view:org.mozilla.geckoview.GeckoView,images:DesktopThumbnails,consent:Boolean=false,group:String=PocPolicy.APPROVED_GROUP_ID,alive:()->Boolean):Boolean{
-        reviewImageOutcome="PROTOCOL"
+        reviewImageOutcome="PROTOCOL";reviewImageFilters=emptyMap()
         if(!consent||!alive()||!ReviewDataGate.matches(expectedUrl,group,row.postId,fixtureMode))return false
         val nonce=UUID.randomUUID().toString();val generation=connectionGeneration
         fun live()=alive()&&isConnected&&connectionGeneration==generation&&connectedUrl==expectedUrl
         val bridge=DesktopViewportBridge(view,nonce,images,::live);viewportBridge=bridge
         return try{
             val reply=request(nonce,JSONObject().put("type","reviewImages").put("nonce",nonce).put("consent",true).put("ocrConsent",true).put("groupId",group).put("postId",row.postId).put("expectedUrl",expectedUrl).put("fixture",fixtureMode),7_000)
-            val outcome=ReviewImageChecks.reply(reply,nonce);reviewImageOutcome=outcome?:"PROTOCOL"
+            val outcome=ReviewImageChecks.reply(reply,nonce);reviewImageOutcome=outcome?:"PROTOCOL";reviewImageFilters=if(outcome!=null)ReviewImageChecks.filters(reply)?:emptyMap()else emptyMap()
             live()&&outcome!=null&&outcome!="CONTEXT"
         }finally{bridge.close();if(viewportBridge===bridge)viewportBridge=null}
     }

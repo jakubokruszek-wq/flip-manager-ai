@@ -268,3 +268,15 @@ test('missing media data, missing rendition and rejected ownership have distinct
  const cases=[['NO_MEDIA_DATA',selectedStory()],['NO_RENDITION',{...selectedStory(),attachments:[{media:{__typename:'Photo'}}]}],['OWNER_FILTER',{...selectedStory(),comments:[{media:photo()}]}],['CAPTURED',photoStory()]];
  for(const [expected,story] of cases){const h=hydrationEnv([{textContent:JSON.stringify(story)}]);assert.equal(h.run().bound,1);assert.equal(reader.ownPhotoStatus(h.w,h.m),expected);assert.equal(reader.ownPhotoStatus({...h.w,document:{}},h.m),'NO_PROOF');}
 });
+
+test('photo rule flags identify exclusions and never export paths or identities',()=>{
+ const opaque='opaque-target';const cases=[
+  ['RULE_PATH',{...selectedStory(),comments:[{media:photo()}]}],
+  ['RULE_FOREIGN',{...selectedStory(),related:{...photoStory(),post_id:'550000000000092',permalink_url:link.replace(id,'550000000000092')}}],
+  ['RULE_STORY',{...selectedStory(),attachments:[{__typename:'UnknownStory',media:photo()}]}],
+  ['RULE_OPAQUE',{...selectedStory(),id:opaque,related:{__typename:'Story',id:'opaque-foreign',attachments:[{media:photo()}]}}],
+  ['RULE_SIZE',{...selectedStory(),attachments:[{media:{...photo(),image:{uri:photoUrl,width:40,height:40}}}]}],
+  ['RULE_SCOPE',{numeric:selectedStory(),unrelated:{__typename:'Photo',image:{uri:photoUrl}}}]
+ ];
+ for(const [key,story] of cases){const h=hydrationEnv([{textContent:JSON.stringify(story)}]);assert.equal(h.run().bound,1);const flags=reader.ownPhotoFilters(h.w,h.m);assert.equal(flags[key],1,key);assert.deepEqual(Object.keys(flags).sort(),reader.photoRuleKeys.slice().sort());assert(Object.values(flags).every(n=>n===0||n===1));assert(!JSON.stringify(flags).includes(photoUrl));assert(!JSON.stringify(flags).includes(id));}
+});

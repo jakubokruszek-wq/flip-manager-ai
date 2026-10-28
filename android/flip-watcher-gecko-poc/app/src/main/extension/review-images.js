@@ -2,7 +2,7 @@
 (function(root){'use strict';
 const excluded='[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],[data-testid*="shared"],[data-ad-rendering-role*="shared"],blockquote,form,input,textarea,[contenteditable="true"],video';
 function create(){const used=new Set();return {async read(w,m,core,preview,exact,request){
- const result=(status,count=0,reason=status==='STOP'?'CONTEXT':count===1?'CAPTURED':'NO_IMAGE')=>({status,count,reason});
+ const result=(status,count=0,reason=status==='STOP'?'CONTEXT':count===1?'CAPTURED':'NO_IMAGE')=>{const filters=root.FlipReviewPost.ownPhotoFilters(w,m);return{status,count,reason,...(filters?{filters}:{})};};
  const safe=()=>m.consent===true&&m.ocrConsent===true&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(m.nonce||'')&&w.location.href===m.expectedUrl&&exact(w.location.href,m.groupId,m.postId,m.fixture===true)&&['interactive','complete'].includes(w.document.readyState)&&w.document.visibilityState==='visible'&&!w.document.hidden&&w.document.hasFocus?.()===true&&!/log in|logowanie|captcha|checkpoint|security check/i.test(w.document.title||'')&&!w.document.querySelector('input[type="password"],form[action*="login"],form[action*="checkpoint"],iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="captcha"],[role="alertdialog"]');
  if(!safe()||used.has(m.nonce))return result('STOP');used.add(m.nonce);while(used.size>32)used.delete(used.values().next().value);
  const cards=root.FlipReviewPost.cards(w,m,core,preview);
