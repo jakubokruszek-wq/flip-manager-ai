@@ -63,17 +63,28 @@
   // arms the load measurement here BEFORE calling loadUri, because no page
   // script exists yet at that moment. Replies carry counts only.
   let ocrFieldsReader=null;
-  let appPort = null;
+  let appPort = null, reconnectTimer = null, reconnectAttempt = 0;
+  // Background may start before Android registers its native delegate. Reconnect
+  // the port only; aborted measurements/jobs are never rearmed or replayed.
+  function reconnectApp() {
+    if(appPort||reconnectTimer!==null)return;
+    const delay=Math.min(4000,250*2**Math.min(reconnectAttempt++,4));
+    reconnectTimer=scope.setTimeout(()=>{reconnectTimer=null;connectApp();},delay);
+  }
   function connectApp() {
+    if(appPort)return;
+    let current;
     try {
-      appPort = browser.runtime.connectNative("flipPoc");
+      current = browser.runtime.connectNative("flipPoc");appPort=current;
     } catch {
-      appPort = null;
+      appPort = null;reconnectApp();
       return;
     }
-    appPort.onMessage.addListener(message => {
+    current.onMessage.addListener(message => {
+      if(appPort!==current)return;
+      reconnectAttempt=0;
       if (!message || typeof message !== "object" || typeof message.nonce !== "string") return;
-      const reply = value => { try { appPort.postMessage({ nonce: message.nonce, ...value }); } catch { /* app gone */ } };
+      const reply = value => { try { if(appPort===current)current.postMessage({ nonce: message.nonce, ...value }); } catch { /* app gone */ } };
       if (message.type === "ocrFields") {
         const processor=scope.FlipOcrFields?.create;
         if(!ocrFieldsReader&&processor)ocrFieldsReader=processor();
@@ -99,13 +110,14 @@
         reply({ type: "abortLoadResult", aborted: loadCounter.abort(message.nonce) ? 1 : 0 });
       }
     });
-    appPort.onDisconnect.addListener(() => {
+    current.onDisconnect.addListener(() => {
+      if(appPort!==current)return;
       // App or runtime went away: drop any pending measurement.
       scope.FlipDesktopBackground?.abortAll();
       loadCounter.abort();
       scope.FlipResponseDiagnosis?.abort();
         scope.FlipMainTransport?.abort();
-      appPort = null;
+      appPort = null;reconnectApp();
     });
   }
   connectApp();
