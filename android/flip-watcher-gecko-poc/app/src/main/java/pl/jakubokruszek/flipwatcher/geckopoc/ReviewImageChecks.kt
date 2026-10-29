@@ -18,12 +18,12 @@ object ReviewImageChecks{
   if(status!="OK"||(reason=="CAPTURED")!=(count==1))return null
   return reason
  }
- val detailKeys=setOf("rawImg","rawSvg","rawCss","sourceProof","ownerAccepted","ownerRejected","sizeRejected","qualified")
+ val detailKeys=setOf("documentImg","rawImg","rawSvg","rawCss","sourceProof","ownerAccepted","ownerRejected","sizeRejected","qualified")
  fun details(j:JSONObject?):Map<String,Int>?{
   if(j==null)return null;if(!j.has("details"))return emptyMap()
   val d=j.optJSONObject("details")?:return null;if(d.keys().asSequence().toSet()!=detailKeys)return null
   val result=detailKeys.associateWith{k->val n=d.opt(k);if(n !is Int||n !in 0..700)return null;n}
-  if(result.getValue("sourceProof")>20||result.getValue("qualified")+result.getValue("sizeRejected")>result.getValue("ownerAccepted"))return null
+  if(result.getValue("documentImg")>500||result.getValue("sourceProof")>20||result.getValue("qualified")+result.getValue("sizeRejected")>result.getValue("ownerAccepted"))return null
   return result
  }
  fun filters(j:JSONObject?):Map<String,Int>?{

@@ -41,3 +41,8 @@ test('single-photo counters distinguish owner rejection from small geometry with
  const small=env();small.image.getBoundingClientRect=()=>({left:1,top:1,right:81,bottom:81,width:80,height:80});const b=await small.run();assert.equal(b.reason,'NO_IMAGE');assert.equal(b.details.ownerAccepted,1);assert.equal(b.details.sizeRejected,1);assert.equal(b.details.qualified,0);
  for(const result of [a,b]){assert(Object.values(result.details).every(Number.isInteger));assert(!JSON.stringify(result).includes('facebook.com'));assert(!JSON.stringify(result).includes(id));}
 });
+
+test('missing own-card proof still reports bounded image inventory without choosing a foreign photo',async()=>{
+ const h=env(),old=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='img'?[h.image]:old(s);h.anchor.href=link.replace(id,'550000000000092');const r=await h.run();
+ assert.equal(r.count,0);assert.equal(r.details.documentImg,1);assert.equal(r.details.ownerAccepted,0);assert.equal(r.details.qualified,0);assert.equal(h.calls.length,0);assert(!JSON.stringify(r).includes('facebook.com'));
+});
