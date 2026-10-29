@@ -245,7 +245,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mv tested-apk/app-arm64-v8a-debug.apk flip-watcher-0.5.62-arm64.apk
+          mv tested-apk/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk flip-watcher-0.5.62-arm64.apk
           echo '25be1bef02ce6952ff82f064298de55112c973fec0c0802d81d39efce8b997d6  flip-watcher-0.5.62-arm64.apk' | sha256sum -c -
           cat > release-notes.md <<'NOTES'
           Tested Gecko POC 0.5.62, ARM64. This is the unchanged APK from successful run 40947464720, source 8ad1bf156e53352c32e09d48ac2d7ea8474e6fd7.
