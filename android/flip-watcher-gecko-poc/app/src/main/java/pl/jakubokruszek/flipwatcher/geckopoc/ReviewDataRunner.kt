@@ -54,7 +54,7 @@ object ReviewDataRunner{
             }
             try{
                 channel.attach(GeckoHost.collectorExtension(view.context));if(!live())return gate.reason
-                if(!originalDetached){view.releaseSession();originalDetached=true;original.setActive(false);parking?.park(::active);if(parking!=null)observe("ORIGINAL_PARKED")}
+                if(!originalDetached){originalDetached=true;parking?.park(::active);view.releaseSession();original.setFocused(false);original.setActive(false);if(parking!=null)observe("ORIGINAL_PARKED")}
                 if(!live())return gate.reason
                 browser.open(GeckoHost.runtime(view.context));openedSession=true;batchSessions++;observe("BATCH_OPENED")
                 view.setSession(browser);browser.setActive(true);browser.setFocused(true);view.requestFocus()

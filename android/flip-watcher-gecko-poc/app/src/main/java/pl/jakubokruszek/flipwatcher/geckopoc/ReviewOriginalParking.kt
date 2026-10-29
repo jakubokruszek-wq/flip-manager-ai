@@ -24,10 +24,10 @@ internal class ReviewOriginalParking(private val session:GeckoSession,private va
         }
         session.progressDelegate=object:GeckoSession.ProgressDelegate{}
         // ContentDelegate remains installed: a genuine original engine loss still stops.
-        session.setFocused(false);session.setActive(false);session.loadUri("about:blank")
+        session.loadUri("about:blank")
         val deadline=android.os.SystemClock.elapsedRealtime()+5000
         while(alive()&&!foreign&&!blank&&android.os.SystemClock.elapsedRealtime()<deadline)delay(50)
-        check(alive()&&!foreign&&blank){"ORIGINAL_PARK_LOCATION_FAILED"}
+        check(alive()&&!foreign&&blank){"ORIGINAL_PARK_LOCATION_FAILED live=${alive()} foreign=$foreign blank=$blank"}
         // The previous page and its port may be retained in BFCache until history
         // is purged. Do this after exact blank navigation, before waiting for detach.
         // about:blank need not report a network page-stop event.
@@ -37,7 +37,7 @@ internal class ReviewOriginalParking(private val session:GeckoSession,private va
         check(alive()&&!foreign&&!channel.isConnected){"ORIGINAL_PARK_PORT_FAILED"}
     }
     suspend fun restore(alive:()->Boolean){
-        if(!touched)return
+        if(!touched||!session.isOpen)return
         session.navigationDelegate=navigation;session.progressDelegate=progress
         if(!alive())return
         val generation=channel.connectionGeneration
