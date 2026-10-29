@@ -546,7 +546,8 @@ class PocActivity : ComponentActivity() {
                         if(!reviewBusy)return@launch
                         reviewBusy=false;reviewJob=null;saveReviewResult(outcome.summary);reviewReportPending=true
                         if(outcome.summary.reason=="DONE"){
-                            if(withOcr){ocrResults.putAll(previousOcr);ocrResults.putAll(pendingOcr);ocrProgress("DONE",completed=outcome.summary);ocrReportPending=true};desktopRows=outcome.rows.take(20);desktopThumbnails.retain(desktopRows.map{it.postId}.toSet())
+                            ocrResults.putAll(previousOcr)
+                            if(withOcr){ocrResults.putAll(pendingOcr);ocrProgress("DONE",completed=outcome.summary);ocrReportPending=true};desktopRows=outcome.rows.take(20);desktopThumbnails.retain(desktopRows.map{it.postId}.toSet())
                             offersPanel.showRows(desktopRows,"Uzupełniono: ${outcome.summary.enriched} • bez potwierdzonego odczytu: ${outcome.summary.unresolved}",thumbnails={desktopThumbnails.rows(it)})
                             saveResult()
                             output.text=outcome.summary.report();selectContentTab(true);render()
@@ -1339,7 +1340,8 @@ class PocActivity : ComponentActivity() {
             facebookTab.isEnabled=enabled;offersTab.isEnabled=enabled
             offersTab.text="Oferty (${displayedRows().count{DesktopSummary.eligible(it)}})"
         }
-        listOf("desktopResult","reviewResult","ocrResult","deleteResults").forEach{buttons[it]?.isEnabled=!busyForTabs()}
+        listOf("desktopResult","reviewResult","ocrResult","deleteResults","savedOcr","photoDiagnosis").forEach{buttons[it]?.isEnabled=!busyForTabs()}
+        buttons["savedOcr"]?.isEnabled=!busyForTabs()&&!archiveWritePending&&savedResult?.photos?.any{it.crop}==true
         if(deletingResults||ocrBusy||reviewWorking())buttons.filterKeys{it!="open"}.values.forEach{it.isEnabled=false}
         val p = probe
         diagnostics.text = buildString {
@@ -1368,7 +1370,7 @@ class PocActivity : ComponentActivity() {
             setOnClickListener {
                 if (key in setOf("open", "group", "tools")) onClick()
                 else { diagnosticsDialog?.dismiss(); window.decorView.post { if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
-                    if(key !in setOf("desktopResult","reviewResult","ocrResult","lastShareLinkResult","results","beaconNoGo"))selectContentTab(false)
+                    if(key !in setOf("desktopResult","reviewResult","ocrResult","lastShareLinkResult","results","beaconNoGo","savedOcr","photoDiagnosis"))selectContentTab(false)
                     onClick()
                 } } }
             }

@@ -44,7 +44,13 @@ class SavedOcrInstrumentedTest {
    assertTrue("Saved OCR did not finish",complete);ArchiveTestSupport.drain(context)
    val value=ResultArchive(context).load()!!;assertNull(value.rows.single().price);assertEquals(260000.0,value.ocr.single().price!!,0.0)
    assertEquals(1,value.photos.size)
-   scenario.onActivity{a->assertNull(field(a,"session"));assertTrue((field(a,"ocrLast") as OcrSummary).suggestions>0)}
+   scenario.onActivity{a->
+    assertNull(field(a,"session"));assertTrue((field(a,"ocrLast") as OcrSummary).suggestions>0)
+    val buttons=field(a,"buttons") as Map<*,*>;assertTrue((buttons["savedOcr"] as Button).isEnabled)
+    (field(a,"desktopResultDialog") as? AlertDialog)?.dismiss();a.askSavedOcr()
+    assertTrue((field(a,"ocrConsentDialog") as AlertDialog).isShowing)
+    (field(a,"ocrConsentDialog") as AlertDialog).getButton(AlertDialog.BUTTON_NEGATIVE).performClick()
+   }
   }
  }
  @Test fun cancellingConsentDoesNotRunModelOrOpenBrowser(){
