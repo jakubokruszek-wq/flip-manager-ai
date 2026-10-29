@@ -10,6 +10,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.*
 import org.json.JSONObject
 import org.junit.Assert.*
+import org.junit.AfterClass
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mozilla.geckoview.GeckoSession
@@ -18,6 +19,15 @@ import org.mozilla.geckoview.WebExtension
 /** Local PNG delivered by a test-only redirect; actual DOM image URL, no page getter override. */
 @RunWith(AndroidJUnit4::class)
 class PhotoBindingInstrumentedTest {
+ companion object {
+  private var installedLab:WebExtension?=null
+  private var labRuntime:org.mozilla.geckoview.GeckoRuntime?=null
+  @AfterClass @JvmStatic fun removeLab(){runBlocking{withContext(Dispatchers.Main){
+   val e=installedLab;val r=labRuntime;installedLab=null;labRuntime=null
+   if(e!=null&&r!=null)r.webExtensionController.uninstall(e).await()
+   Unit
+  }}}
+ }
  @Test fun signedCdnVariantInUnboundArticleCapturesReadablePixels()=runCase("article")
  @Test fun explicitOwnPhotoLinkWithoutArticleCapturesReadablePixels()=runCase("anchor")
  @Test fun sameAssetInForeignArticleIsNotCaptured()=runCase("foreign")
@@ -28,10 +38,11 @@ class PhotoBindingInstrumentedTest {
   val out=java.io.ByteArrayOutputStream();b.compress(Bitmap.CompressFormat.PNG,100,out);b.recycle()
   return "data:image/png;base64,"+Base64.encodeToString(out.toByteArray(),Base64.NO_WRAP)
  }
- private data class Lab(val extension:WebExtension,val redirects:java.util.concurrent.atomic.AtomicInteger)
+ private data class Lab(val extension:WebExtension,val redirects:java.util.concurrent.atomic.AtomicInteger,val port:WebExtension.Port)
  private suspend fun lab(context:android.content.Context,document:String,image:String,pixels:String):Lab {
   val runtime=GeckoHost.runtime(context)
   val extension=runtime.webExtensionController.ensureBuiltIn("resource://android/assets/ext/photo_lab/","photo-lab@flip-manager.local").await()!!
+  installedLab=extension;labRuntime=runtime
   val connected=CompletableDeferred<WebExtension.Port>();val configured=CompletableDeferred<Unit>();val redirects=java.util.concurrent.atomic.AtomicInteger()
   extension.setMessageDelegate(object:WebExtension.MessageDelegate{
    override fun onConnect(port:WebExtension.Port){
@@ -41,10 +52,11 @@ class PhotoBindingInstrumentedTest {
     });connected.complete(port)
    }
   },"photo_binding_lab")
+  var activePort:WebExtension.Port?=null
   try{
-   val port=withTimeout(10000){connected.await()};port.postMessage(JSONObject().put("type","configure").put("document",document).put("image",image).put("pixels",pixels))
-   withTimeout(5000){configured.await()};return Lab(extension,redirects)
-  }catch(e:Exception){runtime.webExtensionController.uninstall(extension).await();throw e}
+   val port=withTimeout(10000){connected.await()};activePort=port;port.postMessage(JSONObject().put("type","configure").put("document",document).put("image",image).put("pixels",pixels))
+   withTimeout(5000){configured.await()};return Lab(extension,redirects,port)
+  }catch(e:Exception){extension.setMessageDelegate(null,"photo_binding_lab");activePort?.disconnect();throw e}
  }
  private fun runCase(mode:String){
   ActivityScenario.launch(GeckoTestHostActivity::class.java).use{scenario->
@@ -87,7 +99,7 @@ class PhotoBindingInstrumentedTest {
       }finally{images.clear()}
      })
      assertEquals(out.summary.report(),"DONE",out.summary.reason);assertEquals(1,callbacks);assertEquals(1,out.summary.opened);assertTrue("Local image redirect was not observed",lab.redirects.get()>0)
-    }finally{source.close();if(host!!.geckoView.session!=null)host!!.geckoView.releaseSession();original.close();server.close();GeckoHost.runtime(host!!).webExtensionController.uninstall(lab.extension).await()}
+    }finally{source.close();if(host!!.geckoView.session!=null)host!!.geckoView.releaseSession();original.close();server.close();lab.extension.setMessageDelegate(null,"photo_binding_lab");lab.port.disconnect()}
    }}}
   }
  }
