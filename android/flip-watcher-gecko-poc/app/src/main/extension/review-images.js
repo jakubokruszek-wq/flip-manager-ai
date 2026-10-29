@@ -10,7 +10,7 @@ function create(){const used=new Set();return {async read(w,m,core,preview,exact
  const sources=()=>root.FlipReviewPost.ownPhotoSources(w,m);
  // IMG, single-image SVG and leaf CSS share the same rendered crop path.
  // Non-IMG candidates additionally require exact structured-photo source proof
- // and an already completed page resource; never create Image() or fetch().
+ // and an already completed page resource; never request another image resource.
  const rendered=new Map();
  const source=n=>rendered.has(n)?rendered.get(n).source():n.currentSrc||n.src||'';
  const topology=n=>!rendered.has(n)||rendered.get(n).valid();
