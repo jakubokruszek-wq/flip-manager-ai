@@ -155,6 +155,7 @@ jobs:
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.DesktopConsentInstrumentedTest || (adb logcat -d -s GeckoPocTest:I GeckoConsole:* AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ArchiveProcessInstrumentedTest#a_seed || (adb logcat -d -s AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             adb -e shell am force-stop pl.jakubokruszek.flipwatcher.geckopoc
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.PhotoBindingInstrumentedTest || (adb logcat -d -s GeckoPocTest:I GeckoConsole:* AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ArchiveProcessInstrumentedTest#b_restore || (adb logcat -d -s AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             adb -e shell svc wifi disable
             adb -e shell svc data disable

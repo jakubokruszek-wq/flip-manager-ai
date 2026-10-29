@@ -76,7 +76,7 @@ class PhotoBindingInstrumentedTest {
       callbacks++;val images=DesktopThumbnails()
       try{
        val imageReply=channel.reviewImages(r,current,host!!.geckoView,images,true,group=FIXTURE_GROUP_ID,alive=live)
-       assertTrue("outcome=${channel.reviewImageOutcome}, details=${channel.reviewImageDetails}, live=${live()}, redirects=${lab.redirects.get()}",imageReply)
+       assertTrue("failure=${channel.reviewImageFixtureFailure}, outcome=${channel.reviewImageOutcome}, details=${channel.reviewImageDetails}, live=${live()}, redirects=${lab.redirects.get()}",imageReply)
        assertEquals(channel.reviewImageDetails.toString(),1,channel.reviewImageDetails.getValue("sourceProof"))
        if(mode=="foreign"){
         assertEquals("NO_IMAGE",channel.reviewImageOutcome);assertTrue(images.ocrRows(id).isEmpty());assertEquals(1,channel.reviewImageDetails.getValue("foreignOwner"))

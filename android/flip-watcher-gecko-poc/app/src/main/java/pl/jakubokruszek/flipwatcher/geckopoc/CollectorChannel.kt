@@ -133,6 +133,7 @@ class CollectorChannel(
         val parsed=ReviewDataProtocol.parse(reply,nonce,row.postId,group);reviewFailureReason=when{reply==null->"REPLY_TIMEOUT";parsed==null->"REPLY_INVALID";!parsed.safe&&parsed.reason=="ERROR"->"READER_ERROR";!parsed.safe->"CONTEXT";else->null};observe(if(parsed==null)"PARSE_STOP" else "PARSE_OK");return parsed
     }
 
+    var reviewImageFixtureFailure:String?=null;private set
     var reviewImageOutcome:String="PROTOCOL";private set
     var reviewImageFilters:Map<String,Int> = emptyMap();private set
     var reviewImageDetails:Map<String,Int> = emptyMap();private set
@@ -144,6 +145,7 @@ class CollectorChannel(
         val bridge=DesktopViewportBridge(view,nonce,images,::live);viewportBridge=bridge
         return try{
             val reply=request(nonce,JSONObject().put("type","reviewImages").put("nonce",nonce).put("consent",true).put("ocrConsent",true).put("groupId",group).put("postId",row.postId).put("expectedUrl",expectedUrl).put("fixture",fixtureMode),7_000)
+            if(fixtureMode){val f=reply?.optJSONObject("fixtureFailure");reviewImageFixtureFailure=f?.let{"code=${it.optInt("code",0).coerceIn(0,4)},line=${it.optInt("line",0).coerceIn(0,1000)}"}}
             val outcome=ReviewImageChecks.reply(reply,nonce);reviewImageOutcome=outcome?:"PROTOCOL";reviewImageFilters=if(outcome!=null)ReviewImageChecks.filters(reply)?:emptyMap()else emptyMap();reviewImageDetails=if(outcome!=null)ReviewImageChecks.details(reply)?:emptyMap()else emptyMap()
             live()&&outcome!=null&&outcome!="CONTEXT"
         }finally{bridge.close();if(viewportBridge===bridge)viewportBridge=null}

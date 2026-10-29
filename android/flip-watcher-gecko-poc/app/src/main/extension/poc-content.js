@@ -447,7 +447,9 @@
       port.postMessage({type:'desktopDocumentProof',nonce:message.nonce,documentId:safe?desktopIdentity.id:null,timeOrigin:safe?scope.performance.timeOrigin:null});return;
     }
     if(message.type==='reviewImages'){
-      const reader=reviewImagesReader||(reviewImagesReader=scope.FlipReviewImages.create());const result=await reader.read(scope,message,core,scope.FlipDesktopPreview,scope.FlipReviewPost.exact,m=>viewportTransport.request(m));port.postMessage({type:'reviewImagesResult',nonce:message.nonce,...result});return;
+      try{const reader=reviewImagesReader||(reviewImagesReader=scope.FlipReviewImages.create());const result=await reader.read(scope,message,core,scope.FlipDesktopPreview,scope.FlipReviewPost.exact,m=>viewportTransport.request(m));port.postMessage({type:'reviewImagesResult',nonce:message.nonce,...result});}catch(e){
+       if(message.fixture===true){const code=['TypeError','ReferenceError','SyntaxError','SecurityError'].indexOf(e?.name)+1;const line=Number(/review-images\.js:(\d+)/.exec(e?.stack||'')?.[1])||0;port.postMessage({type:'reviewImagesResult',nonce:message.nonce,status:'STOP',count:0,reason:'PROTOCOL',fixtureFailure:{code,line}});}else throw e;
+      }return;
     }
     if(message.type==='reviewPost'){
       const reader=reviewReader||(reviewReader=scope.FlipReviewPost.create());const result=reader.read(scope,message,core,scope.FlipDesktopFields,scope.FlipDesktopPreview);port.postMessage({type:'reviewPostResult',nonce:message.nonce,...result});return;
