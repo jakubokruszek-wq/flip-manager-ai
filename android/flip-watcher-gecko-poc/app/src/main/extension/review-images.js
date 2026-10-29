@@ -8,7 +8,13 @@ function create(){const used=new Set();return {async read(w,m,core,preview,exact
  const cards=root.FlipReviewPost.cards(w,m,core,preview);
  if(cards.length>1)return result('OK',0,'AMBIGUOUS');const card=cards[0]||null;let region=card;
  const sources=()=>root.FlipReviewPost.ownPhotoSources(w,m);
- const source=n=>n.currentSrc||n.src||'';
+ // IMG, single-image SVG and leaf CSS share the same rendered crop path.
+ // Non-IMG candidates additionally require exact structured-photo source proof
+ // and an already completed page resource; never create Image() or fetch().
+ const rendered=new Map();
+ const source=n=>rendered.has(n)?rendered.get(n).source():n.currentSrc||n.src||'';
+ const topology=n=>!rendered.has(n)||rendered.get(n).valid();
+ const loaded=n=>rendered.has(n)?topology(n)&&preview.cssPhotoLoaded(n,source(n)):n.complete&&n.naturalWidth>=200&&n.naturalHeight>=120;
  const proofOwn=n=>{
   if(!sources().includes(source(n)))return false;
   let parent=n.closest('[role="article"],article'),depth=0;if(!parent)return false;
@@ -24,24 +30,35 @@ function create(){const used=new Set();return {async read(w,m,core,preview,exact
  const zone=card?.closest('[role="dialog"]')||card?.closest('main,[role="main"]');
  if(zone&&root.FlipReviewPost.cardId(card,core,preview,m.groupId,w.location.href)===m.postId){const links=Array.from(zone.querySelectorAll('a[href]'));const articles=Array.from(zone.querySelectorAll('[role="article"],article'));if(links.length<=200&&articles.length===1&&articles[0]===card){const posts=links.map(n=>core.parsePostLink(n.href)).filter(Boolean);if(posts.length&&posts.every(p=>p.sourceType==='GROUP'&&p.sourceId===m.groupId&&p.postId===m.postId))region=zone;}}
 
- const own=n=>safe()&&n.ownerDocument===w.document&&n.isConnected!==false&&!n.closest(excluded)&&n.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})!==false&&(
+ const own=n=>safe()&&topology(n)&&n.ownerDocument===w.document&&n.isConnected!==false&&!n.closest(excluded)&&n.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})!==false&&(
   card&&card.isConnected!==false&&root.FlipReviewPost.cards(w,m,core,preview).includes(card)&&(n.closest('[role="article"],article')===card||region!==card&&!n.closest('[role="article"],article'))&&region.contains(n)||proofOwn(n));
- const pool=region?Array.from(region.querySelectorAll('img')).slice(0,100):Array.from(w.document.querySelectorAll('img')).slice(0,500);
+ const scope=region||w.document,limit=region?100:500;
+ const pool=Array.from(scope.querySelectorAll('img')).slice(0,limit);
+ for(const n of Array.from(scope.querySelectorAll('svg image')).slice(0,100)){
+  const svg=preview.photoSvgRoot(n);if(!svg||rendered.has(svg))continue;
+  const info={source:()=>preview.photoAnchorHref(n)||'',valid:()=>n.isConnected!==false&&n.ownerDocument===w.document&&preview.photoSvgRoot(n)===svg&&!n.closest(excluded)&&sources().includes(preview.photoAnchorHref(n))};
+  rendered.set(svg,info);if(info.valid())pool.push(svg);
+ }
+ for(const n of Array.from(scope.querySelectorAll('[style*="background"],[role="img"]')).slice(0,100)){
+  if(pool.includes(n)||rendered.has(n))continue;
+  const info={source:()=>preview.cssPhotoSource(n)||'',valid:()=>sources().includes(preview.cssPhotoSource(n))};
+  rendered.set(n,info);if(info.valid())pool.push(n);
+ }
  const images=pool.filter(n=>own(n)).filter(n=>{const r=n.getBoundingClientRect();return r.width>=120&&r.height>=100;});
  // Reused own photo in multiple unbound cards is ambiguous; never choose the first card.
  if(!images.length)return result('OK',0,'NO_IMAGE');
  if(!card&&new Set(images.map(n=>n.closest('[role="article"],article'))).size!==1)return result('OK',0,'AMBIGUOUS');
  // One image per post gives every unresolved post a chance within the shared 20-image limit.
  // Alt text is only a local ranking hint, never evidence of fields or identity.
- images.sort((a,b)=>Number(/text|napis|tekst|mieszkan|sprzed|cena/i.test(b.alt||''))-Number(/text|napis|tekst|mieszkan|sprzed|cena/i.test(a.alt||''))||b.naturalWidth*b.naturalHeight-a.naturalWidth*a.naturalHeight);
+ images.sort((a,b)=>Number(/text|napis|tekst|mieszkan|sprzed|cena/i.test(b.alt||''))-Number(/text|napis|tekst|mieszkan|sprzed|cena/i.test(a.alt||''))||((b.naturalWidth||b.getBoundingClientRect().width)*(b.naturalHeight||b.getBoundingClientRect().height))-((a.naturalWidth||a.getBoundingClientRect().width)*(a.naturalHeight||a.getBoundingClientRect().height)));
  let lastReason='NO_IMAGE';
  for(const image of images.slice(0,3)){
   if(!own(image))return result('STOP');image.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});await new Promise(r=>w.setTimeout(r,250));if(!own(image))return result('STOP');
-  for(let attempt=0;attempt<3&&(!image.complete||image.naturalWidth<200||image.naturalHeight<120);attempt++){await new Promise(r=>w.setTimeout(r,250));if(!own(image))return result('STOP');}
-  if(!image.complete||image.naturalWidth<200||image.naturalHeight<120){lastReason='UNLOADED';continue;}
+  for(let attempt=0;attempt<3&&!loaded(image);attempt++){await new Promise(r=>w.setTimeout(r,250));if(!own(image))return result('STOP');}
+  if(!loaded(image)){lastReason='UNLOADED';continue;}
   const box=()=>{const v=w.visualViewport,left=Number(v?.offsetLeft)||0,top=Number(v?.offsetTop)||0,width=Number(v?.width)||w.innerWidth,height=Number(v?.height)||w.innerHeight,r=image.getBoundingClientRect();const x=Math.max(left,r.left),y=Math.max(top,r.top),right=Math.min(left+width,r.right),bottom=Math.min(top+height,r.bottom);return {x:x-left,y:y-top,width:right-x,height:bottom-y,vw:width,vh:height,ox:left,oy:top};};
   const tile=box(),capturedSource=source(image);if(tile.width<120||tile.height<100){lastReason='OCCLUDED';continue;}
-  const hit=()=>{if(!image.complete||image.naturalWidth<200||image.naturalHeight<120||source(image)!==capturedSource)return false;const b=box();for(const k of ['x','y','width','height','vw','vh','ox','oy'])if(Math.abs(b[k]-tile[k])>1)return false;for(const [x,y] of [[.2,.2],[.5,.5],[.8,.8]]){const h=w.document.elementFromPoint(tile.ox+tile.x+tile.width*x,tile.oy+tile.y+tile.height*y);if(h!==image&&!image.contains(h)&&!(h?.contains?.(image)&&w.getComputedStyle(image).pointerEvents==='none'))return false;}return own(image);};
+  const hit=()=>{if(!loaded(image)||source(image)!==capturedSource)return false;const b=box();for(const k of ['x','y','width','height','vw','vh','ox','oy'])if(Math.abs(b[k]-tile[k])>1)return false;for(const [x,y] of [[.2,.2],[.5,.5],[.8,.8]]){const h=w.document.elementFromPoint(tile.ox+tile.x+tile.width*x,tile.oy+tile.y+tile.height*y);if(h!==image&&!image.contains(h)&&!(h?.contains?.(image)&&w.getComputedStyle(image).pointerEvents==='none'))return false;}return own(image);};
   if(!hit()){lastReason='OCCLUDED';continue;}
   const ack=await request({type:'desktopViewportRequest',nonce:m.nonce,action:'photos',width:tile.vw,height:tile.vh,tiles:[{postId:m.postId,slot:0,x:tile.x,y:tile.y,width:tile.width,height:tile.height}]});
   if(!ack?.accepted)return safe()?result('OK',0,'NO_ACK'):result('STOP');

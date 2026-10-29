@@ -305,3 +305,25 @@ test('explicit post metadata constrains a media owner without mistaking its Phot
   assert.deepEqual(photoSelect(story).photos,[photoUrl]);media.post_id='550000000000092';assert.deepEqual(photoSelect(story).photos,[]);
  }
 });
+
+test('own structured photo rendered as SVG or leaf CSS reaches crop commit without IMG or new requests',async()=>{
+ const imageApi=require('../../main/extension/review-images.js');
+ for(const mode of ['svg','css','svg-unloaded','css-unloaded','svg-overlay','css-text','svg-foreign','css-foreign','svg-swap','css-swap','svg-multiple','css-pseudo','svg-comment','css-comment','svg-occluded','css-occluded']){
+  const h=hydrationEnv([{textContent:JSON.stringify(wrapRelay({...selectedStory(),attachments:[{media:photo()}]}))}]);
+  const css=mode.startsWith('css');let raw=mode.endsWith('foreign')?photoUrl+'&foreign=1':photoUrl;
+  h.w.innerHeight=1600;h.w.setTimeout=fn=>fn();h.doc.defaultView=h.w;h.w.fetch=()=>{throw Error('no media fetch permitted')};h.w.Image=function(){throw Error('no image load permitted')};
+  h.w.performance={getEntriesByName:url=>!mode.endsWith('unloaded')&&url===raw?[{entryType:'resource',initiatorType:css?'css':'img',responseEnd:10}]:[]};
+  h.w.getComputedStyle=(n,pseudo)=>pseudo?{content:mode==='css-pseudo'?'"other"':'none'}:{pointerEvents:'auto',backgroundImage:`url("${raw}")`};
+  const rect={left:100,top:100,right:900,bottom:500,width:800,height:400};
+  const node={ownerDocument:h.doc,isConnected:true,childElementCount:0,textContent:mode==='css-text'?'other text':'',tagName:css?'DIV':'svg',closest:s=>s==='[role="article"],article'?h.card:mode.endsWith('comment')?{}:null,checkVisibility:()=>true,scrollIntoView(){},getBoundingClientRect:()=>rect,contains:n=>n===inner};
+  const inner={ownerDocument:h.doc,isConnected:true,tagName:'image',href:{get animVal(){return raw;}},closest:s=>s==='svg'?node:s==='[role="article"],article'?h.card:null,getAttribute:k=>k==='href'?raw:null};
+  node.querySelectorAll=s=>s==='image'?(mode==='svg-multiple'?[inner,{}]:[inner]):[];node.querySelector=()=>mode==='svg-overlay'?{}:null;
+  h.card.querySelectorAll=s=>s==='a[href]'?[h.anchor]:[];
+  const old=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='img'?[]:s==='svg image'?(css?[]:[inner]):s==='[style*="background"],[role="img"]'?(css?[node]:[]):old(s);
+  h.doc.elementFromPoint=()=>mode.endsWith('occluded')?{}:node;
+  const read=h.run();assert.equal(read.bound,1);assert.equal(read.evidence.boundCards,0);
+  const calls=[];const r=await imageApi.create().read(h.w,{...h.m,ocrConsent:true},core,p,reader.exact,async m=>{calls.push(m.action);if(mode.endsWith('swap')&&m.action==='photos')raw+='&changed=1';return{accepted:true,count:1,requestId:nonce};});
+  const good=['svg','css'].includes(mode);assert.equal(r.count,good?1:0,mode);assert.deepEqual(calls,good?['photos','commit']:mode.endsWith('swap')?['photos','drop']:[],mode);
+  assert(!JSON.stringify(r).includes(photoUrl));assert(!JSON.stringify(calls).includes(photoUrl));
+ }
+});
