@@ -122,8 +122,6 @@ jobs:
           retention-days: 30
 
   instrumented:
-    # Temporary fast-validation lane requested for physical Samsung verification (0.5.39).
-    if: ${{ !contains(github.event.head_commit.message, '[gecko-fast]') && !contains(github.event.pull_request.title, '[gecko-fast]') }}
     name: GeckoView instrumented tests (Android 16 emulator, local HTML)
     runs-on: ubuntu-22.04
     timeout-minutes: 50
@@ -141,7 +139,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Instrumented tests on API 36
+      - name: Offline OCR and consent on API 36 (dedicated device)
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -150,18 +148,46 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           working-directory: android/flip-watcher-gecko-poc
+          avd-name: gecko-ocr-offline
+          force-avd-creation: true
           script: |
             adb logcat -c || true
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.DesktopConsentInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             adb -e shell svc wifi disable
             adb -e shell svc data disable
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.OcrInstrumentedTest -Pandroid.testInstrumentationRunnerArguments.offlineOcr=1 || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
-            adb -e shell svc wifi enable
-            adb -e shell svc data enable
+            adb logcat -d -s GeckoPocTest:I > logcat-offline-tests.txt || true
+
+      - name: Upload offline OCR reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gecko-poc-offline-ocr-reports-${{ github.run_number }}
+          path: |
+            android/flip-watcher-gecko-poc/app/build/reports/androidTests/
+            android/flip-watcher-gecko-poc/logcat-offline-tests.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Online Gecko flow and full regression on API 36 (fresh device)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          working-directory: android/flip-watcher-gecko-poc
+          avd-name: gecko-flow-online
+          force-avd-creation: true
+          script: |
+            adb logcat -c || true
+            for network_attempt in $(seq 1 30); do if adb -e shell dumpsys connectivity | grep -Eq 'Active default network: [0-9]+'; then break; fi; sleep 1; done
+            adb -e shell dumpsys connectivity | grep -Eq 'Active default network: [0-9]+'
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.FeedMessageInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ReviewDataInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ReviewReportInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#loadMeasurementCountsTheWholeApprovedGroupLoad || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
-            # Independent instrumentation invocations use independent disposable emulator profiles.
-            # The full suite still checks persistence across pause/recreate within each test.
+            # Test persistence across pause/recreate inside each case, with a clean
+            # disposable profile between independent instrumentation invocations.
             adb -e shell am force-stop pl.jakubokruszek.flipwatcher.geckopoc
             adb -e shell pm clear pl.jakubokruszek.flipwatcher.geckopoc | grep -q Success
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
