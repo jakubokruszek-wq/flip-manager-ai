@@ -152,14 +152,14 @@ jobs:
           force-avd-creation: true
           script: |
             adb logcat -c || true
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.DesktopConsentInstrumentedTest || (adb logcat -d -s GeckoPocTest:I GeckoConsole:* AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.PhotoBindingInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.DesktopConsentInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ArchiveProcessInstrumentedTest#a_seed || (adb logcat -d -s AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             adb -e shell am force-stop pl.jakubokruszek.flipwatcher.geckopoc
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.PhotoBindingInstrumentedTest || (adb logcat -d -s GeckoPocTest:I GeckoConsole:* AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ArchiveProcessInstrumentedTest#b_restore || (adb logcat -d -s AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             adb -e shell svc wifi disable
             adb -e shell svc data disable
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.OcrInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SavedOcrInstrumentedTest -Pandroid.testInstrumentationRunnerArguments.offlineOcr=1 || (adb logcat -d -s GeckoPocTest:I GeckoConsole:* AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.OcrInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SavedOcrInstrumentedTest -Pandroid.testInstrumentationRunnerArguments.offlineOcr=1 || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             adb logcat -d -s GeckoPocTest:I > logcat-offline-tests.txt || true
 
       - name: Upload offline OCR reports
@@ -188,13 +188,13 @@ jobs:
             adb logcat -c || true
             for network_attempt in $(seq 1 30); do if adb -e shell dumpsys connectivity | grep -Eq 'Active default network: [0-9]+'; then break; fi; sleep 1; done
             adb -e shell dumpsys connectivity | grep -Eq 'Active default network: [0-9]+'
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.FeedMessageInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ReviewDataInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ReviewReportInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SinglePhotoInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.PhotoBindingInstrumentedTest || (adb logcat -d -s GeckoPocTest:I GeckoConsole:* AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#loadMeasurementCountsTheWholeApprovedGroupLoad || (adb logcat -d -s GeckoPocTest:I GeckoConsole:* AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.FeedMessageInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ReviewDataInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ReviewReportInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SinglePhotoInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.PhotoBindingInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#loadMeasurementCountsTheWholeApprovedGroupLoad || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             # Test persistence across pause/recreate inside each case, with a clean
             # disposable profile between independent instrumentation invocations.
             adb -e shell am force-stop pl.jakubokruszek.flipwatcher.geckopoc
             adb -e shell pm clear pl.jakubokruszek.flipwatcher.geckopoc | grep -q Success
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || (adb logcat -d -s GeckoPocTest:I GeckoConsole:* AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             adb logcat -d -s GeckoPocTest:I > logcat-tests.txt || true
             adb exec-out run-as pl.jakubokruszek.flipwatcher.geckopoc cat files/consent-ui-compact-large.png > app/build/reports/androidTests/consent-ui-compact-large.png || true
             adb exec-out run-as pl.jakubokruszek.flipwatcher.geckopoc cat files/consent-ui-compact-expanded.png > app/build/reports/androidTests/consent-ui-compact-expanded.png || true

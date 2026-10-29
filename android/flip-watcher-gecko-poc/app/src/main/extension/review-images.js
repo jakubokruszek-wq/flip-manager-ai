@@ -7,7 +7,10 @@ function photoURL(raw){try{const u=new URL(raw);return typeof raw==='string'&&ra
 function photoAssetKey(raw){
  const u=photoURL(raw);if(!u||!/^scontent(?:-[a-z0-9-]+)?(?:\.[a-z0-9-]+)*\.fbcdn\.net$/i.test(u.hostname))return null;
  if(!/^\/v\/t[0-9.]+-\d+\/\d{5,30}_\d{5,30}_[A-Za-z0-9_-]{1,180}\.(?:jpe?g|png|webp|avif)$/i.test(u.pathname))return null;
- const keys=[...u.searchParams.keys()];if(new Set(keys).size!==keys.length||keys.some(k=>! /^(?:_nc_[a-z0-9_]+|oh|oe|stp|efg|ccb|edm)$/i.test(k)))return null;
+ // GeckoView isolated worlds may not expose URLSearchParams iterators. Decode
+ // names from the bounded URL query; malformed escapes and duplicates fail closed.
+ let keys;try{keys=u.search?u.search.slice(1).split('&').map(p=>decodeURIComponent(p.split('=',1)[0].replace(/\+/g,' '))):[];}catch{return null;}
+ if(new Set(keys).size!==keys.length||keys.some(k=>! /^(?:_nc_[a-z0-9_]+|oh|oe|stp|efg|ccb|edm)$/i.test(k)))return null;
  return u.pathname;
 }
 function photoMatch(raw,known){

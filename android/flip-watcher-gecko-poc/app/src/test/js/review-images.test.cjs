@@ -90,3 +90,14 @@ test('confirmed own asset in a foreign article remains rejected and source swap 
  const h=ownAssetEnv();h.anchor.href=link.replace(id,'550000000000092');const bad=await h.run();assert.equal(bad.count,0);assert.equal(bad.details.foreignOwner,1);assert.equal(h.calls.length,0);
  const b=ownAssetEnv();b.setBeforeAck(()=>b.image.currentSrc=knownAsset);assert.equal((await b.run()).status,'STOP');assert.deepEqual(b.calls.map(c=>c.action),['photos','drop']);
 });
+
+// Real GeckoView exposed a TypeError on URLSearchParams iteration despite the
+// same source passing Node/browser-page tests. Keep this path iterator-free.
+test('static photo query validation does not require URLSearchParams iterators',()=>{
+ const fs=require('node:fs'),vm=require('node:vm');const context={URL:class extends URL {get searchParams(){throw new TypeError('isolated URLSearchParams not iterable');}}};
+ vm.runInNewContext(fs.readFileSync('android/flip-watcher-gecko-poc/app/src/main/extension/review-images.js','utf8'),context);
+ const match=context.FlipReviewImages.photoMatch,path='/v/t39.30808-6/123456789_987654321_555555555_n.jpg',a='https://scontent-waw2-1.xx.fbcdn.net'+path+'?oh=old&oe=123';
+ const base='https://scontent-fra3-2.xx.fbcdn.net'+path;
+ assert.equal(match(base+'?%6fh=new&oe=456',a),2);
+ for(const query of ['?oh=a&%6fh=b','?%GG=1','?oh=a&&oe=b','?redirect=x','?oh+other=x'])assert.equal(match(base+query,a),0,query);
+});

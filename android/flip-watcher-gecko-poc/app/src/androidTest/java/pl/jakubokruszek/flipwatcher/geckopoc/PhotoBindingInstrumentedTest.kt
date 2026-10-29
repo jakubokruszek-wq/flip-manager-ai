@@ -50,8 +50,6 @@ class PhotoBindingInstrumentedTest {
   ActivityScenario.launch(GeckoTestHostActivity::class.java).use{scenario->
    var host:GeckoTestHostActivity?=null;scenario.onActivity{host=it}
    runBlocking{withTimeout(60000){withContext(Dispatchers.Main){
-    val settings=GeckoHost.runtime(host!!).settings
-    settings.setConsoleOutputEnabled(true)
     val id="550000000000091";val link="https://www.facebook.com/groups/$FIXTURE_GROUP_ID/posts/$id/"
     val path="/v/t39.30808-6/123456789_987654321_555555555_n.jpg"
     val known="https://scontent-waw2-1.xx.fbcdn.net$path?oh=old&oe=123&_nc_cat=1"
@@ -89,7 +87,7 @@ class PhotoBindingInstrumentedTest {
       }finally{images.clear()}
      })
      assertEquals(out.summary.report(),"DONE",out.summary.reason);assertEquals(1,callbacks);assertEquals(1,out.summary.opened);assertTrue("Local image redirect was not observed",lab.redirects.get()>0)
-    }finally{source.close();if(host!!.geckoView.session!=null)host!!.geckoView.releaseSession();original.close();server.close();GeckoHost.runtime(host!!).webExtensionController.uninstall(lab.extension).await();settings.setConsoleOutputEnabled(false)}
+    }finally{source.close();if(host!!.geckoView.session!=null)host!!.geckoView.releaseSession();original.close();server.close();GeckoHost.runtime(host!!).webExtensionController.uninstall(lab.extension).await()}
    }}}
   }
  }
