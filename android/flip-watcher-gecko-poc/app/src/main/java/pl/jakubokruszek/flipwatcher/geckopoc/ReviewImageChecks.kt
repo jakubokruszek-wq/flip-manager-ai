@@ -18,11 +18,12 @@ object ReviewImageChecks{
   if(status!="OK"||(reason=="CAPTURED")!=(count==1))return null
   return reason
  }
- val detailKeys=setOf("documentImg","rawImg","rawSvg","rawCss","sourceProof","ownerAccepted","ownerRejected","sizeRejected","qualified")
+ private val legacyDetailKeys=setOf("documentImg","rawImg","rawSvg","rawCss","sourceProof","ownerAccepted","ownerRejected","sizeRejected","qualified")
+ val detailKeys=legacyDetailKeys+setOf("sourceExact","sourceAsset","sourceMiss","noArticle","foreignOwner","anchorOwner","excludedOwner")
  fun details(j:JSONObject?):Map<String,Int>?{
   if(j==null)return null;if(!j.has("details"))return emptyMap()
-  val d=j.optJSONObject("details")?:return null;if(d.keys().asSequence().toSet()!=detailKeys)return null
-  val result=detailKeys.associateWith{k->val n=d.opt(k);if(n !is Int||n !in 0..700)return null;n}
+  val d=j.optJSONObject("details")?:return null;val actual=d.keys().asSequence().toSet();if(actual!=detailKeys&&actual!=legacyDetailKeys)return null
+  val result=detailKeys.associateWith{k->val n=if(k in actual)d.opt(k)else 0;if(n !is Int||n !in 0..700)return null;n}
   if(result.getValue("documentImg")>500||result.getValue("sourceProof")>20||result.getValue("qualified")+result.getValue("sizeRejected")>result.getValue("ownerAccepted"))return null
   return result
  }

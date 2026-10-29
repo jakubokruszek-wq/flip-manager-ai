@@ -7,8 +7,10 @@ data class PhotoDiagnosis(val postId:String,val reason:String,val details:Map<St
     fun encode()=JSONObject().put("postId",postId).put("reason",reason).put("details",JSONObject(details)).put("checks",JSONObject(checks)).toString()
     fun report()="Post: $postId\nhttps://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/posts/$postId/\nWynik zdjęcia: $reason\n"+
         (if(details.isEmpty())"Nie zebrano szczegółów obrazu. To nie dowód braku zdjęcia.\n" else
-        "IMG w otwartym dokumencie: ${details.getValue("documentImg")}\nElementy w powiązanym obszarze: IMG ${details.getValue("rawImg")} • SVG ${details.getValue("rawSvg")} • CSS ${details.getValue("rawCss")}\n"+
+        "IMG w otwartym dokumencie: ${details.getValue("documentImg")}\nSprawdzone elementy (także niepowiązane): IMG ${details.getValue("rawImg")} • SVG ${details.getValue("rawSvg")} • CSS ${details.getValue("rawCss")}\n"+
         "Źródła potwierdzonego posta: ${details.getValue("sourceProof")} • powiązane elementy ${details.getValue("ownerAccepted")} • odrzucone powiązanie ${details.getValue("ownerRejected")} • odrzucony rozmiar ${details.getValue("sizeRejected")} • zakwalifikowane ${details.getValue("qualified")}\n")+
+        "Dopasowanie źródła: dokładne ${details["sourceExact"]?:0} • ten sam plik CDN ${details["sourceAsset"]?:0} • brak dopasowania ${details["sourceMiss"]?:0}\n"+
+        "Kontener: brak article ${details["noArticle"]?:0} • jawny link wybranego posta ${details["anchorOwner"]?:0} • obca tożsamość ${details["foreignOwner"]?:0} • komentarz/cytat ${details["excludedOwner"]?:0}. Nowe liczniki są zerowe także dla prób ze starszej wersji.\n"+
         if(checks.isEmpty())"Etap zdjęcia nie został potwierdzony." else ReviewImageChecks.report(checks)
     companion object{
         fun decode(raw:String?):PhotoDiagnosis?=runCatching{

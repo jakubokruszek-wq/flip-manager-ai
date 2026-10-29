@@ -46,3 +46,47 @@ test('missing own-card proof still reports bounded image inventory without choos
  const h=env(),old=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='img'?[h.image]:old(s);h.anchor.href=link.replace(id,'550000000000092');const r=await h.run();
  assert.equal(r.count,0);assert.equal(r.details.documentImg,1);assert.equal(r.details.ownerAccepted,0);assert.equal(r.details.qualified,0);assert.equal(h.calls.length,0);assert(!JSON.stringify(r).includes('facebook.com'));
 });
+
+const assetPath='/v/t39.30808-6/123456789_987654321_555555555_n.jpg';
+const knownAsset='https://scontent-waw2-1.xx.fbcdn.net'+assetPath+'?oh=old&oe=123&_nc_cat=1';
+const variantAsset='https://scontent-fra3-2.xx.fbcdn.net'+assetPath+'?stp=dst-jpg_s960x960&oh=new&oe=456&_nc_cat=2';
+function ownAssetEnv(noArticle=false){
+ const h=env(),fields=require('../../main/extension/desktop-fields.js'),reader=require('../../main/extension/review-post.js');
+ h.anchor.href='https://www.facebook.com/';h.image.currentSrc=variantAsset;h.w.performance={now:()=>0};
+ const model=preview.createModel(core,fields,group);model.add({postId:id,permalink:link,text:'',media:[]},'DOM');
+ h.m.previousRow=model.rows()[0];h.m.reviewConsent=true;
+ const story={__typename:'Story',post_id:id,permalink_url:link,message:{text:'Sprzedam mieszkanie 45,8 m2 za 260000 zł'},attachments:[{media:{__typename:'Photo',id:'880000000000001',image:{uri:knownAsset,width:800,height:400}}}]};
+ const script={getAttribute:()=> 'application/json',textContent:JSON.stringify(story)};
+ h.doc.querySelectorAll=s=>s==='script:not([src])'?[script]:s==='img'?[h.image]:s==='[role="article"],article'&&!noArticle?[h.card]:[];
+ assert.equal(reader.create().read(h.w,h.m,core,fields,preview).bound,1);assert.deepEqual(reader.ownPhotoSources(h.w,h.m),[knownAsset]);
+ if(noArticle){
+  const main={ownerDocument:h.doc,isConnected:true,contains:n=>n===h.image,closest:()=>null};
+  const a={href:`https://www.facebook.com/photo/?fbid=880000000000001&set=pcb.${id}`,parentElement:main};
+  h.image.parentElement=a;h.image.closest=s=>s==='a[href]'?a:s==='main,[role="main"]'?main:null;
+  h.photoAnchor=a;h.main=main;
+ }
+ return h;
+}
+test('same immutable photo survives signed-query and CDN edge changes without equating other assets',()=>{
+ assert.equal(api.photoMatch(knownAsset,knownAsset),1);assert.equal(api.photoMatch(variantAsset,knownAsset),2);
+ for(const bad of [variantAsset.replace('987654321','987654322'),variantAsset.replace('.fbcdn.net','.fbcdn.net.evil.test'),variantAsset+'&url=https://example.org/image.jpg',variantAsset.replace('https:','http:'),variantAsset+'#fragment',variantAsset.replace('scontent-fra3-2','external-fra3-2'),variantAsset+'&oh=duplicate'])assert.equal(api.photoMatch(bad,knownAsset),0,bad);
+ assert.equal(api.photoMatch('https://scontent.xx.fbcdn.net/image.php?id=1','https://scontent.xx.fbcdn.net/image.php?id=2'),0);
+});
+test('structured exact Story photo matches a different rendered CDN rendition in an unbound article',async()=>{
+ const h=ownAssetEnv(),r=await h.run();assert.equal(r.reason,'CAPTURED');assert.equal(r.details.sourceAsset,1);assert.equal(r.details.ownerAccepted,1);assert.equal(r.details.sourceMiss,0);assert(!JSON.stringify(r).includes(assetPath));
+});
+test('structured own photo without article requires explicit enclosing post on photo link and a main scope',async()=>{
+ const h=ownAssetEnv(true),r=await h.run();assert.equal(r.reason,'CAPTURED');assert.equal(r.details.noArticle,1);assert.equal(r.details.anchorOwner,1);assert.equal(h.calls.length,2);
+ for(const kind of ['foreignPost','bareMedia','commentLink','hash','noScope','commentAncestor','differentPixels']){
+  const b=ownAssetEnv(true);if(kind==='foreignPost')b.photoAnchor.href=b.photoAnchor.href.replace('pcb.'+id,'pcb.550000000000092');
+  if(kind==='bareMedia')b.photoAnchor.href='https://www.facebook.com/photo/?fbid=880000000000001';if(kind==='commentLink')b.photoAnchor.href+='&comment_id=777777';if(kind==='hash')b.photoAnchor.href+='#reply';
+  if(kind==='noScope'){const prior=b.image.closest;b.image.closest=s=>s==='main,[role="main"]'?null:prior(s);}
+  if(kind==='commentAncestor')b.photoAnchor.parentElement={parentElement:b.main,getAttribute:()=> 'Komentarz użytkownika'};
+  if(kind==='differentPixels')b.image.currentSrc=variantAsset.replace('987654321','987654322');
+  const out=await b.run();assert.equal(out.count,0,kind);assert.equal(b.calls.length,0,kind);
+ }
+});
+test('confirmed own asset in a foreign article remains rejected and source swap after pixels still drops',async()=>{
+ const h=ownAssetEnv();h.anchor.href=link.replace(id,'550000000000092');const bad=await h.run();assert.equal(bad.count,0);assert.equal(bad.details.foreignOwner,1);assert.equal(h.calls.length,0);
+ const b=ownAssetEnv();b.setBeforeAck(()=>b.image.currentSrc=knownAsset);assert.equal((await b.run()).status,'STOP');assert.deepEqual(b.calls.map(c=>c.action),['photos','drop']);
+});

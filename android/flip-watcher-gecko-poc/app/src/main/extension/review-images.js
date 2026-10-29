@@ -1,8 +1,22 @@
 /* One rendered photo of one exact opened post. No fetch, URL export, storage or whole-page capture retention. */
 (function(root){'use strict';
 const excluded='[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],[data-testid*="shared"],[data-ad-rendering-role*="shared"],blockquote,form,input,textarea,[contenteditable="true"],video';
+// Match immutable CDN asset paths, never post IDs inferred from media IDs.
+// Unknown/query-driven endpoints keep byte-exact matching only.
+function photoURL(raw){try{const u=new URL(raw);return typeof raw==='string'&&raw.length<=8192&&u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&!u.hash&&/(?:^|\.)fbcdn\.net$/i.test(u.hostname)?u:null;}catch{return null;}}
+function photoAssetKey(raw){
+ const u=photoURL(raw);if(!u||!/^scontent(?:-[a-z0-9-]+)?(?:\.[a-z0-9-]+)*\.fbcdn\.net$/i.test(u.hostname))return null;
+ if(!/^\/v\/t[0-9.]+-\d+\/\d{5,30}_\d{5,30}_[A-Za-z0-9_-]{1,180}\.(?:jpe?g|png|webp|avif)$/i.test(u.pathname))return null;
+ const keys=[...u.searchParams.keys()];if(new Set(keys).size!==keys.length||keys.some(k=>! /^(?:_nc_[a-z0-9_]+|oh|oe|stp|efg|ccb|edm)$/i.test(k)))return null;
+ return u.pathname;
+}
+function photoMatch(raw,known){
+ if(!photoURL(raw)||!photoURL(known))return 0;
+ if(raw===known)return 1;
+ const key=photoAssetKey(raw);return key&&key===photoAssetKey(known)?2:0;
+}
 function create(){const used=new Set();return {async read(w,m,core,preview,exact,request){
- const details={documentImg:0,rawImg:0,rawSvg:0,rawCss:0,sourceProof:0,ownerAccepted:0,ownerRejected:0,sizeRejected:0,qualified:0};
+ const details={documentImg:0,rawImg:0,rawSvg:0,rawCss:0,sourceProof:0,ownerAccepted:0,ownerRejected:0,sizeRejected:0,qualified:0,sourceExact:0,sourceAsset:0,sourceMiss:0,noArticle:0,foreignOwner:0,anchorOwner:0,excludedOwner:0};
  const result=(status,count=0,reason=status==='STOP'?'CONTEXT':count===1?'CAPTURED':'NO_IMAGE')=>{const filters=root.FlipReviewPost.ownPhotoFilters(w,m);return{status,count,reason,details:{...details},...(filters?{filters}:{})};};
  const safe=()=>m.consent===true&&m.ocrConsent===true&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(m.nonce||'')&&w.location.href===m.expectedUrl&&exact(w.location.href,m.groupId,m.postId,m.fixture===true)&&['interactive','complete'].includes(w.document.readyState)&&w.document.visibilityState==='visible'&&!w.document.hidden&&w.document.hasFocus?.()===true&&!/log in|logowanie|captcha|checkpoint|security check/i.test(w.document.title||'')&&!w.document.querySelector('input[type="password"],form[action*="login"],form[action*="checkpoint"],iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="captcha"],[role="alertdialog"]');
  if(!safe()||used.has(m.nonce))return result('STOP');used.add(m.nonce);while(used.size>32)used.delete(used.values().next().value);
@@ -17,39 +31,60 @@ function create(){const used=new Set();return {async read(w,m,core,preview,exact
  const source=n=>rendered.has(n)?rendered.get(n).source():n.currentSrc||n.src||'';
  const topology=n=>!rendered.has(n)||rendered.get(n).valid();
  const loaded=n=>rendered.has(n)?topology(n)&&preview.cssPhotoLoaded(n,source(n)):n.complete&&n.naturalWidth>=200&&n.naturalHeight>=120;
- const proofOwn=n=>{
-  if(!sources().includes(source(n)))return false;
-  let parent=n.closest('[role="article"],article'),depth=0;if(!parent)return false;
+ const bump=k=>{details[k]=Math.min(700,details[k]+1);};
+ const sourceMatch=(raw,audit=false)=>{let kind=0;for(const known of sources()){const value=photoMatch(raw,known);if(value===1){kind=1;break;}if(value===2)kind=2;}if(audit)bump(kind===1?'sourceExact':kind===2?'sourceAsset':'sourceMiss');return kind>0;};
+ const anchorScopes=new Map();
+ const ownAnchorScope=n=>{
+  const a=n.closest('a[href]');if(!a)return null;
+  let u;try{u=new URL(preview.photoAnchorHref(a)||'',w.location.href);}catch{return null;}
+  if(u.protocol!=='https:'||u.port||u.username||u.password||u.hash||!['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)||u.searchParams.has('comment_id')||u.searchParams.has('reply_comment_id'))return null;
+  const direct=exact(u.href,m.groupId,m.postId,false);
+  // pcb is the explicit enclosing post on this photo link; fbid remains media-only.
+  const album=/^\/photo(?:\.php)?\/?$/i.test(u.pathname)&&u.searchParams.getAll('set').length===1&&u.searchParams.get('set')==='pcb.'+m.postId&&u.searchParams.getAll('fbid').length===1&&/^\d{5,30}$/.test(u.searchParams.get('fbid')||'')&&!u.searchParams.has('story_fbid');
+  if(!direct&&!album)return null;
+  const scope=n.closest('main,[role="main"]')||n.closest('[role="dialog"]');
+  if(!scope||scope.ownerDocument!==w.document||scope.isConnected===false||!scope.contains(n)||scope.closest(excluded))return null;
+  let p=n.parentElement,depth=0;while(p&&p!==scope&&depth++<32){if(/comment|komentarz|reply|odpowiedź/i.test(p.getAttribute?.('aria-label')||''))return null;p=p.parentElement;}
+  if(p!==scope)return null;return scope;
+ };
+ const proofOwn=(n,audit=false)=>{
+  if(!sourceMatch(source(n),audit))return false;
+  let parent=n.closest('[role="article"],article'),depth=0;
+  if(!parent){if(audit)bump('noArticle');const scope=ownAnchorScope(n);if(!scope)return false;anchorScopes.set(n,scope);if(audit)bump('anchorOwner');return true;}
   while(parent&&depth++<20){
-   if(parent.closest(excluded)||/comment|komentarz|reply|odpowiedź/i.test(parent.getAttribute?.('aria-label')||''))return false;
-   const anchors=Array.from(parent.querySelectorAll('a[href]'));if(anchors.length>200)return false;
-   for(const a of anchors){const p=core.parsePostLink(a.href);if(p&&(p.sourceType!=='GROUP'||p.sourceId!==m.groupId||p.postId!==m.postId))return false;}
+   if(parent.closest(excluded)||/comment|komentarz|reply|odpowiedź/i.test(parent.getAttribute?.('aria-label')||'')){if(audit)bump('excludedOwner');return false;}
+   const anchors=Array.from(parent.querySelectorAll('a[href]'));if(anchors.length>200){if(audit)bump('foreignOwner');return false;}
+   for(const a of anchors){const p=core.parsePostLink(a.href);if(p&&(p.sourceType!=='GROUP'||p.sourceId!==m.groupId||p.postId!==m.postId)){if(audit)bump('foreignOwner');return false;}}
    parent=parent.parentElement?.closest('[role="article"],article');
   }
-  return !parent;
+  if(parent&&audit)bump('foreignOwner');return !parent;
  };
  if(!card&&!sources().length)return result('OK',0,root.FlipReviewPost.ownPhotoStatus(w,m));
  const zone=card?.closest('[role="dialog"]')||card?.closest('main,[role="main"]');
  if(zone&&root.FlipReviewPost.cardId(card,core,preview,m.groupId,w.location.href)===m.postId){const links=Array.from(zone.querySelectorAll('a[href]'));const articles=Array.from(zone.querySelectorAll('[role="article"],article'));if(links.length<=200&&articles.length===1&&articles[0]===card){const posts=links.map(n=>core.parsePostLink(n.href)).filter(Boolean);if(posts.length&&posts.every(p=>p.sourceType==='GROUP'&&p.sourceId===m.groupId&&p.postId===m.postId))region=zone;}}
 
- const own=n=>safe()&&topology(n)&&n.ownerDocument===w.document&&n.isConnected!==false&&!n.closest(excluded)&&n.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})!==false&&(
-  card&&card.isConnected!==false&&root.FlipReviewPost.cards(w,m,core,preview).includes(card)&&(n.closest('[role="article"],article')===card||region!==card&&!n.closest('[role="article"],article'))&&region.contains(n)||proofOwn(n));
+ const own=(n,audit=false)=>{
+  if(!safe()||!topology(n)||n.ownerDocument!==w.document||n.isConnected===false||n.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})===false)return false;
+  if(n.closest(excluded)){if(audit)bump('excludedOwner');return false;}
+  const dom=card&&card.isConnected!==false&&root.FlipReviewPost.cards(w,m,core,preview).includes(card)&&(n.closest('[role="article"],article')===card||region!==card&&!n.closest('[role="article"],article'))&&region.contains(n);
+  if(dom){if(audit)sourceMatch(source(n),true);return true;}return proofOwn(n,audit);
+ };
  const scope=region||w.document,limit=region?100:500;
  const pool=Array.from(scope.querySelectorAll('img')).slice(0,limit);details.rawImg=pool.length;
  for(const n of Array.from(scope.querySelectorAll('svg image')).slice(0,100)){
   details.rawSvg++;const svg=preview.photoSvgRoot(n);if(!svg||rendered.has(svg))continue;
-  const info={source:()=>preview.photoAnchorHref(n)||'',valid:()=>n.isConnected!==false&&n.ownerDocument===w.document&&preview.photoSvgRoot(n)===svg&&!n.closest(excluded)&&sources().includes(preview.photoAnchorHref(n))};
+  const info={source:()=>preview.photoAnchorHref(n)||'',valid:()=>n.isConnected!==false&&n.ownerDocument===w.document&&preview.photoSvgRoot(n)===svg&&!n.closest(excluded)&&sourceMatch(preview.photoAnchorHref(n))};
   rendered.set(svg,info);if(info.valid())pool.push(svg);
  }
  for(const n of Array.from(scope.querySelectorAll('[style*="background"],[role="img"]')).slice(0,100)){
   details.rawCss++;if(pool.includes(n)||rendered.has(n))continue;
-  const info={source:()=>preview.cssPhotoSource(n)||'',valid:()=>sources().includes(preview.cssPhotoSource(n))};
+  const info={source:()=>preview.cssPhotoSource(n)||'',valid:()=>sourceMatch(preview.cssPhotoSource(n))};
   rendered.set(n,info);if(info.valid())pool.push(n);
  }
- const images=pool.filter(n=>{const accepted=!!own(n);details[accepted?"ownerAccepted":"ownerRejected"]++;return accepted;}).filter(n=>{const r=n.getBoundingClientRect();const accepted=r.width>=120&&r.height>=100;if(!accepted)details.sizeRejected++;return accepted;});details.qualified=images.length;
+ const images=pool.filter(n=>{const accepted=!!own(n,true);details[accepted?"ownerAccepted":"ownerRejected"]++;return accepted;}).filter(n=>{const r=n.getBoundingClientRect();const accepted=r.width>=120&&r.height>=100;if(!accepted)details.sizeRejected++;return accepted;});details.qualified=images.length;
  // Reused own photo in multiple unbound cards is ambiguous; never choose the first card.
  if(!images.length)return result('OK',0,'NO_IMAGE');
- if(!card&&new Set(images.map(n=>n.closest('[role="article"],article'))).size!==1)return result('OK',0,'AMBIGUOUS');
+ if(!card&&new Set(images.map(n=>n.closest('[role="article"],article')||anchorScopes.get(n))).size!==1)return result('OK',0,'AMBIGUOUS');
  // One image per post gives every unresolved post a chance within the shared 20-image limit.
  // Alt text is only a local ranking hint, never evidence of fields or identity.
  images.sort((a,b)=>Number(/text|napis|tekst|mieszkan|sprzed|cena/i.test(b.alt||''))-Number(/text|napis|tekst|mieszkan|sprzed|cena/i.test(a.alt||''))||((b.naturalWidth||b.getBoundingClientRect().width)*(b.naturalHeight||b.getBoundingClientRect().height))-((a.naturalWidth||a.getBoundingClientRect().width)*(a.naturalHeight||a.getBoundingClientRect().height)));
@@ -69,5 +104,5 @@ function create(){const used=new Set();return {async read(w,m,core,preview,exact
  }
  return result('OK',0,lastReason);
 }};}
-const api={create};if(typeof module!=='undefined')module.exports=api;root.FlipReviewImages=api;
+const api={create,photoAssetKey,photoMatch};if(typeof module!=='undefined')module.exports=api;root.FlipReviewImages=api;
 })(globalThis);
