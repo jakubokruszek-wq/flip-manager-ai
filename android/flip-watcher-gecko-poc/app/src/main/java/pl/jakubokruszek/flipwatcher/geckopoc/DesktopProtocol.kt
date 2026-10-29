@@ -2,7 +2,7 @@ package pl.jakubokruszek.flipwatcher.geckopoc
 
 import org.json.JSONObject
 
-/** Transient selected fields only. Never persisted, logged or copied with the count-only report. */
+/** Selected fields; private archive never restores a live browser grant or document proof. */
 data class DesktopRow(val postId:String,val permalink:String,val layer:String,val price:Double?,val priceSource:String,val area:Double?,val rooms:Int?,val district:String?,val neighborhood:String?,val street:String?,val intent:String,val usable:Boolean,val photos:Int,val qualification:String="CLASSIFIER")
 data class DesktopReply(val status:String,val reason:String,val rows:List<DesktopRow>,val stats:Map<String,Int>)
 data class DesktopDocumentProof(val documentId:String,val timeOrigin:Double) {

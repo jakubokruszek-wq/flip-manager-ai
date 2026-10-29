@@ -17,6 +17,8 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class OcrInstrumentedTest{
+ @org.junit.Before fun clearSavedBefore(){ArchiveTestSupport.clear(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext)}
+ @org.junit.After fun clearSavedAfter(){ArchiveTestSupport.clear(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext)}
  @Test fun consumedLargeCropsCanBeReleasedWithoutRecyclingVisibleThumbnails(){
   val store=DesktopThumbnails();val thumbnail=Bitmap.createBitmap(100,100,Bitmap.Config.ARGB_8888);val crop=Bitmap.createBitmap(800,400,Bitmap.Config.ARGB_8888)
   try{assertTrue(store.put("550000000000091",0,thumbnail,crop));assertTrue(store.ocrBytes>0);store.clearOcr();assertEquals(0,store.ocrBytes);assertTrue(crop.isRecycled);assertFalse(thumbnail.isRecycled);assertSame(thumbnail,store.rows("550000000000091").single());store.clearOcr()}

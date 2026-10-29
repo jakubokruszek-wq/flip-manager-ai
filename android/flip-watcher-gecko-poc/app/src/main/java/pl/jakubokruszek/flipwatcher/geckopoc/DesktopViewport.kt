@@ -39,7 +39,7 @@ object DesktopViewportProtocol {
     }.getOrNull()
 }
 
-/** Bounded RAM ownership. Never encode, persist, log or copy bitmaps. */
+/** Bounded RAM ownership. The private archive takes separate pixel copies before recycling. */
 class DesktopThumbnails {
     private val images=LinkedHashMap<String,MutableMap<Int,Bitmap>>()
     private val ocr=LinkedHashMap<String,MutableMap<Int,Bitmap>>()

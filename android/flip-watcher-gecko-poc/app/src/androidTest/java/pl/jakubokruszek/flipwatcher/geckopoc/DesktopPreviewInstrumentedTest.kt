@@ -21,6 +21,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Real HTTP/Gecko/extension flow, all requests strictly local fixtures. */
 @RunWith(AndroidJUnit4::class)
 class DesktopPreviewInstrumentedTest {
+    @org.junit.Before fun clearSavedBefore(){ArchiveTestSupport.clear(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext)}
+    @org.junit.After fun clearSavedAfter(){ArchiveTestSupport.clear(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext)}
     private val context:Context=ApplicationProvider.getApplicationContext()
     // Local fixture only: normal Android touch input, never included in the app APK.
     private suspend fun fixtureSwipe(view:GeckoView){
@@ -400,7 +402,7 @@ class DesktopPreviewInstrumentedTest {
         is android.view.ViewGroup->(0 until view.childCount).joinToString("\n"){texts(view.getChildAt(it))}
         else->""
     }
-    @Test fun localPreviewIsClearedOnPauseAndOnlyAggregateSurvivesAndCopies(){
+    @Test fun livePreviewClearsOnPauseButSavedResultSurvivesAndCopiedReportContainsOnlyCounts(){
         val prefs=context.getSharedPreferences("desktop_trial_summary_v1",Context.MODE_PRIVATE)
         val original=prefs.getString("last",null)
         val history=context.getSharedPreferences("gecko_poc",Context.MODE_PRIVATE)
@@ -440,14 +442,16 @@ class DesktopPreviewInstrumentedTest {
                 var copied:String?=null;val end=System.currentTimeMillis()+5000
                 while(copied!=summary.report()&&System.currentTimeMillis()<end){scenario.onActivity{a->copied=a.getSystemService(android.content.ClipboardManager::class.java).primaryClip?.getItemAt(0)?.text?.toString()};runBlocking{delay(50)}}
                 assertEquals(summary.report(),copied);assertFalse(copied!!.contains(id))
+                ArchiveTestSupport.drain(context)
                 scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED);scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
-                scenario.onActivity{assertFalse(texts(oldView!!).contains(id));assertFalse(texts(oldCards!!).contains(id));assertNull(oldImage!!.drawable);assertTrue(transientPicture.isRecycled);assertEquals(0,it.desktopThumbnails.count)}
+                scenario.onActivity{assertFalse(texts(oldView!!).contains(id));assertTrue(texts(oldCards!!).contains(id));assertNull(oldImage!!.drawable);assertTrue(transientPicture.isRecycled);assertEquals(0,it.desktopThumbnails.count)}
                 scenario.recreate()
+                ArchiveTestSupport.drain(context)
                 scenario.onActivity{a->a.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.widget.Button>("poc.tool.tools").performClick()}
                 scenario.onActivity{a->a.diagnosticsDialog!!.window!!.decorView.findViewWithTag<android.widget.Button>("poc.tool.desktopResult").performClick()}
                 scenario.onActivity{a->
                     val panel=a.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.view.View>("poc.offers")
-                    assertEquals(android.view.View.VISIBLE,panel.visibility);assertFalse(texts(panel).contains(id));assertTrue(texts(panel).contains("Brak ofert w pamięci"))
+                    assertEquals(android.view.View.VISIBLE,panel.visibility);assertTrue(texts(panel).contains(id));assertTrue(texts(panel).contains("Zachowany wynik:"))
                     panel.findViewWithTag<android.widget.Button>("poc.offers.report").performClick()
                     assertTrue(a.desktopResultDialog!!.isShowing);assertFalse(texts(a.desktopResultDialog!!.window!!.decorView).contains(id));assertTrue(texts(a.desktopResultDialog!!.window!!.decorView).contains("CONDITIONAL_GO"))
                 }

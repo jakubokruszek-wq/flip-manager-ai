@@ -62,7 +62,7 @@ class DesktopSummary private constructor(val verdict:String,val reason:String,va
         if(stats.getValue("scrollSteps")>0&&stats.getValue("scrollMoves")==0)appendLine("UWAGA: próby przewinięcia nie przesunęły kontenera; brak dalszych postów nie jest potwierdzony.")
         if(stats.getValue("limitSkipped")>0)appendLine("UWAGA: limit odpowiedzi wykorzystany; raport nie potwierdza odczytu wszystkich danych grupy.")
         appendLine("Limit 20 ID: nowe oferty mają pierwszeństwo przed niezakwalifikowanymi rekordami bez mediów. Nieodczytane posty mogą być dostępne w sekcji Do ręcznego sprawdzenia. Lokalny OCR zdjęć wymaga osobnej zgody i dostępnych wycinków w RAM.")
-        append("ID i permalink: dokładne. Pola oferty oraz kwalifikacja: heurystyki do sprawdzenia na stronie. CONDITIONAL_GO wymaga porównania przez operatora. Brak ID lub pól nie jest dowodem braku postów. Bez skanu produkcyjnego, uploadu i zapisu treści/ID. Ten raport zawiera tylko liczby. Pauza usuwa podgląd danych.")
+        append("ID i permalink: dokładne. Pola oferty oraz kwalifikacja: heurystyki do sprawdzenia na stronie. CONDITIONAL_GO wymaga porównania przez operatora. Brak ID lub pól nie jest dowodem braku postów. Bez skanu produkcyjnego i uploadu. Ten raport zawiera tylko liczby. Ostatni poprawny wynik pozostaje zapisany lokalnie; usuwa go przycisk Kasuj bazę.")
     }
     companion object {
         fun eligible(row:DesktopRow)=row.usable&&row.intent in setOf("SELL_PROPERTY","UNKNOWN")&&(row.price!=null||row.area!=null||row.rooms!=null)

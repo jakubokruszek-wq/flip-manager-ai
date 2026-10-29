@@ -18,7 +18,7 @@ data class OcrSummary(val reason:String,val selected:Int,val images:Int,val text
    if(it.batchSessions>0)appendLine("Sesje robocze otwarte ${it.batchSessions} • zamknięte ${it.batchSessionsClosed}.")
    append(ReviewEvidence.report(it.evidence))
   }
-  append("\n\nPola OCR są heurystyczne, oddzielone od danych tekstowych i DO SPRAWDZENIA (także cena za m² i cena wyliczona). Brak odczytu nie dowodzi braku danych. Obrazy i wyniki tylko w RAM; pauza je usuwa. Bez uploadu, skanu i kolektora.")
+  append("\n\nPola OCR są heurystyczne, oddzielone od danych tekstowych i DO SPRAWDZENIA (także cena za m² i cena wyliczona). Brak odczytu nie dowodzi braku danych. Obrazy i wyniki zapisane lokalnie; usuwa je przycisk Kasuj bazę. Bez uploadu, skanu i kolektora.")
  }
 
  companion object{fun decode(raw:String?):OcrSummary?=runCatching{

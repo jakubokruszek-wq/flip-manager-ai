@@ -20,8 +20,8 @@ import android.graphics.Bitmap
 import java.text.NumberFormat
 import java.util.Locale
 
-/** Cards are RAM-only. Erase text and listeners even from detached views held by old callbacks. */
-class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private val onReport:()->Unit,private val onEnrich:(()->Unit)?=null,private val onOcr:(()->Unit)?=null,private val ocrAvailable:(String)->Boolean={false},private val ocrResult:(String)->DesktopRow?={null}):ScrollView(context){
+/** Erase detached view callbacks; the private archive is managed separately from live browser state. */
+class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private val onReport:()->Unit,private val onEnrich:(()->Unit)?=null,private val onOcr:(()->Unit)?=null,private val ocrAvailable:(String)->Boolean={false},private val ocrResult:(String)->DesktopRow?={null},private val onDelete:(()->Unit)?=null):ScrollView(context){
     private var filter=OfferFilter()
     private var filterDialog:AlertDialog?=null
     private val content=LinearLayout(context).apply{orientation=LinearLayout.VERTICAL;isSaveEnabled=false}
@@ -33,7 +33,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
         if(view is ViewGroup)for(i in 0 until view.childCount)erase(view.getChildAt(i))
     }
     private fun numberFormat(value:Number?)=value?.let{NumberFormat.getNumberInstance(Locale.forLanguageTag("pl-PL")).apply{maximumFractionDigits=2}.format(it)}?:"—"
-    fun showRows(rows:List<DesktopRow>,notice:String?=null,thumbnails:(String)->List<Bitmap> = {emptyList()}){
+    fun showRows(rows:List<DesktopRow>,notice:String?=null,thumbnails:(String)->List<Bitmap> = {emptyList()},archived:Boolean=false){
         filterDialog?.dismiss();filterDialog=null
         if(rows.isEmpty())filter=OfferFilter()
         erase(content);content.removeAllViews()
@@ -45,20 +45,20 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
         content.addView(label("Oferty (${offers.size})",22f).apply{setTypeface(null,Typeface.BOLD)})
         content.addView(Button(context).apply{
             tag="poc.offers.filters";text="Filtry: ${visible.size}/${rows.size} postów • ${filter.section.label}";isAllCaps=false;isSaveEnabled=false
-            setOnClickListener{showFilters{showRows(rows,notice,thumbnails)}}
+            setOnClickListener{showFilters{showRows(rows,notice,thumbnails,archived)}}
         })
         if(filter!=OfferFilter())content.addView(Button(context).apply{
             text="Wyczyść filtry";isAllCaps=false;isSaveEnabled=false
-            setOnClickListener{filter=OfferFilter();showRows(rows,notice,thumbnails)}
+            setOnClickListener{filter=OfferFilter();showRows(rows,notice,thumbnails,archived)}
         })
         content.addView(label("Filtry zmieniają tylko widok. Uzupełnianie i OCR obejmują całą zachowaną listę. Sugestie OCR nie są używane do filtrowania.",13f))
         if(visible.isEmpty()&&rows.isNotEmpty())content.addView(label("Żaden post nie pasuje do filtrów. Zmień lub wyczyść filtry; zachowane posty nie zostały usunięte."))
         val reviewCount=rows.count{DesktopPresentation.reviewable(it)}
-        if(onEnrich!=null&&reviewCount>0)content.addView(Button(context).apply{
+        if(!archived&&onEnrich!=null&&reviewCount>0)content.addView(Button(context).apply{
             tag="poc.review.enrich";text="Uzupełnij do ręcznego sprawdzenia ($reviewCount)";isAllCaps=false;isSaveEnabled=false;setOnClickListener{onEnrich.invoke()}
         })
         if(reviewCount>0)content.addView(label("Do sprawdzenia — obraz do OCR: ${rows.count{DesktopPresentation.reviewable(it)&&ocrAvailable(it.postId)}}/$reviewCount. Brak obrazu oznacza brak przechwycenia, nie brak danych.",14f))
-        if(onOcr!=null&&(reviewCount>0||rows.any{DesktopSummary.eligible(it)&&ocrAvailable(it.postId)}))content.addView(Button(context).apply{
+        if(!archived&&onOcr!=null&&(reviewCount>0||rows.any{DesktopSummary.eligible(it)&&ocrAvailable(it.postId)}))content.addView(Button(context).apply{
             tag="poc.ocr.start";text=if(reviewCount>0)"OCR + uzupełnij brakujące dane" else "Odczytaj dane ze zdjęć (OCR)";isAllCaps=false;isSaveEnabled=false;setOnClickListener{onOcr.invoke()}
         })
         fun addOcr(parent:LinearLayout,id:String){ocrResult(id)?.let{r->
@@ -67,9 +67,9 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
             parent.addView(label(listOfNotNull(r.district,r.neighborhood,r.street).joinToString(" / ").ifEmpty{"Lokalizacja OCR: —"},14f))
             parent.addView(label("Heurystyki; porównaj ze zdjęciem. ${DesktopPresentation.explanation(r)}",13f))
         }}
-        if(notice!=null&&offers.isNotEmpty())content.addView(label(notice,14f))
-        content.addView(label("Kandydaci do porównania z postem. Lista tylko w pamięci; opuszczenie aplikacji usuwa szczegóły.",14f))
-        if(offers.isEmpty())content.addView(label(notice?:if(rows.any{DesktopPresentation.reviewable(it)})"Brak automatycznie rozpoznanych ofert. Posty do ręcznego sprawdzenia znajdują się poniżej." else "Brak ofert w pamięci. Uruchom nową próbę komputerową z nową zgodą. Zapisany raport zawiera tylko liczby."))
+        if(notice!=null)content.addView(label(notice,14f))
+        content.addView(label("Kandydaci do porównania z postem. Wynik jest zapisywany lokalnie; opuszczenie aplikacji nie kasuje bazy.",14f))
+        if(offers.isEmpty())content.addView(label(notice?:if(rows.any{DesktopPresentation.reviewable(it)})"Brak automatycznie rozpoznanych ofert. Posty do ręcznego sprawdzenia znajdują się poniżej." else "Brak zachowanych ofert. Uruchom nowe wyszukiwanie z nową zgodą."))
         val format=NumberFormat.getNumberInstance(Locale.forLanguageTag("pl-PL")).apply{maximumFractionDigits=2}
         fun number(n:Number?)=n?.let{format.format(it)}?:"—"
         for((i,row) in offers.withIndex()){
@@ -108,7 +108,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
         val review=visible.filter{DesktopPresentation.reviewable(it)}
         if(review.isNotEmpty()){
             content.addView(label("Do ręcznego sprawdzenia (${review.size})",22f).apply{tag="poc.offers.review"})
-            content.addView(label("Te posty mają dokładny link, ale nie zostały rozpoznane jako oferty. Napisy na grafikach mogą być niedostępne jako tekst. OCR wymaga osobnej zgody i dostępnego wycinka zdjęcia w RAM; jego wyniki są oznaczone do sprawdzenia.",14f))
+            content.addView(label("Te posty mają dokładny link, ale nie zostały rozpoznane jako oferty. Napisy na grafikach mogą być niedostępne jako tekst. Nowy OCR wymaga zgody i dostępnego wycinka zdjęcia; jego wyniki są oznaczone do sprawdzenia.",14f))
             for(row in review){
                 addOcr(content,row.postId)
                 content.addView(label(DesktopPresentation.explanation(row),14f))
@@ -137,8 +137,11 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
             content.addView(label("Poza filtrem (${excluded.size})",18f))
             for((reason,items) in excluded.groupBy{DesktopPresentation.explanation(it)})content.addView(label("${items.size} × $reason",13f))
         }
-        content.addView(label("Posty do sprawdzenia otwierają się w karcie Facebook tej aplikacji. Pozostałe linki otwierają Facebooka lub przeglądarkę. Opuszczenie podglądu czyści dane; bez skanu i uploadu.",13f))
+        content.addView(label("Zapisane linki otwierają Facebooka lub przeglądarkę. Wynik pozostaje w lokalnej bazie; bez uploadu. Nowy odczyt strony wymaga aktywnej sesji i nowej zgody.",13f))
         content.addView(Button(context).apply{tag="poc.offers.report";text="Raport i powody pozostałych postów";isAllCaps=false;isSaveEnabled=false;setOnClickListener{onReport()}})
+        if(onDelete!=null)content.addView(Button(context).apply{
+            tag="poc.offers.delete";text="Kasuj bazę";isAllCaps=false;setOnClickListener{onDelete.invoke()}
+        })
         scrollTo(0,0)
     }
     private fun showFilters(refresh:()->Unit){
