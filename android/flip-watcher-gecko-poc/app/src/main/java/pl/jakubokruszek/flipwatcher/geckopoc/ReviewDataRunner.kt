@@ -17,9 +17,9 @@ object ReviewDataRunner{
     suspend fun run(view:GeckoView,original:GeckoSession,rows:List<DesktopRow>,consent:Boolean,alive:()->Boolean,progress:(Int,Int)->Unit={_,_->},restoreActive:()->Boolean=alive,fixtureOrigin:String?=null,observe:(String)->Unit={},snapshot:(ReviewDataSummary)->Unit={},originalChannel:CollectorChannel?=null,onBoundPost:suspend(CollectorChannel,DesktopRow,String,()->Boolean)->Unit={_,_,_,_->}):Outcome=withContext(Dispatchers.Main){
         val fixture=fixtureOrigin!=null;val group=if(fixture)FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID
         val queue=ReviewDataGate.queue(rows,group);var opened=0;var bound=0;var text=0;var enriched=0;var unchanged=0;var unresolved=0;var filtered=0;var unboundStreak=0;var evidence:Map<String,Int> = emptyMap()
-        var batchSessions=0;var batchSessionsClosed=0
+        var batchSessions=0;var batchSessionsClosed=0;var restorePermitted=false
         fun summary(reason:String)=ReviewDataSummary(reason,queue.size,opened,bound,text,enriched,unchanged,unresolved,filtered,evidence,batchSessions,batchSessionsClosed)
-        fun outcome(reason:String,result:List<DesktopRow> = emptyList()):Outcome{observe("END_"+reason);val value=summary(reason);snapshot(value);return Outcome(value,result)}
+        fun outcome(reason:String,result:List<DesktopRow> = emptyList()):Outcome{restorePermitted=reason in setOf("DONE","NO_OWN_POST");observe("END_"+reason);val value=summary(reason);snapshot(value);return Outcome(value,result)}
         if(!consent||queue.isEmpty()||rows.size>20||rows.map{it.postId}.distinct().size!=rows.size||view.session!==original||!alive())return@withContext outcome("NO_CONSENT_OR_INPUT")
         val gate=ReviewDataGate(group,fixture){android.os.SystemClock.elapsedRealtime()}
         val settings=GeckoSessionSettings.Builder().userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP).viewportMode(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP).build()
@@ -132,8 +132,8 @@ object ReviewDataRunner{
                 // A newer unrelated session must never be replaced by cleanup.
                 if(lastWorker!=null&&view.session===lastWorker)view.releaseSession()
                 if(view.session==null&&restoreActive())view.setSession(original)
-                val resume=view.session===original&&restoreActive()
-                original.setActive(resume);if(resume){original.setFocused(true);view.requestFocus()}
+                val resume=restorePermitted&&view.session===original&&restoreActive()
+                runCatching{original.setActive(resume)};if(resume){original.setFocused(true);view.requestFocus()}
                 parking?.restore{resume&&restoreActive()}
                 if(resume&&parking!=null)observe("ORIGINAL_RESTORED")
             }

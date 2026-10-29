@@ -69,7 +69,7 @@ class ReviewDataInstrumentedTest{
        else->{assertNotEquals("DONE",result.summary.reason);assertTrue(result.rows.isEmpty())}
       }
      }
-     assertSame(original,host!!.geckoView.session);if(mode=="images"){assertEquals(GeckoSessionSettings.USER_AGENT_MODE_MOBILE,original.settings.userAgentMode);assertEquals(GeckoSessionSettings.VIEWPORT_MODE_MOBILE,original.settings.viewportMode)};assertEquals("/groups/$FIXTURE_GROUP_ID/",channel.probe()!!.path)
+     assertSame(original,host!!.geckoView.session);if(mode=="images"){assertEquals(GeckoSessionSettings.USER_AGENT_MODE_MOBILE,original.settings.userAgentMode);assertEquals(GeckoSessionSettings.VIEWPORT_MODE_MOBILE,original.settings.viewportMode)};if(mode in setOf("normal","images","batches","staleloaderror","consent"))assertEquals("/groups/$FIXTURE_GROUP_ID/",channel.probe()!!.path) else assertFalse("An unsafe stop or cancellation must not reload the group",channel.isConnected)
     }finally{channel.close();runCatching{host!!.geckoView.releaseSession()};original.close();server.close()}
    }}}
   }
