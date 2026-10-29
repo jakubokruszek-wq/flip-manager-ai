@@ -215,3 +215,42 @@ jobs:
             android/flip-watcher-gecko-poc/logcat-tests.txt
           if-no-files-found: ignore
           retention-days: 14
+
+  publish-tested-0562:
+    name: Direct download of tested 0.5.62 APK
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/claude/facebook-watcher-mobile-gq36l8' && github.event.head_commit.message == 'delivery: publish tested Gecko POC 0.5.62 download'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Require the exact tested source and both successful full runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/40947464720 --jq '.head_sha + " " + .conclusion' > verified-pr.txt
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/40947456260 --jq '.head_sha + " " + .conclusion' > verified-push.txt
+          grep -Fxq '8ad1bf156e53352c32e09d48ac2d7ea8474e6fd7 success' verified-pr.txt
+          grep -Fxq '8ad1bf156e53352c32e09d48ac2d7ea8474e6fd7 success' verified-push.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: flip-watcher-gecko-poc-arm64-476
+          repository: jakubokruszek-wq/flip-manager-ai
+          run-id: 40947464720
+          github-token: ${{ github.token }}
+          path: tested-apk
+      - name: Verify and publish the existing APK without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mv tested-apk/app-arm64-v8a-debug.apk flip-watcher-0.5.62-arm64.apk
+          echo '25be1bef02ce6952ff82f064298de55112c973fec0c0802d81d39efce8b997d6  flip-watcher-0.5.62-arm64.apk' | sha256sum -c -
+          cat > release-notes.md <<'NOTES'
+          Tested Gecko POC 0.5.62, ARM64. This is the unchanged APK from successful run 40947464720, source 8ad1bf156e53352c32e09d48ac2d7ea8474e6fd7.
+          Validation: 567 JavaScript tests, 286 JVM tests, 114 Android tests in both full runs; 10 offline OCR tests. Android tests use local emulator fixtures, not a real Facebook account.
+          Install as an update to preserve the local database and login.
+          SHA256: 25be1bef02ce6952ff82f064298de55112c973fec0c0802d81d39efce8b997d6
+          NOTES
+          gh release create gecko-poc-0.5.62 flip-watcher-0.5.62-arm64.apk --repo jakubokruszek-wq/flip-manager-ai --target 8ad1bf156e53352c32e09d48ac2d7ea8474e6fd7 --title 'Gecko POC 0.5.62 — tested Android APK' --prerelease --notes-file release-notes.md
