@@ -80,9 +80,18 @@
       appPort = null;reconnectApp();
       return;
     }
+    let confirmed=false;
+    const watchdog=scope.setTimeout(()=>{
+      if(appPort!==current||confirmed)return;
+      // connectNative may silently wait forever when no native delegate existed.
+      appPort=null;try{current.disconnect();}catch{}reconnectApp();
+    },2000);
     current.onMessage.addListener(message => {
       if(appPort!==current)return;
-      reconnectAttempt=0;
+      if(message?.type==='nativeReady'||typeof message?.nonce==='string'){
+        confirmed=true;scope.clearTimeout(watchdog);reconnectAttempt=0;
+      }
+      if(message?.type==='nativeReady')return;
       if (!message || typeof message !== "object" || typeof message.nonce !== "string") return;
       const reply = value => { try { if(appPort===current)current.postMessage({ nonce: message.nonce, ...value }); } catch { /* app gone */ } };
       if (message.type === "ocrFields") {
@@ -112,6 +121,7 @@
     });
     current.onDisconnect.addListener(() => {
       if(appPort!==current)return;
+      scope.clearTimeout(watchdog);
       // App or runtime went away: drop any pending measurement.
       scope.FlipDesktopBackground?.abortAll();
       loadCounter.abort();

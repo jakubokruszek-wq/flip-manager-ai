@@ -42,6 +42,8 @@ class BackgroundChannel {
             this@BackgroundChannel.port?.let { old -> runCatching { old.disconnect() } }
             this@BackgroundChannel.port = port
             port.setDelegate(portDelegate)
+            // Ack the extension even when its first connect preceded registration.
+            runCatching { port.postMessage(JSONObject().put("type", "nativeReady")) }
             portReady.complete(Unit)
         }
 
