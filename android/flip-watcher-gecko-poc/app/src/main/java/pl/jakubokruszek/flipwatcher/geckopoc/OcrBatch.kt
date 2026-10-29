@@ -11,7 +11,7 @@ data class OcrSummary(val reason:String,val selected:Int,val images:Int,val text
   appendLine("Obrazy: $images • napisy: $texts • sugestie do sprawdzenia: $suggestions • błędy: $errors")
   (reviewFailure?:reviewCompleted)?.let{appendLine("Posty otwarte: ${it.opened}/${it.selected} • potwierdzone: ${it.bound} • uzupełnione: ${it.enriched}");if(it.reason!="DONE")appendLine("Otwieranie zatrzymane: ${it.reason}")}
   if(imageChecks.isNotEmpty())appendLine("Nowe wycinki z postów: ${imageChecks.getValue("CAPTURED")}/${imageChecks.getValue("checked")}")
-  append("Wyniki są zapisane lokalnie. Sugestie OCR wymagają porównania ze zdjęciem. Szczegółowe przyczyny: Diagnostyka.")
+  append("Zachowane dane pozostają lokalnie. Sugestie OCR wymagają porównania ze zdjęciem. Szczegółowe przyczyny: Diagnostyka.")
  }
  fun report()=buildString{
   appendLine("OCR 0.5.61 • tylko lokalnie • $reason")

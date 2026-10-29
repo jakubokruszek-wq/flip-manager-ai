@@ -11,6 +11,9 @@ object ResultArchiveJobs {
     private val worker=Executors.newSingleThreadExecutor{r->Thread(r,"saved-search").apply{isDaemon=true}}
     private val main=Handler(Looper.getMainLooper())
     private data class OwnedPhoto(val id:String,val slot:Int,val crop:Boolean,val bitmap:Bitmap)
+    suspend fun read(context:Context):Result<SavedResult?> = kotlinx.coroutines.suspendCancellableCoroutine{continuation->
+        load(context){value->if(continuation.isActive)continuation.resumeWith(Result.success(value))}
+    }
     fun load(context:Context,done:(Result<SavedResult?>)->Unit){val app=context.applicationContext
         worker.execute{val result=runCatching{ResultArchive(app).load()};main.post{done(result)}}
     }

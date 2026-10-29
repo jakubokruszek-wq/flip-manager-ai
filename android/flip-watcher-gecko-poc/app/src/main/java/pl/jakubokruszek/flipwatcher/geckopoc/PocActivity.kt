@@ -450,10 +450,17 @@ class PocActivity : ComponentActivity() {
                     read={photo->val bitmap=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){android.graphics.BitmapFactory.decodeByteArray(photo.jpeg,0,photo.jpeg.size)};if(bitmap==null)null else LocalOcr.readOwned(bitmap)},
                     project={id,texts->GeckoHost.background.ocrFields(id,texts,true)},now={android.os.SystemClock.elapsedRealtime()},
                     progress={if(live())saveOcr(it)},checkpoint={rows->if(live())saveResult(saved.rows,rows)})}
-                if(live()){saveOcr(outcome.summary);ocrBusy=false;ocrReportPending=true}
+                if(live()&&outcome.summary.reason=="DONE"&&outcome.rows.isNotEmpty()){
+                    val persisted=ResultArchiveJobs.read(this@PocActivity).getOrThrow()?:throw IllegalStateException("SAVE_FAILED")
+                    if(outcome.rows.values.any{candidate->persisted.ocr.none{it==candidate}})throw IllegalStateException("SAVE_FAILED")
+                }
+                if(live()){
+                    if(desktopRows==saved.rows){ocrResults.putAll(saved.ocr.associateBy{it.postId});ocrResults.putAll(outcome.rows);offersPanel.showRows(desktopRows,"OCR zapisanych zdjęć: ${outcome.summary.suggestions} nowych sugestii do sprawdzenia",thumbnails={desktopThumbnails.rows(it)})}
+                    saveOcr(outcome.summary);ocrBusy=false;ocrReportPending=true
+                }
             }catch(_:kotlinx.coroutines.TimeoutCancellationException){if(live()){saveOcr((ocrLast?:OcrSummary("TIMEOUT",saved.rows.size,0,0,0,0)).copy(reason="TIMEOUT"));ocrReportPending=true}}
             catch(e:kotlinx.coroutines.CancellationException){throw e}
-            catch(_:Exception){if(live()){saveOcr(OcrSummary("ERROR",saved.rows.size,0,0,0,0));ocrBusy=false;ocrReportPending=true}}
+            catch(_:Exception){if(live()){saveOcr((ocrLast?:OcrSummary("ERROR",saved.rows.size,0,0,0,0)).copy(reason="ERROR"));ocrBusy=false;ocrReportPending=true}}
             finally{if(ocrEpoch==epoch){ocrJob=null;ocrBusy=false;render();showSavedResult();showPendingOcrReport()}}
         }
     }
@@ -473,7 +480,7 @@ class PocActivity : ComponentActivity() {
         val queue=ReviewDataGate.queue(snapshot,selectedPostId=selectedPostId)
         if(queue.isEmpty())return
         if(session==null||kind!=PageKind.APPROVED_GROUP||channel?.isConnected!=true){
-            AlertDialog.Builder(this).setTitle("Odczyt zachowanych postów")
+            reviewConsentDialog=AlertDialog.Builder(this).setTitle("Odczyt zachowanych postów")
                 .setMessage("Zachowany wynik pozostaje w bazie. Najpierw otwórz sesję i zatwierdzoną grupę, następnie wybierz ponownie uzupełnianie lub sprawdzenie zdjęcia. Wyszukiwanie od początku nie jest potrzebne.")
                 .setNegativeButton("Anuluj",null).setPositiveButton(if(session==null)"Otwórz sesję" else "Otwórz grupę"){_,_->if(session==null)askConsentAndOpen() else load(PocPolicy.APPROVED_GROUP_URL,login=false)}.show();return
         }

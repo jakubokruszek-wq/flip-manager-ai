@@ -37,6 +37,12 @@ class SavedOcrTest {
   assertTrue(ReviewDataGate.queue(listOf(row(),offer),selectedPostId="999999").isEmpty())
   assertTrue(ReviewDataGate.queue(listOf(offer.copy(permalink="https://example.org/")),selectedPostId=offer.postId).isEmpty())
  }
+ @Test fun validCheckpointRemainsAvailableWhenLaterImageLosesContext()=runBlocking{
+  var live=true;var reads=0;val stored=mutableListOf<List<DesktopRow>>()
+  val source=value().copy(photos=value().photos+SavedPhoto(row().postId,1,true,byteArrayOf(1)))
+  val out=SavedOcr.run(source,true,{live},{reads++;if(reads==2)live=false;"x"},{_,_->result(row())},{0},checkpoint={stored.add(it)})
+  assertEquals("CONTEXT",out.summary.reason);assertTrue(out.rows.isEmpty());assertEquals(1,stored.size);assertEquals(260000.0,stored.single().single().price!!,0.0)
+ }
  @Test fun diagnosisRejectsRawSourceAndUnboundedCounters(){
   val details=ReviewImageChecks.detailKeys.associateWith{0};val value=PhotoDiagnosis(row().postId,"NO_IMAGE",details,emptyMap())
   assertEquals(value,PhotoDiagnosis.decode(value.encode()));assertFalse(value.encode().contains("facebook"))

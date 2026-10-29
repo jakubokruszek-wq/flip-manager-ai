@@ -27,7 +27,10 @@ class SinglePhotoInstrumentedTest {
      source.attach(GeckoHost.collectorExtension(host!!));original.open(GeckoHost.runtime(host!!));host!!.geckoView.setSession(original);original.setActive(true)
      original.loadUri(server.url("/groups/$FIXTURE_GROUP_ID/","home"));assertTrue(source.awaitPort(15000));delay(300)
      val bound=mutableListOf<String>()
-     val out=ReviewDataRunner.run(host!!.geckoView,original,listOf(row(a),row(b)),true,{true},fixtureOrigin="http://127.0.0.1:${server.port}",selectedPostId=b,onBoundPost={_,r,_,_->bound+=r.postId})
+     val out=ReviewDataRunner.run(host!!.geckoView,original,listOf(row(a),row(b)),true,{true},fixtureOrigin="http://127.0.0.1:${server.port}",selectedPostId=b,onBoundPost={channel,r,current,live->
+      bound+=r.postId;val images=DesktopThumbnails()
+      try{assertTrue(channel.reviewImages(r,current,host!!.geckoView,images,true,group=FIXTURE_GROUP_ID,alive=live));assertEquals("NO_IMAGE",channel.reviewImageOutcome);assertEquals(0,channel.reviewImageDetails.getValue("rawImg"));assertEquals(0,channel.reviewImageDetails.getValue("qualified"))}finally{images.clear()}
+     })
      assertEquals(out.summary.report(),"DONE",out.summary.reason);assertEquals(1,out.summary.opened);assertEquals(listOf(b),bound)
      assertEquals(row(a),out.rows.first{it.postId==a});assertEquals(2,out.rows.size)
     }finally{source.close();if(host!!.geckoView.session!=null)host!!.geckoView.releaseSession();original.close();server.close()}
