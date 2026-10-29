@@ -111,6 +111,14 @@ androidComponents {
                 outputDir.set(layout.buildDirectory.dir("generated/mainLabExtension"))
             }
             variant.sources.assets?.addGeneratedSourceDirectory(lab, BundleCollectorExtension::outputDir)
+            val photoLab = tasks.register<BundleCollectorExtension>("bundlePhotoLabExtension") {
+                extensionPath.set("ext/photo_lab")
+                extensionSources.set(layout.projectDirectory.dir("src/debug/photo-lab"))
+                collectorCore.set(rootProject.layout.projectDirectory.file("../../extensions/facebook-collector/collector-core.js"))
+                expectedCoreSha256.set(collectorCoreSha256)
+                outputDir.set(layout.buildDirectory.dir("generated/photoLabExtension"))
+            }
+            variant.sources.assets?.addGeneratedSourceDirectory(photoLab, BundleCollectorExtension::outputDir)
         }
     }
 }
