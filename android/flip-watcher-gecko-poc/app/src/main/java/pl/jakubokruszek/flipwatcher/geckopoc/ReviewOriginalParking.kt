@@ -12,7 +12,7 @@ internal class ReviewOriginalParking(private val session:GeckoSession,private va
     private var touched=false
     suspend fun park(alive:()->Boolean){
         check(alive()&&channel.isConnected&&channel.connectedUrl==target)
-        var blank=false;var finished=false;var foreign=false
+        var blank=false;var foreign=false
         touched=true
         session.navigationDelegate=object:GeckoSession.NavigationDelegate{
             override fun onLoadRequest(s:GeckoSession,q:GeckoSession.NavigationDelegate.LoadRequest):GeckoResult<AllowOrDeny>{
@@ -22,13 +22,19 @@ internal class ReviewOriginalParking(private val session:GeckoSession,private va
             }
             override fun onLocationChange(s:GeckoSession,u:String?,p:MutableList<GeckoSession.PermissionDelegate.ContentPermission>,gesture:Boolean){if(u=="about:blank"&&!gesture)blank=true else foreign=true}
         }
-        session.progressDelegate=object:GeckoSession.ProgressDelegate{override fun onPageStop(s:GeckoSession,success:Boolean){if(blank&&success)finished=true}}
+        session.progressDelegate=object:GeckoSession.ProgressDelegate{}
         // ContentDelegate remains installed: a genuine original engine loss still stops.
         session.setFocused(false);session.setActive(false);session.loadUri("about:blank")
         val deadline=android.os.SystemClock.elapsedRealtime()+5000
-        while(alive()&&!foreign&&(!blank||!finished||channel.isConnected)&&android.os.SystemClock.elapsedRealtime()<deadline)delay(50)
-        check(alive()&&!foreign&&blank&&finished&&!channel.isConnected){"ORIGINAL_PARK_FAILED"}
+        while(alive()&&!foreign&&!blank&&android.os.SystemClock.elapsedRealtime()<deadline)delay(50)
+        check(alive()&&!foreign&&blank){"ORIGINAL_PARK_LOCATION_FAILED"}
+        // The previous page and its port may be retained in BFCache until history
+        // is purged. Do this after exact blank navigation, before waiting for detach.
+        // about:blank need not report a network page-stop event.
         session.purgeHistory()
+        val detachDeadline=android.os.SystemClock.elapsedRealtime()+5000
+        while(alive()&&!foreign&&channel.isConnected&&android.os.SystemClock.elapsedRealtime()<detachDeadline)delay(50)
+        check(alive()&&!foreign&&!channel.isConnected){"ORIGINAL_PARK_PORT_FAILED"}
     }
     suspend fun restore(alive:()->Boolean){
         if(!touched)return
