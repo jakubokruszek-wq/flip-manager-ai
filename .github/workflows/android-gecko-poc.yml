@@ -253,4 +253,4 @@ jobs:
           Install as an update to preserve the local database and login.
           SHA256: 25be1bef02ce6952ff82f064298de55112c973fec0c0802d81d39efce8b997d6
           NOTES
-          gh release create gecko-poc-0.5.62 flip-watcher-0.5.62-arm64.apk --repo jakubokruszek-wq/flip-manager-ai --target 8ad1bf156e53352c32e09d48ac2d7ea8474e6fd7 --title 'Gecko POC 0.5.62 — tested Android APK' --prerelease --notes-file release-notes.md
+          gh release create gecko-poc-0.5.62 flip-watcher-0.5.62-arm64.apk --repo jakubokruszek-wq/flip-manager-ai --target "${{ github.sha }}" --title 'Gecko POC 0.5.62 — tested Android APK' --prerelease --notes-file release-notes.md
