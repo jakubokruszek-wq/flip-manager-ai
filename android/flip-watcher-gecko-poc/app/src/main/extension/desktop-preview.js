@@ -551,7 +551,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
       const valid=shot.network?latest?.status==='OK'&&shot.valid(latest.media):shot.valid();
       const commit=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:valid&&safe(m)?'commit':'drop',frameId:ack.requestId});
       if(invalid||!safe(m))return empty('CONTEXT');
-      if(commit?.accepted===true&&commit.count===shot.tiles.length){for(const key of shot.keys)key.done=true;model.stats.photoPreviews+=commit.count;break;}
+      if(commit?.accepted===true&&commit.count===shot.tiles.length){for(const key of shot.keys)key.done=true;model.stats.photoPreviews+=commit.count;if(attempt===0)continue;break;}
      }
      if(attempt===0){await pause(Math.min(150,Math.max(0,scrollEnd-w.performance.now())));if(invalid||!safe(m))return empty('CONTEXT');}
     }

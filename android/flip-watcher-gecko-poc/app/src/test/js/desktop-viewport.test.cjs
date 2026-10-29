@@ -82,3 +82,28 @@ test('new manual post is selected before extra images of a previously captured o
  const shot=rawPhotos(h.w,core,group,nodes,slots,new Set([offer,manual]),[],null,null,new Set([manual]));
  assert.deepEqual(shot.tiles.map(t=>t.postId),[manual]);assert(shot.valid());
 });
+
+test('new-post priority does not permanently suppress additional own photos',()=>{
+ const h=env(),id='550000000000091',slots=new Map();
+ const second={...h.image,currentSrc:'https://scontent.fbcdn.net/b.jpg',getBoundingClientRect:()=>({left:330,top:100,right:630,bottom:260,width:300,height:160})};
+ h.w.document.elementFromPoint=x=>x<320?h.image:second;
+ const nodes=()=>[h.image,second].map((node,i)=>({node,item:{mediaId:'88000000000000'+i}}));
+ const args=[h.w,core,group,nodes,slots,new Set([id]),[],null,null,new Set([id])];
+ const first=v.photos(...args);assert.equal(first.tiles.length,1);assert(first.valid());first.keys.forEach(k=>k.done=true);
+ const extra=v.photos(...args);assert(extra);assert.equal(extra.tiles.length,1);assert.equal(extra.tiles[0].slot,1);assert(extra.valid());extra.keys.forEach(k=>k.done=true);
+ assert.equal(v.photos(...args),null);
+});
+test('an uncaptured post still precedes extra crops of an already captured post',()=>{
+ const h=env(),id='550000000000091',nextId='550000000000092',slots=new Map(),allowed=new Set([id,nextId]);
+ const second={...h.image,currentSrc:'https://scontent.fbcdn.net/b.jpg',getBoundingClientRect:()=>({left:330,top:100,right:630,bottom:260,width:300,height:160})};
+ const next={...h.image,currentSrc:'https://scontent.fbcdn.net/c.jpg',getBoundingClientRect:()=>({left:10,top:330,right:310,bottom:490,width:300,height:160})};
+ const card={ownerDocument:h.w.document,isConnected:true,parentElement:null,closest:()=>null};
+ const link={href:`https://www.facebook.com/groups/${group}/posts/${nextId}/`,closest:()=>card};card.querySelectorAll=()=>[link];
+ const nodes=c=>(c===card?[next]:[h.image,second]).map((node,i)=>({node,item:{mediaId:c===card?'880000000000003':'88000000000000'+i}}));
+ h.w.document.elementFromPoint=(x,y)=>y>300?next:x<320?h.image:second;
+ let first=v.photos(h.w,core,group,nodes,slots,allowed,[],null,null,new Set([id,nextId]));first.keys.forEach(k=>k.done=true);
+ h.w.document.querySelectorAll=()=>[h.card,card];
+ const fresh=v.photos(h.w,core,group,nodes,slots,allowed,[],null,null,new Set([id,nextId]));
+ assert.deepEqual(fresh.tiles.map(t=>t.postId),[nextId]);assert(fresh.valid());fresh.keys.forEach(k=>k.done=true);
+ const extra=v.photos(h.w,core,group,nodes,slots,allowed,[],null,null,new Set([id,nextId]));assert.deepEqual(extra.tiles.map(t=>t.postId),[id]);assert.equal(extra.tiles[0].slot,1);
+});

@@ -215,7 +215,7 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null,
    if(preferredIds)break;
   }
  }
- return tiles.length?result():null;
+ return tiles.length?result():preferredIds?photos(w,core,group,photoNodes,slots,allowedIds,bindings,audit,helpers,null):null;
 }
 const api={transport,cards,point,trace,photos};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopViewport=api;
 })(typeof globalThis!=='undefined'?globalThis:this);
