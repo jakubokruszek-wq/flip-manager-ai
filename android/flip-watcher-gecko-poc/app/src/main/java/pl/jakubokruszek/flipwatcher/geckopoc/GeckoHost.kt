@@ -2,6 +2,8 @@ package pl.jakubokruszek.flipwatcher.geckopoc
 
 import android.content.Context
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoRuntimeSettings
@@ -17,6 +19,7 @@ import kotlin.coroutines.resumeWithException
 object GeckoHost {
     @Volatile private var runtime: GeckoRuntime? = null
     @Volatile private var extension: WebExtension? = null
+    private val extensionLock = Mutex()
     /** Port to the extension's background script (page-load measurement). */
     val background = BackgroundChannel()
 
@@ -33,15 +36,20 @@ object GeckoHost {
         ).also { runtime = it }
     }
 
-    /** Installs the bundled extension once (it persists across app starts) and returns it. */
-    suspend fun collectorExtension(context: Context): WebExtension {
-        extension?.let { return it }
+    /**
+     * Activate once per process, including saved OCR with no browser session.
+     * ensureBuiltIn can retain an APP_STARTUP background deferred until a browser
+     * window opens. installBuiltIn starts it immediately without clearing the
+     * browser profile, cookies or the native result archive.
+     */
+    suspend fun collectorExtension(context: Context): WebExtension = extensionLock.withLock {
+        extension?.let { return@withLock it }
         val installed = runtime(context).webExtensionController
-            .ensureBuiltIn(PocPolicy.EXTENSION_LOCATION, PocPolicy.EXTENSION_ID)
+            .installBuiltIn(PocPolicy.EXTENSION_LOCATION)
             .await() ?: error("Rozszerzenie nie zostało zainstalowane")
         extension = installed
         background.attach(installed)
-        return installed
+        installed
     }
 }
 
