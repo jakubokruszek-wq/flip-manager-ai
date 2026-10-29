@@ -158,7 +158,7 @@ jobs:
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ArchiveProcessInstrumentedTest#b_restore || (adb logcat -d -s AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             adb -e shell svc wifi disable
             adb -e shell svc data disable
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.OcrInstrumentedTest -Pandroid.testInstrumentationRunnerArguments.offlineOcr=1 || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.OcrInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SavedOcrInstrumentedTest -Pandroid.testInstrumentationRunnerArguments.offlineOcr=1 || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             adb logcat -d -s GeckoPocTest:I > logcat-offline-tests.txt || true
 
       - name: Upload offline OCR reports

@@ -2,12 +2,13 @@
 (function(root){'use strict';
 const excluded='[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],[data-testid*="shared"],[data-ad-rendering-role*="shared"],blockquote,form,input,textarea,[contenteditable="true"],video';
 function create(){const used=new Set();return {async read(w,m,core,preview,exact,request){
- const result=(status,count=0,reason=status==='STOP'?'CONTEXT':count===1?'CAPTURED':'NO_IMAGE')=>{const filters=root.FlipReviewPost.ownPhotoFilters(w,m);return{status,count,reason,...(filters?{filters}:{})};};
+ const details={rawImg:0,rawSvg:0,rawCss:0,sourceProof:0,ownerAccepted:0,ownerRejected:0,sizeRejected:0,qualified:0};
+ const result=(status,count=0,reason=status==='STOP'?'CONTEXT':count===1?'CAPTURED':'NO_IMAGE')=>{const filters=root.FlipReviewPost.ownPhotoFilters(w,m);return{status,count,reason,details:{...details},...(filters?{filters}:{})};};
  const safe=()=>m.consent===true&&m.ocrConsent===true&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(m.nonce||'')&&w.location.href===m.expectedUrl&&exact(w.location.href,m.groupId,m.postId,m.fixture===true)&&['interactive','complete'].includes(w.document.readyState)&&w.document.visibilityState==='visible'&&!w.document.hidden&&w.document.hasFocus?.()===true&&!/log in|logowanie|captcha|checkpoint|security check/i.test(w.document.title||'')&&!w.document.querySelector('input[type="password"],form[action*="login"],form[action*="checkpoint"],iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="captcha"],[role="alertdialog"]');
  if(!safe()||used.has(m.nonce))return result('STOP');used.add(m.nonce);while(used.size>32)used.delete(used.values().next().value);
  const cards=root.FlipReviewPost.cards(w,m,core,preview);
  if(cards.length>1)return result('OK',0,'AMBIGUOUS');const card=cards[0]||null;let region=card;
- const sources=()=>root.FlipReviewPost.ownPhotoSources(w,m);
+ const sources=()=>root.FlipReviewPost.ownPhotoSources(w,m);details.sourceProof=Math.min(20,sources().length);
  // IMG, single-image SVG and leaf CSS share the same rendered crop path.
  // Non-IMG candidates additionally require exact structured-photo source proof
  // and an already completed page resource; never request another image resource.
@@ -33,18 +34,18 @@ function create(){const used=new Set();return {async read(w,m,core,preview,exact
  const own=n=>safe()&&topology(n)&&n.ownerDocument===w.document&&n.isConnected!==false&&!n.closest(excluded)&&n.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})!==false&&(
   card&&card.isConnected!==false&&root.FlipReviewPost.cards(w,m,core,preview).includes(card)&&(n.closest('[role="article"],article')===card||region!==card&&!n.closest('[role="article"],article'))&&region.contains(n)||proofOwn(n));
  const scope=region||w.document,limit=region?100:500;
- const pool=Array.from(scope.querySelectorAll('img')).slice(0,limit);
+ const pool=Array.from(scope.querySelectorAll('img')).slice(0,limit);details.rawImg=pool.length;
  for(const n of Array.from(scope.querySelectorAll('svg image')).slice(0,100)){
-  const svg=preview.photoSvgRoot(n);if(!svg||rendered.has(svg))continue;
+  details.rawSvg++;const svg=preview.photoSvgRoot(n);if(!svg||rendered.has(svg))continue;
   const info={source:()=>preview.photoAnchorHref(n)||'',valid:()=>n.isConnected!==false&&n.ownerDocument===w.document&&preview.photoSvgRoot(n)===svg&&!n.closest(excluded)&&sources().includes(preview.photoAnchorHref(n))};
   rendered.set(svg,info);if(info.valid())pool.push(svg);
  }
  for(const n of Array.from(scope.querySelectorAll('[style*="background"],[role="img"]')).slice(0,100)){
-  if(pool.includes(n)||rendered.has(n))continue;
+  details.rawCss++;if(pool.includes(n)||rendered.has(n))continue;
   const info={source:()=>preview.cssPhotoSource(n)||'',valid:()=>sources().includes(preview.cssPhotoSource(n))};
   rendered.set(n,info);if(info.valid())pool.push(n);
  }
- const images=pool.filter(n=>own(n)).filter(n=>{const r=n.getBoundingClientRect();return r.width>=120&&r.height>=100;});
+ const images=pool.filter(n=>{const accepted=!!own(n);details[accepted?"ownerAccepted":"ownerRejected"]++;return accepted;}).filter(n=>{const r=n.getBoundingClientRect();const accepted=r.width>=120&&r.height>=100;if(!accepted)details.sizeRejected++;return accepted;});details.qualified=images.length;
  // Reused own photo in multiple unbound cards is ambiguous; never choose the first card.
  if(!images.length)return result('OK',0,'NO_IMAGE');
  if(!card&&new Set(images.map(n=>n.closest('[role="article"],article'))).size!==1)return result('OK',0,'AMBIGUOUS');

@@ -46,7 +46,7 @@ class ReviewDataGate(private val group:String,private val fixture:Boolean=false,
             ((u.scheme=="https"&&u.port==-1&&u.host?.lowercase() in setOf("facebook.com","www.facebook.com","m.facebook.com"))||(fixture&&u.scheme=="http"&&u.host=="127.0.0.1"&&u.port in 1..65535))&&
             u.rawPath in setOf("/groups/$group/posts/$id","/groups/$group/posts/$id/","/groups/$group/permalink/$id","/groups/$group/permalink/$id/")
         }.getOrDefault(false)
-        fun queue(rows:List<DesktopRow>,group:String=PocPolicy.APPROVED_GROUP_ID)=rows.take(20).filter{DesktopPresentation.reviewable(it)&&it.permalink=="https://www.facebook.com/groups/$group/posts/${it.postId}/"&&matches(it.permalink,group,it.postId)}.distinctBy{it.postId}.sortedWith(compareBy<DesktopRow>{if(it.qualification=="NO_TEXT")0 else 1}.thenBy{ReviewDataSummary.fields(it)})
+        fun queue(rows:List<DesktopRow>,group:String=PocPolicy.APPROVED_GROUP_ID,selectedPostId:String?=null)=rows.take(20).filter{(if(selectedPostId==null)DesktopPresentation.reviewable(it) else it.postId==selectedPostId&&(DesktopPresentation.reviewable(it)||DesktopSummary.eligible(it)))&&it.permalink=="https://www.facebook.com/groups/$group/posts/${it.postId}/"&&matches(it.permalink,group,it.postId)}.distinctBy{it.postId}.sortedWith(compareBy<DesktopRow>{if(it.qualification=="NO_TEXT")0 else 1}.thenBy{ReviewDataSummary.fields(it)})
     }
 }
 
@@ -112,7 +112,7 @@ data class ReviewDataSummary(val reason:String,val selected:Int,val opened:Int,v
         "ERROR"->"Zatrzymano: nieoczekiwany błąd aplikacji."
         else->"Próba nie ma potwierdzonego zakończenia."
     }
-    fun report()="UZUPEŁNIANIE 0.5.60 • tylko lokalnie • $reason\n${explanation()}${if(reason!="DONE"&&reason!="NO_OWN_POST") " Aktywny odczyt zatrzymano; ostatni zapisany wynik pozostaje w bazie; nie oznacza to znalezienia zera ofert." else ""}\nWybrano $selected • otwarto $opened • potwierdzono w DOM/danych strony $bound • odczytano tekst $textRead\nUzupełniono $enriched • bez nowych pól $unchanged • brak potwierdzonego odczytu $unresolved • poza filtrem $filtered${if(batchSessions>0) "\nSesje robocze otwarte $batchSessions • zamknięte $batchSessionsClosed." else ""}\nBrak odczytu nie dowodzi braku danych w poście. Tylko dokładne ID tej grupy; pola heurystyczne. Bez odczytu odpowiedzi sieciowych, uploadu i kolektora. OCR wymaga osobnej zgody i ma osobny raport. Pauza zatrzymuje odczyt; zachowany wynik pozostaje w lokalnej bazie."+ReviewEvidence.report(evidence)
+    fun report()="UZUPEŁNIANIE 0.5.61 • tylko lokalnie • $reason\n${explanation()}${if(reason!="DONE"&&reason!="NO_OWN_POST") " Aktywny odczyt zatrzymano; ostatni zapisany wynik pozostaje w bazie; nie oznacza to znalezienia zera ofert." else ""}\nWybrano $selected • otwarto $opened • potwierdzono w DOM/danych strony $bound • odczytano tekst $textRead\nUzupełniono $enriched • bez nowych pól $unchanged • brak potwierdzonego odczytu $unresolved • poza filtrem $filtered${if(batchSessions>0) "\nSesje robocze otwarte $batchSessions • zamknięte $batchSessionsClosed." else ""}\nBrak odczytu nie dowodzi braku danych w poście. Tylko dokładne ID tej grupy; pola heurystyczne. Bez odczytu odpowiedzi sieciowych, uploadu i kolektora. OCR wymaga osobnej zgody i ma osobny raport. Pauza zatrzymuje odczyt; zachowany wynik pozostaje w lokalnej bazie."+ReviewEvidence.report(evidence)
     companion object{
         fun decode(raw:String?):ReviewDataSummary?=runCatching{
             if(raw==null||raw.length>4096)return null

@@ -6,8 +6,15 @@ import org.json.JSONObject
 /** No business fields in persistent summary. OCR candidates never replace accepted DOM fields. */
 data class OcrSummary(val reason:String,val selected:Int,val images:Int,val texts:Int,val suggestions:Int,val errors:Int,val reviewFailure:ReviewDataSummary?=null,val reviewCompleted:ReviewDataSummary?=null,val imageChecks:Map<String,Int> = emptyMap()){
  fun encode()=JSONObject().put("reason",reason).put("selected",selected).put("images",images).put("texts",texts).put("suggestions",suggestions).put("errors",errors).apply{reviewFailure?.let{put("reviewFailure",JSONObject(it.encode()))};reviewCompleted?.let{put("reviewCompleted",JSONObject(it.encode()))};if(imageChecks.isNotEmpty())put("imageChecks",JSONObject(imageChecks))}.toString()
+ fun brief()=buildString{
+  appendLine("OCR: $reason")
+  appendLine("Obrazy: $images • napisy: $texts • sugestie do sprawdzenia: $suggestions • błędy: $errors")
+  (reviewFailure?:reviewCompleted)?.let{appendLine("Posty otwarte: ${it.opened}/${it.selected} • potwierdzone: ${it.bound} • uzupełnione: ${it.enriched}");if(it.reason!="DONE")appendLine("Otwieranie zatrzymane: ${it.reason}")}
+  if(imageChecks.isNotEmpty())appendLine("Nowe wycinki z postów: ${imageChecks.getValue("CAPTURED")}/${imageChecks.getValue("checked")}")
+  append("Wyniki są zapisane lokalnie. Sugestie OCR wymagają porównania ze zdjęciem. Szczegółowe przyczyny: Diagnostyka.")
+ }
  fun report()=buildString{
-  appendLine("OCR 0.5.60 • tylko lokalnie • $reason")
+  appendLine("OCR 0.5.61 • tylko lokalnie • $reason")
   appendLine("Posty wybrane: $selected • obrazy: $images • odczytane napisy: $texts • wyniki do sprawdzenia: $suggestions • błędy: $errors")
   if(imageChecks.isNotEmpty())appendLine(ReviewImageChecks.report(imageChecks))
   if(reason=="PARTIAL")appendLine("OCR obrazów z pamięci ukończony; etap otwierania pozostałych postów zatrzymany. Wynik częściowy.")
@@ -51,7 +58,7 @@ object OcrBatch{
  data class Outcome(val summary:OcrSummary,val rows:Map<String,DesktopRow>)
  suspend fun run(rows:List<DesktopRow>,consent:Boolean,available:(String)->Int,alive:()->Boolean,
                  read:suspend(String,Int)->String?,project:suspend(String,List<String>)->DesktopRow?,
-                 now:()->Long,snapshot:(OcrSummary)->Unit={}):Outcome{
+                 now:()->Long,snapshot:(OcrSummary)->Unit={},checkpoint:(Map<String,DesktopRow>)->Unit={}):Outcome{
   var images=0;var texts=0;var errors=0;val result=linkedMapOf<String,DesktopRow>()
   val valid=rows.size<=20&&rows.map{it.postId}.distinct().size==rows.size&&rows.all{ReviewDataGate.matches(it.permalink,PocPolicy.APPROVED_GROUP_ID,it.postId)}
   val queue=if(valid)rows.filter{(DesktopPresentation.reviewable(it)||DesktopSummary.eligible(it))&&available(it.postId) in 1..3}.sortedBy{if(DesktopPresentation.reviewable(it))0 else 1}else emptyList()
@@ -77,7 +84,7 @@ object OcrBatch{
     val parsed=project(row.postId,recognized)?:return done("PROTOCOL")
     if(!alive())return done("CONTEXT")
     if(parsed.postId!=row.postId||parsed.permalink!=row.permalink)return done("PROTOCOL")
-    result[row.postId]=parsed
+    result[row.postId]=parsed;checkpoint(result.toMap())
    }
    snapshot(summary("INTERRUPTED"));if(images>=20)break
   }

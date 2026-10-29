@@ -21,7 +21,7 @@ import java.text.NumberFormat
 import java.util.Locale
 
 /** Erase detached view callbacks; the private archive is managed separately from live browser state. */
-class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private val onReport:()->Unit,private val onEnrich:(()->Unit)?=null,private val onOcr:(()->Unit)?=null,private val ocrAvailable:(String)->Boolean={false},private val ocrResult:(String)->DesktopRow?={null},private val onDelete:(()->Unit)?=null):ScrollView(context){
+class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private val onReport:()->Unit,private val onEnrich:(()->Unit)?=null,private val onOcr:(()->Unit)?=null,private val ocrAvailable:(String)->Boolean={false},private val ocrResult:(String)->DesktopRow?={null},private val onDelete:(()->Unit)?=null,private val onSavedOcr:(()->Unit)?=null,private val savedCrops:()->Int={0},private val onInspect:((DesktopRow)->Unit)?=null):ScrollView(context){
     private var filter=OfferFilter()
     private var filterDialog:AlertDialog?=null
     private val content=LinearLayout(context).apply{orientation=LinearLayout.VERTICAL;isSaveEnabled=false}
@@ -53,8 +53,16 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
         })
         content.addView(label("Filtry zmieniają tylko widok. Uzupełnianie i OCR obejmują całą zachowaną listę. Sugestie OCR nie są używane do filtrowania.",13f))
         if(visible.isEmpty()&&rows.isNotEmpty())content.addView(label("Żaden post nie pasuje do filtrów. Zmień lub wyczyść filtry; zachowane posty nie zostały usunięte."))
+        if(onSavedOcr!=null)content.addView(Button(context).apply{
+            tag="poc.saved.ocr";text="OCR zapisanych zdjęć (${savedCrops()})";isAllCaps=false;isEnabled=savedCrops()>0
+            setOnClickListener{onSavedOcr.invoke()}
+        })
+        fun inspect(parent:LinearLayout,row:DesktopRow){if(onInspect!=null)parent.addView(Button(context).apply{
+            tag="poc.photo.inspect.${row.postId}";text="Sprawdź zdjęcie tego posta";isAllCaps=false
+            setOnClickListener{onInspect.invoke(row)}
+        })}
         val reviewCount=rows.count{DesktopPresentation.reviewable(it)}
-        if(!archived&&onEnrich!=null&&reviewCount>0)content.addView(Button(context).apply{
+        if(onEnrich!=null&&reviewCount>0)content.addView(Button(context).apply{
             tag="poc.review.enrich";text="Uzupełnij do ręcznego sprawdzenia ($reviewCount)";isAllCaps=false;isSaveEnabled=false;setOnClickListener{onEnrich.invoke()}
         })
         if(reviewCount>0)content.addView(label("Do sprawdzenia — obraz do OCR: ${rows.count{DesktopPresentation.reviewable(it)&&ocrAvailable(it.postId)}}/$reviewCount. Brak obrazu oznacza brak przechwycenia, nie brak danych.",14f))
@@ -93,6 +101,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
                 layoutParams=LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,(180*dp).toInt())
             })
             addOcr(card,row.postId)
+            inspect(card,row)
             card.addView(label("ID: ${row.postId}",12f))
             val link=OfferLinks.validated(row)
             card.addView(label(link?:"Brak bezpiecznego linku",14f).apply{
@@ -111,6 +120,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
             content.addView(label("Te posty mają dokładny link, ale nie zostały rozpoznane jako oferty. Napisy na grafikach mogą być niedostępne jako tekst. Nowy OCR wymaga zgody i dostępnego wycinka zdjęcia; jego wyniki są oznaczone do sprawdzenia.",14f))
             for(row in review){
                 addOcr(content,row.postId)
+                inspect(content,row)
                 content.addView(label(DesktopPresentation.explanation(row),14f))
                 content.addView(label("${DesktopPresentation.priceLabel(row)}: ${number(row.price)} zł • ${number(row.area)} m² • pokoje: ${number(row.rooms)}",16f).apply{tag="poc.review.fields.${row.postId}"})
                 content.addView(label(listOfNotNull(row.district,row.neighborhood,row.street).joinToString(" / ").ifEmpty{"Lokalizacja: —"}))

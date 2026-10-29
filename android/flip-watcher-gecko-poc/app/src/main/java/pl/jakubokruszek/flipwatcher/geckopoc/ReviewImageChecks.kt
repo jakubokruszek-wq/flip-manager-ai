@@ -11,12 +11,20 @@ object ReviewImageChecks{
  fun reply(j:JSONObject?,nonce:String):String?{
   if(j==null)return null
   val shape=setOf("type","nonce","status","count","reason");val actual=j.keys().asSequence().toSet()
-  if((actual!=shape&&actual!=shape+"filters")||filters(j)==null||j.optString("type")!="reviewImagesResult"||j.optString("nonce")!=nonce)return null
+  if(actual-setOf("filters","details")!=shape||filters(j)==null||details(j)==null||j.optString("type")!="reviewImagesResult"||j.optString("nonce")!=nonce)return null
   val reason=j.opt("reason");val count=j.opt("count");val status=j.opt("status")
   if(reason !is String||reason !in outcomes-"PROTOCOL"||count !is Int||count !in 0..1)return null
   if(reason=="CONTEXT")return reason.takeIf{status=="STOP"&&count==0}
   if(status!="OK"||(reason=="CAPTURED")!=(count==1))return null
   return reason
+ }
+ val detailKeys=setOf("rawImg","rawSvg","rawCss","sourceProof","ownerAccepted","ownerRejected","sizeRejected","qualified")
+ fun details(j:JSONObject?):Map<String,Int>?{
+  if(j==null)return null;if(!j.has("details"))return emptyMap()
+  val d=j.optJSONObject("details")?:return null;if(d.keys().asSequence().toSet()!=detailKeys)return null
+  val result=detailKeys.associateWith{k->val n=d.opt(k);if(n !is Int||n !in 0..700)return null;n}
+  if(result.getValue("sourceProof")>20||result.getValue("qualified")+result.getValue("sizeRejected")>result.getValue("ownerAccepted"))return null
+  return result
  }
  fun filters(j:JSONObject?):Map<String,Int>?{
   if(j==null)return null;if(!j.has("filters"))return emptyMap()

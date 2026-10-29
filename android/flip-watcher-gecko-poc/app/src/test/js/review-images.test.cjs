@@ -8,7 +8,7 @@ function env(){const doc={title:'Post',readyState:'complete',visibilityState:'vi
  const calls=[];let beforeAck=()=>{};const request=async q=>{calls.push(q);if(q.action==='photos')beforeAck();return{accepted:true,count:1,requestId:nonce}};
  return{w,doc,m,card,image,anchor,calls,setBeforeAck:f=>beforeAck=f,run:(reader=api.create())=>reader.read(w,m,core,preview,exact,request)};
 }
-test('fresh exact opened post captures one photo in two phases without exporting URL or text',async()=>{const h=env(),r=await h.run();assert.deepEqual(r,{status:'OK',count:1,reason:'CAPTURED'});assert.deepEqual(h.calls.map(x=>x.action),['photos','commit']);assert.equal(h.calls[0].tiles[0].postId,id);assert(!JSON.stringify(h.calls).includes(link));assert(!JSON.stringify(r).includes(id));});
+test('fresh exact opened post captures one photo in two phases without exporting URL or text',async()=>{const h=env(),r=await h.run();assert.deepEqual({status:r.status,count:r.count,reason:r.reason},{status:'OK',count:1,reason:'CAPTURED'});assert.equal(r.details.qualified,1);assert.equal(r.details.ownerAccepted,1);assert.deepEqual(h.calls.map(x=>x.action),['photos','commit']);assert.equal(h.calls[0].tiles[0].postId,id);assert(!JSON.stringify(h.calls).includes(link));assert(!JSON.stringify(r).includes(id));});
 test('no new OCR consent or invalid context never even selects media',async()=>{for(const kind of ['consent','ocr','foreign','hidden','focus','title','login']){const h=env();if(kind==='consent')h.m.consent=false;if(kind==='ocr')h.m.ocrConsent=false;if(kind==='foreign')h.w.location.href=link.replace(group,'foreign');if(kind==='hidden')h.doc.hidden=true;if(kind==='focus')h.doc.hasFocus=()=>false;if(kind==='title')h.doc.title='Checkpoint';if(kind==='login')h.doc.querySelector=()=>({});h.doc.querySelectorAll=()=>{throw Error('must not read')};assert.equal((await h.run()).status,'STOP',kind);assert.equal(h.calls.length,0);}});
 test('exact URL alone cannot select a suggested post or a comment permalink',async()=>{for(const suffix of ['foreign','comment']){const h=env();h.anchor.href=suffix==='foreign'?link.replace(id,'550000000000092'):link+'?comment_id=777777';assert.equal((await h.run()).count,0);assert.equal(h.calls.length,0);}});
 test('comment or shared image and unloaded images are not cropped',async()=>{for(const kind of ['comment','unloaded']){const h=env();if(kind==='comment')h.image.closest=s=>s==='[role="article"],article'?h.card:{};else h.image.complete=false;assert.equal((await h.run()).count,0);assert.equal(h.calls.length,0);}});
@@ -34,4 +34,10 @@ test('numeric report gets one explicit image-selection outcome without source UR
   const r=kind==='NO_ACK'?await api.create().read(h.w,h.m,core,preview,exact,async()=>({accepted:false})):await h.run();
   assert.equal(r.reason,kind);assert.equal(r.count,kind==='CAPTURED'?1:0);assert(!JSON.stringify(r).includes(link));
  }
+});
+
+test('single-photo counters distinguish owner rejection from small geometry without exporting sources',async()=>{
+ const foreign=env();foreign.image.closest=()=>({});const a=await foreign.run();assert.equal(a.reason,'NO_IMAGE');assert.equal(a.details.rawImg,1);assert.equal(a.details.ownerRejected,1);assert.equal(a.details.qualified,0);
+ const small=env();small.image.getBoundingClientRect=()=>({left:1,top:1,right:81,bottom:81,width:80,height:80});const b=await small.run();assert.equal(b.reason,'NO_IMAGE');assert.equal(b.details.ownerAccepted,1);assert.equal(b.details.sizeRejected,1);assert.equal(b.details.qualified,0);
+ for(const result of [a,b]){assert(Object.values(result.details).every(Number.isInteger));assert(!JSON.stringify(result).includes('facebook.com'));assert(!JSON.stringify(result).includes(id));}
 });
