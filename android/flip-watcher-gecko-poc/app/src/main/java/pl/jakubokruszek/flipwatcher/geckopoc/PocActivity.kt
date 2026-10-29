@@ -451,7 +451,8 @@ class PocActivity : ComponentActivity() {
                         // Large feed crops have been consumed; keep small visible thumbnails only.
                         if(withOcr)desktopThumbnails.clearOcr()
                         // Cached OCR never short-circuits the consented detail-opening stage.
-                        ReviewDataRunner.run(geckoView,original,snapshot,true,alive={reviewBusy&&session===original&&desktopRows===snapshot&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&geckoView.isAttachedToWindow},progress={index,total->reviewPosition=index;reviewTotal=total;render()},restoreActive={session===original&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)},snapshot={if(reviewBusy)saveReviewResult(it.copy(reason="INTERRUPTED"))},originalChannel=cachedChannel,onValidatedRows={validated->saveResult(validated,pendingOcr.values.toList())},onBoundPost={source,row,current,live->
+                        var archiveRows=snapshot
+                        ReviewDataRunner.run(geckoView,original,snapshot,true,alive={reviewBusy&&session===original&&desktopRows===snapshot&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&geckoView.isAttachedToWindow},progress={index,total->reviewPosition=index;reviewTotal=total;render()},restoreActive={session===original&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)},snapshot={if(reviewBusy)saveReviewResult(it.copy(reason="INTERRUPTED"))},originalChannel=cachedChannel,onValidatedRows={validated->archiveRows=validated;saveResult(validated,pendingOcr.values.toList())},onBoundPost={source,row,current,live->
                             if(withOcr&&ocrImages<20&&live()){
                                 val crops=DesktopThumbnails()
                                 try{
@@ -471,7 +472,7 @@ class PocActivity : ComponentActivity() {
                                             if(ReviewDataSummary.fields(suggestion)>0)pendingOcr[row.postId]=suggestion
                                         }
                                         ocrProgress("INTERRUPTED")
-                                        saveResult(snapshot.map{if(it.postId==row.postId)row else it},pendingOcr.values.toList(),extraImages=crops)
+                                        saveResult(archiveRows.map{if(it.postId==row.postId)row else it},pendingOcr.values.toList(),extraImages=crops)
                                     }
                                 }finally{crops.clear()}
                             }
