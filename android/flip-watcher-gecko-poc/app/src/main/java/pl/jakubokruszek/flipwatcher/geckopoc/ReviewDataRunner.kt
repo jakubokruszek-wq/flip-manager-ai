@@ -15,6 +15,7 @@ object ReviewDataRunner{
     private const val POSTS_PER_SESSION=1
     data class Outcome(val summary:ReviewDataSummary,val rows:List<DesktopRow>)
     suspend fun run(view:GeckoView,original:GeckoSession,rows:List<DesktopRow>,consent:Boolean,alive:()->Boolean,progress:(Int,Int)->Unit={_,_->},restoreActive:()->Boolean=alive,fixtureOrigin:String?=null,observe:(String)->Unit={},snapshot:(ReviewDataSummary)->Unit={},originalChannel:CollectorChannel?=null,onBoundPost:suspend(CollectorChannel,DesktopRow,String,()->Boolean)->Unit={_,_,_,_->}):Outcome=withContext(Dispatchers.Main){
+        val ownerJob=kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
         val fixture=fixtureOrigin!=null;val group=if(fixture)FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID
         val queue=ReviewDataGate.queue(rows,group);var opened=0;var bound=0;var text=0;var enriched=0;var unchanged=0;var unresolved=0;var filtered=0;var unboundStreak=0;var evidence:Map<String,Int> = emptyMap()
         var batchSessions=0;var batchSessionsClosed=0;var restorePermitted=false
@@ -132,9 +133,9 @@ object ReviewDataRunner{
                 // A newer unrelated session must never be replaced by cleanup.
                 if(lastWorker!=null&&view.session===lastWorker)view.releaseSession()
                 if(view.session==null&&restoreActive())view.setSession(original)
-                val resume=restorePermitted&&view.session===original&&restoreActive()
+                val resume=restorePermitted&&ownerJob?.isActive!=false&&view.session===original&&restoreActive()
                 runCatching{original.setActive(resume)};if(resume){original.setFocused(true);view.requestFocus()}
-                parking?.restore{resume&&restoreActive()}
+                parking?.restore{resume&&ownerJob?.isActive!=false&&restoreActive()}
                 if(resume&&parking!=null)observe("ORIGINAL_RESTORED")
             }
         }

@@ -24,9 +24,9 @@ class DesktopConsentDialog(private val owner:Activity,uiContext:Context=owner,pr
         root.addView(title,LinearLayout.LayoutParams(-1,-2))
         val body=ScrollView(context).apply{tag="poc.desktop.consentBody";isFocusableInTouchMode=true}
         val content=LinearLayout(context).apply{orientation=LinearLayout.VERTICAL}
-        content.addView(TextView(context).apply{text=SUMMARY;textSize=16f;setPadding(0,dp(8),0,dp(8))})
-        val autoOcr=CheckBox(context).apply{tag="poc.desktop.autoOcr";text="Po wyszukaniu automatycznie uruchom lokalny OCR i uzupełnianie postów";isChecked=true;isSaveEnabled=false}
+        val autoOcr=CheckBox(context).apply{tag="poc.desktop.autoOcr";text="Automatycznie: OCR i uzupełnianie postów";isChecked=true;isSaveEnabled=false}
         content.addView(autoOcr)
+        content.addView(TextView(context).apply{text=SUMMARY;textSize=16f;setPadding(0,dp(8),0,dp(8))})
         content.addView(TextView(context).apply{text="Zaznaczenie obejmuje zgodę na OCR dostępnych wycinków, następnie otwarcie do 20 dokładnych postów tej grupy i odczyt tekstu oraz widocznego zdjęcia. Do 3 minut po wyszukaniu, łącznie do 20 obrazów. Sugestie OCR osobno, do sprawdzenia. Bez uploadu. Odznacz, aby zakończyć na samym wyszukiwaniu.";textSize=16f})
         val details=TextView(context).apply{text=DETAILS;textSize=16f;visibility=View.GONE;tag="poc.desktop.consentDetails"}
         val disclosure=Button(context).apply{text="Szczegóły";textSize=16f;tag="poc.desktop.consentDisclosure";setOnClickListener{details.visibility=if(details.visibility==View.GONE)View.VISIBLE else View.GONE;text=if(details.visibility==View.VISIBLE)"Ukryj" else "Szczegóły"}}
