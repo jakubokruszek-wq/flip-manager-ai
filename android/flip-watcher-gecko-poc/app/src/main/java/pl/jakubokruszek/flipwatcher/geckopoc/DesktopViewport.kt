@@ -64,6 +64,7 @@ class DesktopThumbnails {
         return true
     }
     fun retain(ids:Set<String>){for(map in listOf(images,ocr))for(id in map.keys.toList())if(id !in ids)map.remove(id)?.values?.forEach{it.recycle()}}
+    fun clearOcr(){ocr.values.flatMap{it.values}.forEach{if(!it.isRecycled)it.recycle()};ocr.clear()}
     fun clear(){for(map in listOf(images,ocr)){map.values.flatMap{it.values}.forEach{if(!it.isRecycled)it.recycle()};map.clear()}}
     override fun toString()="DesktopThumbnails(redacted)"
 }

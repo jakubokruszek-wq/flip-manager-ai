@@ -17,6 +17,11 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class OcrInstrumentedTest{
+ @Test fun consumedLargeCropsCanBeReleasedWithoutRecyclingVisibleThumbnails(){
+  val store=DesktopThumbnails();val thumbnail=Bitmap.createBitmap(100,100,Bitmap.Config.ARGB_8888);val crop=Bitmap.createBitmap(800,400,Bitmap.Config.ARGB_8888)
+  try{assertTrue(store.put("550000000000091",0,thumbnail,crop));assertTrue(store.ocrBytes>0);store.clearOcr();assertEquals(0,store.ocrBytes);assertTrue(crop.isRecycled);assertFalse(thumbnail.isRecycled);assertSame(thumbnail,store.rows("550000000000091").single());store.clearOcr()}
+  finally{store.clear()}
+ }
  private fun row()=DesktopRow("550000000000081","https://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/posts/550000000000081/","DOM",null,"NONE",null,null,null,null,null,"UNKNOWN",false,0,"NO_TEXT")
  private fun image():Bitmap=Bitmap.createBitmap(1000,500,Bitmap.Config.ARGB_8888).also{b->
   val canvas=Canvas(b);canvas.drawColor(Color.WHITE);val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply{color=Color.BLACK;textSize=62f;typeface=android.graphics.Typeface.create("sans-serif",android.graphics.Typeface.BOLD)}

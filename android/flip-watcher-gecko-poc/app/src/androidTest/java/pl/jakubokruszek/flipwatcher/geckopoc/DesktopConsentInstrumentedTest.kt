@@ -23,6 +23,21 @@ import java.util.concurrent.CopyOnWriteArrayList
 /** Actual compact native window, 200% font, real input clicks; never opens Facebook. */
 @RunWith(AndroidJUnit4::class)
 class DesktopConsentInstrumentedTest {
+    @Test fun automaticOcrChoiceIsExplicitAndCancellationDoesNotGrantIt(){
+        ActivityScenario.launch(GeckoTestHostActivity::class.java).use{scenario->
+            val choices=mutableListOf<Boolean>()
+            scenario.onActivity{a->
+                val automatic=DesktopConsentDialog(a){choices.add(it)};automatic.show()
+                assertTrue(automatic.window!!.decorView.findViewWithTag<CheckBox>("poc.desktop.autoOcr").isChecked)
+                automatic.window!!.decorView.findViewWithTag<Button>("poc.desktop.consentAccept").performClick();assertEquals(listOf(true),choices)
+                val searchOnly=DesktopConsentDialog(a){choices.add(it)};searchOnly.show()
+                searchOnly.window!!.decorView.findViewWithTag<CheckBox>("poc.desktop.autoOcr").isChecked=false
+                searchOnly.window!!.decorView.findViewWithTag<Button>("poc.desktop.consentAccept").performClick();assertEquals(listOf(true,false),choices)
+                val cancelled=DesktopConsentDialog(a){choices.add(it)};cancelled.show()
+                cancelled.window!!.decorView.findViewWithTag<Button>("poc.desktop.consentCancel").performClick();assertEquals(2,choices.size)
+            }
+        }
+    }
     private val instrumentation get()=InstrumentationRegistry.getInstrumentation()
     private fun make(a:GeckoTestHostActivity,choices:MutableList<Boolean>):DesktopConsentDialog {
         val c=android.content.res.Configuration(a.resources.configuration).apply{fontScale=2f}

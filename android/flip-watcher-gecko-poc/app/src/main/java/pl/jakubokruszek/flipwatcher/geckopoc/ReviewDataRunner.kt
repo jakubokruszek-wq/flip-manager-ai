@@ -14,7 +14,7 @@ import org.mozilla.geckoview.WebRequestError
 object ReviewDataRunner{
     private const val POSTS_PER_SESSION=1
     data class Outcome(val summary:ReviewDataSummary,val rows:List<DesktopRow>)
-    suspend fun run(view:GeckoView,original:GeckoSession,rows:List<DesktopRow>,consent:Boolean,alive:()->Boolean,progress:(Int,Int)->Unit={_,_->},restoreActive:()->Boolean=alive,fixtureOrigin:String?=null,observe:(String)->Unit={},snapshot:(ReviewDataSummary)->Unit={},onBoundPost:suspend(CollectorChannel,DesktopRow,String,()->Boolean)->Unit={_,_,_,_->}):Outcome=withContext(Dispatchers.Main){
+    suspend fun run(view:GeckoView,original:GeckoSession,rows:List<DesktopRow>,consent:Boolean,alive:()->Boolean,progress:(Int,Int)->Unit={_,_->},restoreActive:()->Boolean=alive,fixtureOrigin:String?=null,observe:(String)->Unit={},snapshot:(ReviewDataSummary)->Unit={},originalChannel:CollectorChannel?=null,onBoundPost:suspend(CollectorChannel,DesktopRow,String,()->Boolean)->Unit={_,_,_,_->}):Outcome=withContext(Dispatchers.Main){
         val fixture=fixtureOrigin!=null;val group=if(fixture)FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID
         val queue=ReviewDataGate.queue(rows,group);var opened=0;var bound=0;var text=0;var enriched=0;var unchanged=0;var unresolved=0;var filtered=0;var unboundStreak=0;var evidence:Map<String,Int> = emptyMap()
         var batchSessions=0;var batchSessionsClosed=0
@@ -24,6 +24,7 @@ object ReviewDataRunner{
         val gate=ReviewDataGate(group,fixture){android.os.SystemClock.elapsedRealtime()}
         val settings=GeckoSessionSettings.Builder().userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP).viewportMode(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP).build()
         var originalDetached=false;var lastWorker:GeckoSession?=null
+        val parking=originalChannel?.let{ReviewOriginalParking(original,it,it.connectedUrl?:return@withContext outcome("CONTEXT"))}
         val merged=rows.associateByTo(linkedMapOf()){it.postId}
         fun active():Boolean{if(!alive()||!view.isShown||!view.hasWindowFocus())gate.stop("PAUSED_OR_CONTEXT");return gate.tick()}
         suspend fun runBatch(batch:List<IndexedValue<DesktopRow>>):String?{
@@ -53,9 +54,9 @@ object ReviewDataRunner{
             }
             try{
                 channel.attach(GeckoHost.collectorExtension(view.context));if(!live())return gate.reason
-                browser.open(GeckoHost.runtime(view.context));openedSession=true;batchSessions++;observe("BATCH_OPENED")
+                if(!originalDetached){view.releaseSession();originalDetached=true;original.setActive(false);parking?.park(::active);if(parking!=null)observe("ORIGINAL_PARKED")}
                 if(!live())return gate.reason
-                if(!originalDetached){view.releaseSession();originalDetached=true;original.setActive(false)}
+                browser.open(GeckoHost.runtime(view.context));openedSession=true;batchSessions++;observe("BATCH_OPENED")
                 view.setSession(browser);browser.setActive(true);browser.setFocused(true);view.requestFocus()
             for((index,previous) in batch){
                 if(!live())return gate.reason
@@ -127,11 +128,14 @@ object ReviewDataRunner{
             outcome("DONE",merged.values.toList())
         }finally{
             gate.stop("CLOSED")
-            if(originalDetached)runCatching{
+            if(originalDetached)kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable){
                 // A newer unrelated session must never be replaced by cleanup.
                 if(lastWorker!=null&&view.session===lastWorker)view.releaseSession()
-                if(view.session==null)view.setSession(original)
-                if(view.session===original){val resume=restoreActive();original.setActive(resume);if(resume){original.setFocused(true);view.requestFocus()}}
+                if(view.session==null&&restoreActive())view.setSession(original)
+                val resume=view.session===original&&restoreActive()
+                original.setActive(resume);if(resume){original.setFocused(true);view.requestFocus()}
+                parking?.restore{resume&&restoreActive()}
+                if(resume&&parking!=null)observe("ORIGINAL_RESTORED")
             }
         }
     }

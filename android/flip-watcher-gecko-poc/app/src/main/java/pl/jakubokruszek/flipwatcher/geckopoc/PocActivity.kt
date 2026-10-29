@@ -212,14 +212,16 @@ class PocActivity : ComponentActivity() {
         lastShareResultDialog?.show()
     }
 
+    private var desktopFollowUp:(()->Unit)?=null
     private fun startDesktopPreview(){
         if(ocrBusy||reviewWorking()||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||kind!=PageKind.APPROVED_GROUP||progress!=100||channel?.isConnected!=true)return
         val currentSession=session?:return;val currentChannel=channel?:return;val target=url?:return
-        desktopConsentDialog=DesktopConsentDialog(this,onAccept=accept@{
+        desktopConsentDialog=DesktopConsentDialog(this,onAccept=accept@{automaticOcr->
                 if(reviewWorking()||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)||session!==currentSession||channel!==currentChannel||url!=target||kind!=PageKind.APPROVED_GROUP||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||progress!=100||!currentChannel.isConnected)return@accept
                 reviewLast=null;ocrLast=null;stopVisiblePosts();finishShare("CANCELLED",clear=true);clearDesktopDetails()
                 val gate=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()})
                 if(!gate.begin(true)){publishDesktop(DesktopSummary.create("NO_CONSENT_OR_CONTEXT",0),emptyList());return@accept}
+                desktopFollowUp=if(automaticOcr)({if(session===currentSession&&channel===currentChannel&&kind==PageKind.APPROVED_GROUP&&!busyForTabs()&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))askOcr(preconsented=true)}) else null
                 clearDesktopDetails();geckoView.requestFocus();DesktopKeyboard.dismiss(geckoView);desktopGate=gate;desktopBusy=true;desktopRows=emptyList();desktopNonce=UUID.randomUUID().toString();render()
                 desktopJob=lifecycleScope.launch{
                     val result=DesktopSessionPreview.run(currentSession,currentChannel,gate,desktopNonce!!,target,{url},pageReady={pageLoaded&&progress==100},view=geckoView,images=desktopThumbnails,baseline=false,gesture=false,fastScroll=true)
@@ -231,6 +233,7 @@ class PocActivity : ComponentActivity() {
     }
     private fun finishDesktop(reason:String,reply:DesktopReply?=null,show:Boolean=true){
         if(!desktopBusy)return
+        val followUp=desktopFollowUp.takeIf{reason=="DONE"};desktopFollowUp=null
         val gate=desktopGate;gate?.stop(reason)
         desktopBusy=false;desktopJob?.cancel();desktopJob=null
         desktopNonce?.let{GeckoHost.background.abortDesktop(it)};desktopNonce=null;channel?.abortDesktop()
@@ -238,6 +241,7 @@ class PocActivity : ComponentActivity() {
         val summary=DesktopSummary.create(reason,gate?.requests?:0,reply)
         publishDesktop(summary,if(reason=="DONE")reply?.rows?:emptyList() else emptyList(),show)
         render()
+        if(followUp!=null){val completedRows=desktopRows;lifecycleScope.launch{kotlinx.coroutines.yield();if(desktopRows===completedRows&&completedRows.isNotEmpty())followUp()}}
     }
     internal fun publishDesktop(summary:DesktopSummary,rows:List<DesktopRow>,show:Boolean=true){
         cancelOcr("CONTEXT");ocrResults.clear()
@@ -319,23 +323,21 @@ class PocActivity : ComponentActivity() {
         ocrBusy=false;ocrEpoch++;ocrResults.clear();ocrJob?.cancel()
         saveOcr((ocrLast?:OcrSummary("INTERRUPTED",0,0,0,0,0)).copy(reason=if(reason in setOf("PAUSED","CANCELLED","CONTEXT"))reason else "ERROR"));ocrReportPending=true
     }
-    private fun askOcr(){
-        if(ReviewDataGate.queue(desktopRows).isNotEmpty()){askReviewData(withOcr=true);return}
+    private fun askOcr(preconsented:Boolean=false){
+        if(ReviewDataGate.queue(desktopRows).isNotEmpty()){askReviewData(withOcr=true,preconsented=preconsented);return}
         if(busyForTabs()||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
         val original=session?:return;val source=channel?:return;val generation=source.connectionGeneration;val target=url;val snapshot=desktopRows
         val count=snapshot.count{(DesktopPresentation.reviewable(it)||DesktopSummary.eligible(it))&&desktopThumbnails.ocrRows(it.postId).isNotEmpty()}
         // Prefer already identity-bound crops: manual rows must not force a new
         // navigation and prevent OCR of images we already hold in RAM.
         if(count==0){
-            if(ReviewDataGate.queue(snapshot).isNotEmpty())askReviewData(withOcr=true)
+            if(ReviewDataGate.queue(snapshot).isNotEmpty())askReviewData(withOcr=true,preconsented=preconsented)
             return
         }
         ocrConsentDialog?.dismiss()
-        ocrConsentDialog=AlertDialog.Builder(this).setTitle("OCR lokalnie — nowa zgoda")
-            .setMessage("Odczytać napisy z widocznych wcześniej zdjęć przypisanych do $count postów zatwierdzonej grupy? Maks. 20 obrazów, 20 postów i 2 minuty. Model OCR jest w APK i działa na telefonie bez pobierania modelu. Bez wysyłania zdjęć lub wyników, dodatkowego pobierania mediów, skanu i kolektora.\n\nPola OCR mogą być błędne: będą pokazane osobno, DO SPRAWDZENIA. Nie nadpisują danych tekstowych. Wycinki i wyniki tylko w RAM, usuwane po pauzie lub zmianie kontekstu. Lokalnie pozostają tylko liczniki. Każda próba wymaga nowej zgody.")
-            .setNegativeButton("Anuluj",null).setPositiveButton("Zgadzam się"){_,_->
+        val start=start@{
                 ocrConsentDialog=null
-                if(busyForTabs()||session!==original||channel!==source||url!=target||desktopRows!==snapshot||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return@setPositiveButton
+                if(busyForTabs()||session!==original||channel!==source||url!=target||desktopRows!==snapshot||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return@start
                 ocrResults.clear();ocrReportPending=false;val epoch=++ocrEpoch;ocrBusy=true;saveOcr(OcrSummary("INTERRUPTED",count,0,0,0,0));render()
                 val live={ocrBusy&&ocrEpoch==epoch&&session===original&&channel===source&&source.isConnected&&source.connectionGeneration==generation&&url==target&&kind==PageKind.APPROVED_GROUP&&desktopRows===snapshot&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&window.decorView.hasWindowFocus()}
                 ocrJob=lifecycleScope.launch{
@@ -353,21 +355,25 @@ class PocActivity : ComponentActivity() {
                     catch(_:Exception){if(ocrBusy&&ocrEpoch==epoch){ocrBusy=false;saveOcr((ocrLast?:OcrSummary("INTERRUPTED",count,0,0,0,0)).copy(reason="ERROR"));ocrReportPending=true}}
                     finally{if(ocrEpoch==epoch)ocrJob=null;render();showPendingOcrReport()}
                 }
-            }.create().also{it.setCanceledOnTouchOutside(false);it.show()}
+
+        }
+        if(preconsented){start();return}
+        ocrConsentDialog=AlertDialog.Builder(this).setTitle("OCR lokalnie — nowa zgoda")
+            .setMessage("Odczytać napisy z widocznych wcześniej zdjęć przypisanych do $count postów zatwierdzonej grupy? Maks. 20 obrazów, 20 postów i 2 minuty. Model OCR jest w APK i działa na telefonie bez pobierania modelu. Bez wysyłania zdjęć lub wyników, dodatkowego pobierania mediów, skanu i kolektora.\n\nPola OCR mogą być błędne: będą pokazane osobno, DO SPRAWDZENIA. Nie nadpisują danych tekstowych. Wycinki i wyniki tylko w RAM, usuwane po pauzie lub zmianie kontekstu. Lokalnie pozostają tylko liczniki. Każda próba wymaga nowej zgody.")
+            .setNegativeButton("Anuluj",null).setPositiveButton("Zgadzam się"){_,_->start()}
+            .create().also{it.setCanceledOnTouchOutside(false);it.show()}
     }
 
-    private fun askReviewData(withOcr:Boolean=false){
+    private fun askReviewData(withOcr:Boolean=false,preconsented:Boolean=false){
         val original=session?:return;val snapshot=desktopRows
         val queue=ReviewDataGate.queue(snapshot)
         val selectedOcr=snapshot.count{DesktopPresentation.reviewable(it)||DesktopSummary.eligible(it)}
         val cachedChannel=channel;val cachedGeneration=cachedChannel?.connectionGeneration;val cachedUrl=url
         if(busyForTabs()||queue.isEmpty()||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
         reviewConsentDialog?.dismiss()
-        reviewConsentDialog=AlertDialog.Builder(this).setTitle(if(withOcr)"Otwórz posty + OCR — nowa zgoda" else "Uzupełnij dane — nowa zgoda")
-            .setMessage((if(withOcr)"Dwa etapy w jednej próbie: najpierw OCR dostępnych zdjęć z pamięci, następnie otwieranie ${queue.size} postów do sprawdzenia i odczyt treści oraz jednego widocznego zdjęcia potwierdzonego posta. Łącznie do 20 obrazów i 3 minut na oba etapy. Sugestie osobno, DO SPRAWDZENIA, bez nadpisywania pól. Brak powiązania posta zatrzymuje otwieranie; ukończone wyniki OCR z pamięci mogą pozostać tylko przy zachowanej pierwotnej sesji.\n\n" else "")+"Otworzyć kolejno ${queue.size} dokładnych linków z Do ręcznego sprawdzenia? Jedna zatwierdzona grupa, do 20 postów i 3 minut. Każdy post ma osobną sesję roboczą, zamykaną przed otwarciem następnego. Cała kolejka korzysta z tej samej jednorazowej zgody i pozostałego czasu. Odczyt DOM i osadzonych danych; bez odczytu odpowiedzi sieciowych i bez klikania reakcji, komentarzy lub udostępniania.\n\nBez dodatkowego pobierania mediów, uploadu, skanu i kolektora. Tylko potwierdzone ID; pola heurystyczne. Komentarze, cytaty i cudze posty są wykluczone. Dane i obrazy w RAM; zapis tylko liczników. Logowanie/CAPTCHA/CHECKPOINT, zmiana kontekstu, pauza lub wygaszenie: STOP i wyczyszczenie podglądu. Nowa jednorazowa zgoda; wcześniejsza zgoda na skan nie jest używana.")
-            .setNegativeButton("Anuluj",null).setPositiveButton("Zgadzam się"){_,_->
+        val start=start@{
                 reviewConsentDialog=null
-                if(busyForTabs()||session!==original||desktopRows!==snapshot||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return@setPositiveButton
+                if(busyForTabs()||session!==original||desktopRows!==snapshot||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return@start
                 reviewOcrActive=withOcr;if(withOcr){ocrResults.clear();ocrReportPending=false;saveOcr(OcrSummary("INTERRUPTED",selectedOcr,0,0,0,0))};stopVisiblePosts();selectContentTab(false);reviewLast=null;reviewTotal=queue.size;reviewPosition=0;reviewReportPending=false;saveReviewResult(ReviewDataSummary("INTERRUPTED",queue.size,0,0,0,0,0,0,0));reviewBusy=true;render()
                 reviewJob=lifecycleScope.launch{
                     try{
@@ -384,8 +390,10 @@ class PocActivity : ComponentActivity() {
                             cachedOcr.putAll(cached.rows.filterValues{ReviewDataSummary.fields(it)>0});pendingOcr.putAll(cachedOcr)
                             ocrImages=cached.summary.images;cachedImages=cached.summary.images;ocrTexts=cached.summary.texts;ocrErrors=cached.summary.errors;ocrProgress("INTERRUPTED")
                         }
+                        // Large feed crops have been consumed; keep small visible thumbnails only.
+                        if(withOcr)desktopThumbnails.clearOcr()
                         // Cached OCR never short-circuits the consented detail-opening stage.
-                        ReviewDataRunner.run(geckoView,original,snapshot,true,alive={reviewBusy&&session===original&&desktopRows===snapshot&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&geckoView.isAttachedToWindow},progress={index,total->reviewPosition=index;reviewTotal=total;render()},restoreActive={session===original&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)},snapshot={if(reviewBusy)saveReviewResult(it.copy(reason="INTERRUPTED"))},onBoundPost={source,row,current,live->
+                        ReviewDataRunner.run(geckoView,original,snapshot,true,alive={reviewBusy&&session===original&&desktopRows===snapshot&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&geckoView.isAttachedToWindow},progress={index,total->reviewPosition=index;reviewTotal=total;render()},restoreActive={session===original&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)},snapshot={if(reviewBusy)saveReviewResult(it.copy(reason="INTERRUPTED"))},originalChannel=cachedChannel,onBoundPost={source,row,current,live->
                             if(withOcr&&ocrImages<20&&live()){
                                 val crops=DesktopThumbnails()
                                 try{
@@ -432,7 +440,13 @@ class PocActivity : ComponentActivity() {
                     catch(_:Exception){if(reviewBusy)cancelReview("ERROR")}
                     finally{reviewClosing=false;reviewOcrActive=false;if(!reviewBusy)reviewJob=null;render();if(withOcr)showPendingOcrReport() else showPendingReviewReport()}
                 }
-            }.create().also{it.setCanceledOnTouchOutside(false);it.show()}
+
+        }
+        if(preconsented){start();return}
+        reviewConsentDialog=AlertDialog.Builder(this).setTitle(if(withOcr)"Otwórz posty + OCR — nowa zgoda" else "Uzupełnij dane — nowa zgoda")
+            .setMessage((if(withOcr)"Dwa etapy w jednej próbie: najpierw OCR dostępnych zdjęć z pamięci, następnie otwieranie ${queue.size} postów do sprawdzenia i odczyt treści oraz jednego widocznego zdjęcia potwierdzonego posta. Łącznie do 20 obrazów i 3 minut na oba etapy. Sugestie osobno, DO SPRAWDZENIA, bez nadpisywania pól. Brak powiązania posta zatrzymuje otwieranie; ukończone wyniki OCR z pamięci mogą pozostać tylko przy zachowanej pierwotnej sesji.\n\n" else "")+"Otworzyć kolejno ${queue.size} dokładnych linków z Do ręcznego sprawdzenia? Jedna zatwierdzona grupa, do 20 postów i 3 minut. Każdy post ma osobną sesję roboczą, zamykaną przed otwarciem następnego. Cała kolejka korzysta z tej samej jednorazowej zgody i pozostałego czasu. Odczyt DOM i osadzonych danych; bez odczytu odpowiedzi sieciowych i bez klikania reakcji, komentarzy lub udostępniania.\n\nBez dodatkowego pobierania mediów, uploadu, skanu i kolektora. Tylko potwierdzone ID; pola heurystyczne. Komentarze, cytaty i cudze posty są wykluczone. Dane i obrazy w RAM; zapis tylko liczników. Logowanie/CAPTCHA/CHECKPOINT, zmiana kontekstu, pauza lub wygaszenie: STOP i wyczyszczenie podglądu. Nowa jednorazowa zgoda; wcześniejsza zgoda na skan nie jest używana.")
+            .setNegativeButton("Anuluj",null).setPositiveButton("Zgadzam się"){_,_->start()}
+            .create().also{it.setCanceledOnTouchOutside(false);it.show()}
     }
 
     private fun openOffer(row:DesktopRow){
