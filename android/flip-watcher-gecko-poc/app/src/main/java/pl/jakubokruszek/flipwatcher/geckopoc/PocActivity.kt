@@ -129,6 +129,7 @@ class PocActivity : ComponentActivity() {
                 }
             }.onFailure{archiveError="Nie udało się odczytać zapisanej bazy. Plik pozostaje zachowany; nie zastępujemy go pustym wynikiem."}
             showSavedResult();render()
+            if(desktopRows.isEmpty()&&session==null&&savedResult?.rows?.isNotEmpty()==true&&!busyForTabs())selectContentTab(true)
         }
     }
     private fun saveResult(rows:List<DesktopRow> = desktopRows,ocr:List<DesktopRow> = ocrResults.values.toList(),photos:Boolean=false,extraImages:DesktopThumbnails?=null){
@@ -304,7 +305,7 @@ class PocActivity : ComponentActivity() {
         desktopThumbnails.retain(desktopRows.map{it.postId}.toSet())
         val saved=runCatching{desktopPrefs.edit().putString("last",summary.encode()).commit()}.getOrDefault(false)
         output.text=summary.report()+if(saved)"" else "\nUWAGA: nie zapisano raportu; skopiuj teraz."
-        if(::offersPanel.isInitialized)offersPanel.showRows(desktopRows,thumbnails={desktopThumbnails.rows(it)})
+        if(::offersPanel.isInitialized){if(desktopRows.isEmpty())showSavedResult() else offersPanel.showRows(desktopRows,thumbnails={desktopThumbnails.rows(it)})}
         if(show&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))selectContentTab(true)
         render()
     }
@@ -1273,7 +1274,7 @@ class PocActivity : ComponentActivity() {
             offersTab.text="Oferty (${displayedRows().count{DesktopSummary.eligible(it)}})"
         }
         listOf("desktopResult","reviewResult","ocrResult","deleteResults").forEach{buttons[it]?.isEnabled=!busyForTabs()}
-        if(ocrBusy||reviewWorking())buttons.filterKeys{it!="open"}.values.forEach{it.isEnabled=false}
+        if(deletingResults||ocrBusy||reviewWorking())buttons.filterKeys{it!="open"}.values.forEach{it.isEnabled=false}
         val p = probe
         diagnostics.text = buildString {
             appendLine("STAN: ${banner.text}")

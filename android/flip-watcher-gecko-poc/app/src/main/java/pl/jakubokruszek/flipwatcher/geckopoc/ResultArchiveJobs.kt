@@ -30,7 +30,8 @@ object ResultArchiveJobs {
                 val ids=rows.map{it.postId}.toSet()
                 val incoming=copies.map{ResultArchive.photo(it.id,it.slot,it.crop,it.bitmap)}
                 val keys=incoming.map{Triple(it.postId,it.slot,it.crop)}.toSet()
-                val photos=previous?.photos.orEmpty().filter{it.postId in ids&&Triple(it.postId,it.slot,it.crop) !in keys}+incoming
+                val retained=previous?.photos.orEmpty().filter{it.postId in ids&&Triple(it.postId,it.slot,it.crop) !in keys}
+                val photos=(retained+incoming).filter{!it.crop}+(incoming+retained).filter{it.crop}.take(20)
                 store.save(SavedResult(timestamp,rows.toList(),ocr.toList(),photos))
             }catch(_:Exception){false}finally{copies.forEach{if(!it.bitmap.isRecycled)it.bitmap.recycle()}}
             main.post{done(success)}

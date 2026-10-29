@@ -75,8 +75,8 @@ class ResultArchive(context:Context) {
     fun load():SavedResult?=synchronized(lock) {
         if(!file.baseFile.exists()&&!File(file.baseFile.path+".bak").exists())return null
         val source=file.openRead()
-        require(source.channel.size()<=MAX_FILE_BYTES)
         try {
+        require(source.channel.size()<=MAX_FILE_BYTES)
         val header=DataInputStream(source);require(header.readUnsignedByte()==1);val iv=ByteArray(12);header.readFully(iv)
         val cipher=Cipher.getInstance("AES/GCM/NoPadding").apply{init(Cipher.DECRYPT_MODE,key(),GCMParameterSpec(128,iv));updateAAD(AAD)}
         DataInputStream(javax.crypto.CipherInputStream(source,cipher)).use{input->

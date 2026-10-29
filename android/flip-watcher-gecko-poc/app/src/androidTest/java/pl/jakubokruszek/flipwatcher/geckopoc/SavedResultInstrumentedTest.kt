@@ -91,4 +91,17 @@ class SavedResultInstrumentedTest {
             assertEquals("keep",prefs.getString("archive-test-history",null))
         }}finally{prefs.edit().remove("archive-test-history").commit()}
     }
+    @Test fun failedNewSearchKeepsTheSavedOfferVisible(){
+        assertTrue(ResultArchive(context).save(value()))
+        ActivityScenario.launch(PocActivity::class.java).use{scenario->
+            ArchiveTestSupport.drain(context)
+            scenario.onActivity{a->
+                a.publishDesktop(DesktopSummary.create("ERROR",0),emptyList())
+                val root=a.findViewById<ViewGroup>(android.R.id.content)
+                assertNotNull(root.findViewWithTag<android.view.View>("poc.offer.card.${row().postId}"))
+                assertEquals("Oferty (1)",root.findViewWithTag<Button>("poc.tab.offers").text.toString())
+            }
+            assertEquals(value().rows,ResultArchive(context).load()!!.rows)
+        }
+    }
 }
