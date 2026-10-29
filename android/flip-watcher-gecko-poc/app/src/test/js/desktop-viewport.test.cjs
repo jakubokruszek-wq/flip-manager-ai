@@ -54,13 +54,15 @@ test('small unlinked tiles require exact network media proof both before and aft
 test('CSS source replacement or loss of loaded proof invalidates a pending photo',()=>{const h=env();let source='existing-source',ready=true;const shot=photos(h.w,core,group,()=>[{node:h.image,item:{mediaId:'880000000000001'},source:()=>source,ready:()=>ready}],new Map());assert(shot.valid());ready=false;assert.equal(shot.valid(),false);ready=true;source='new-source';assert.equal(shot.valid(),false);});
 test('opaque photo wrapper fallback is not accepted by an exact DOM card without a current unique network media owner',()=>{const h=env(),postId='550000000000091',item={url:'https://scontent.fbcdn.net/a.jpg',mediaId:null,networkRequired:true},nodes=()=>[{node:h.image,item}],allowed=new Set([postId]),bound=[{postId,urls:[item.url],ids:[]}];assert.equal(rawPhotos(h.w,core,group,nodes,new Map(),allowed,[]),null);const shot=rawPhotos(h.w,core,group,nodes,new Map(),allowed,bound);assert(shot.valid());assert.equal(shot.valid([]),false);assert.equal(shot.valid([...bound,{postId:'550000000000092',urls:[item.url],ids:[]}]),false);});
 
-test('fair feed capture takes one image of a post per frame without weakening identity checks',()=>{
+test('fair feed capture takes one image per post per frame and returns for remaining own images',()=>{
  const h=env(),id='550000000000091',slots=new Map();
  const nodes=()=>[1,2,3].map(i=>({node:h.image,item:{mediaId:'88000000000000'+i}}));
  const shot=rawPhotos(h.w,core,group,nodes,slots,new Set([id]),[],null,null,new Set([id]));
  assert.equal(shot.tiles.length,1);assert(shot.valid());shot.keys[0].done=true;
  const next=rawPhotos(h.w,core,group,nodes,slots,new Set([id]),[],null,null,new Set([id]));
- assert.equal(next,null);
+ assert.equal(next.tiles.length,1);assert.equal(next.tiles[0].slot,1);assert(next.valid());next.keys.forEach(k=>k.done=true);
+ const last=rawPhotos(h.w,core,group,nodes,slots,new Set([id]),[],null,null,new Set([id]));assert.equal(last.tiles.length,1);assert.equal(last.tiles[0].slot,2);last.keys.forEach(k=>k.done=true);
+ assert.equal(rawPhotos(h.w,core,group,nodes,slots,new Set([id]),[],null,null,new Set([id])),null);
  h.image.currentSrc+='changed';assert.equal(shot.valid(),false);
 });
 

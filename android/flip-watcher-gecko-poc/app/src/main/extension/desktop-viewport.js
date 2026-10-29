@@ -159,7 +159,7 @@ function documentImages(w,core,group,helpers,owners,allowedIds,audit){
  }
  return result;
 }
-function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null,helpers=null,preferredIds=null){
+function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null,helpers=null,preferredIds=null,extraPass=false){
  const count=k=>{if(audit)audit[k]=Math.min(10000,(audit[k]||0)+1);};
  if(!allowedIds||typeof allowedIds.has!=='function')return null;
  const vp=w.visualViewport,width=Number(vp?.width)||w.innerWidth,height=Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight),left=Number(vp?.offsetLeft)||0,top=Number(vp?.offsetTop)||0;
@@ -181,7 +181,7 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null,
  const captured=id=>[...(slots.get(id)?.values()||[])].some(mark=>mark.done);
  if(preferredIds)targets.sort((a,b)=>Number(captured(a.id))-Number(captured(b.id))||Number(preferredIds.has(b.id))-Number(preferredIds.has(a.id)));
  for(const {card,id,network:fromNetwork,documentSource} of targets){
-  if(preferredIds&&(captured(id)||tiles.some(tile=>tile.postId===id)))continue;
+  if(preferredIds&&((!extraPass&&captured(id))||tiles.some(tile=>tile.postId===id)))continue;
   if(!allowedIds.has(id))continue;
   if(!documentSource)count(fromNetwork?'photoNetworkCards':'photoExactCards');
   if(!slots.has(id)){if(slots.size===20)continue;slots.set(id,new Map());}const media=slots.get(id);
@@ -215,7 +215,7 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null,
    if(preferredIds)break;
   }
  }
- return tiles.length?result():preferredIds?photos(w,core,group,photoNodes,slots,allowedIds,bindings,audit,helpers,null):null;
+ return tiles.length?result():preferredIds&&!extraPass?photos(w,core,group,photoNodes,slots,allowedIds,bindings,audit,helpers,preferredIds,true):null;
 }
 const api={transport,cards,point,trace,photos};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopViewport=api;
 })(typeof globalThis!=='undefined'?globalThis:this);
