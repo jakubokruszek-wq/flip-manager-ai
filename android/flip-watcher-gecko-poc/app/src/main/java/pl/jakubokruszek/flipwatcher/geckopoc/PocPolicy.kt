@@ -18,7 +18,7 @@ object PocPolicy {
     @Volatile private var selectedGroupId = WatcherGroups.LEGACY_GROUP
     val APPROVED_GROUP_ID: String get() = selectedGroupId
     /** Caller must close all document operations and invalidate callbacks before switching. */
-    fun selectGroup(id:String) { require(WatcherGroups.find(id)!=null);selectedGroupId=id }
+    fun selectGroup(id:String) { require(WatcherGroups.isActive(id));selectedGroupId=id }
     val APPROVED_GROUP_URL: String get() = "https://www.facebook.com/groups/$APPROVED_GROUP_ID/"
     const val MAX_POSTS = 20
     const val SCAN_TIMEOUT_MS = 45_000L
@@ -65,11 +65,11 @@ object PocPolicy {
             Regex("checkpoint|two_step_verification", RegexOption.IGNORE_CASE).containsMatchIn(path) -> PageKind.CHECKPOINT
             Regex("captcha", RegexOption.IGNORE_CASE).containsMatchIn(path) -> PageKind.CAPTCHA
             Regex("^/(login|recover)", RegexOption.IGNORE_CASE).containsMatchIn(path) -> PageKind.LOGIN
-            path.trimEnd('/') == "/groups/$APPROVED_GROUP_ID" -> PageKind.APPROVED_GROUP
+            WatcherGroups.isActive(APPROVED_GROUP_ID) && path.trimEnd('/') == "/groups/$APPROVED_GROUP_ID" -> PageKind.APPROVED_GROUP
             // Only an exact, verified alias of the approved group; never any /groups/ path.
-            groupSegment(url)?.let { aliases[it] == APPROVED_GROUP_ID } == true -> PageKind.APPROVED_GROUP
+            WatcherGroups.isActive(APPROVED_GROUP_ID) && groupSegment(url)?.let { aliases[it] == APPROVED_GROUP_ID } == true -> PageKind.APPROVED_GROUP
             // Viewing an exact post is distinct from permission to scan a group.
-            uri.rawUserInfo==null&&uri.port==-1&&uri.rawQuery==null&&uri.rawFragment==null&&
+            WatcherGroups.isActive(APPROVED_GROUP_ID)&&uri.rawUserInfo==null&&uri.port==-1&&uri.rawQuery==null&&uri.rawFragment==null&&
                 Regex("^/groups/${Regex.escape(APPROVED_GROUP_ID)}/(posts|permalink)/[0-9]{5,30}/?$").matches(path) -> PageKind.APPROVED_POST
             path.startsWith("/groups/") -> PageKind.OTHER_GROUP
             else -> PageKind.FACEBOOK_OTHER

@@ -48,9 +48,9 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = providers.gradleProperty("GECKO_POC_VERSION_CODE").orElse("2700").get().toInt()
-        versionName = "0.5.66-gecko-poc"
+        versionName = "0.5.67-gecko-poc"
         buildConfigField("String", "COLLECTOR_CORE_SHA256", "\"$collectorCoreSha256\"")
-        // No backend in this POC: there is no API URL, token or upload code at all.
+        // Paired read-only source metadata; offer/photo uploads remain disabled.
         buildConfigField("boolean", "LIVE_UPLOAD_ENABLED", "false")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

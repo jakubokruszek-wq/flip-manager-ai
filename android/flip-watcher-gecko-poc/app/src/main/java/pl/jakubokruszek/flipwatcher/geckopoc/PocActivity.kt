@@ -111,6 +111,7 @@ class PocActivity : ComponentActivity() {
     private var archiveRevision=0L
     private var archiveWritePending=false
     private var archiveError:String?=null
+    private var watcherBusy=false
     private var deletingResults=false
     internal var deleteResultsDialog:AlertDialog?=null; private set
     private fun displayedRows()=desktopRows.ifEmpty{savedResult?.rows.orEmpty()}
@@ -194,8 +195,10 @@ class PocActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if(android.os.Build.VERSION.SDK_INT>=33)setRecentsScreenshotEnabled(false)
-        PocPolicy.selectGroup(preferences.getString("selected_watcher_group",WatcherGroups.LEGACY_GROUP)
-            ?.takeIf{WatcherGroups.find(it)!=null}?:WatcherGroups.LEGACY_GROUP)
+        preferences.getString("watcher_active_groups",null)?.let{raw->runCatching{WatcherGroups.setActive(WatcherLink.parseGroups(raw))}}
+        val selected=preferences.getString("selected_watcher_group",WatcherGroups.LEGACY_GROUP)
+            ?.takeIf{WatcherGroups.isActive(it)}?:WatcherGroups.active.firstOrNull()?.id
+        if(selected!=null)PocPolicy.selectGroup(selected)
         setContentView(buildLayout())
         readSavedResult()
         lifecycleScope.launch {
@@ -327,7 +330,7 @@ class PocActivity : ComponentActivity() {
         showSavedResult()
         if(::offersTab.isInitialized)offersTab.text="Oferty (${displayedRows().count{DesktopSummary.eligible(it)}})"
     }
-    private fun busyForTabs()=deletingResults||ocrBusy||reviewWorking()||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad
+    private fun busyForTabs()=watcherBusy||deletingResults||ocrBusy||reviewWorking()||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad
     private fun selectContentTab(offers:Boolean){
         if(busyForTabs()||!::offersPanel.isInitialized)return
         if(offers&&desktopRows.isEmpty())showSavedResult()
@@ -477,7 +480,7 @@ class PocActivity : ComponentActivity() {
     private var reviewPhotosActive=false
     private var photoLast:PhotoSummary?=null
     private var photoReportPending=false
-    private val photoPrefs get()=getSharedPreferences(groupPreference("photo_counts_v1"),MODE_PRIVATE)
+    private val photoPrefs get()=getSharedPreferences(groupPreference("photo_collection_v1"),MODE_PRIVATE)
     private fun offerPictures(id:String)=desktopThumbnails.rows(id).ifEmpty{savedThumbnails.rows(id)}
     private fun hasOfferPhoto(id:String)=desktopThumbnails.rows(id).isNotEmpty()||savedResult?.photos?.any{it.postId==id&&!it.crop}==true
     private fun savePhotos(value:PhotoSummary){photoLast=value;photoPrefs.edit().putString("last",value.encode()).commit()}
@@ -876,7 +879,7 @@ class PocActivity : ComponentActivity() {
                 "Otworzy się zwykła przeglądarka (silnik Firefox/GeckoView) tylko dla zatwierdzonej grupy testowej.\n\n" +
                     "• Logujesz się sam na oficjalnej stronie Facebooka; aplikacja nie czyta haseł ani pól formularzy.\n" +
                     "• Sesja (ciasteczka) zostaje wyłącznie w tej aplikacji na telefonie; możesz ją usunąć przyciskiem „Wyloguj i usuń dane”.\n" +
-                    "• Nic nie jest wysyłane do Flip Managera; skan uruchamiasz ręcznie i zapisuje tylko identyfikatory postów lokalnie.\n" +
+                    "• Oferty, zdjęcia i dane sesji pozostają lokalnie. Osobne parowanie z Managerem synchronizuje tylko konfigurację grup; skan uruchamiasz ręcznie.\n" +
                     "• Przy CAPTCHA, checkpoincie lub utracie dostępu automat staje.",
             )
             .setPositiveButton("Zgadzam się") { _, _ -> preferences.edit().putBoolean(KEY_CONSENT, true).apply(); openSession() }
@@ -884,11 +887,56 @@ class PocActivity : ComponentActivity() {
             .show()
     }
 
+    private fun watcherConnection(){
+        if(busyForTabs()||archiveWritePending)return
+        val input=android.widget.EditText(this).apply{
+            hint="Kod parowania z Managera (JSON)";maxLines=6
+            inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            importantForAutofill=android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+            filters=arrayOf(android.text.InputFilter.LengthFilter(4096))
+        }
+        val dialog=AlertDialog.Builder(this).setTitle("Połącz z Watcherem")
+            .setMessage("W Managerze otwórz Połącz Flip Collector i wybierz Kod dla aplikacji Android. Wklej kod poniżej. Połączenie synchronizuje aktywne grupy; oferty i zdjęcia pozostają lokalnie.")
+            .setView(input).setNegativeButton("Wróć",null)
+            .setNeutralButton("Synchronizuj grupy"){_,_->synchronizeWatcher(null)}
+            .setPositiveButton("Połącz"){_,_->val raw=input.text.toString();input.text.clear();synchronizeWatcher(raw)}.create()
+        dialog.setOnDismissListener{input.text.clear()}
+        dialog.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        dialog.show();dialog.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+    }
+    private fun synchronizeWatcher(pairing:String?){
+        if(busyForTabs()||archiveWritePending)return
+        closeSession();watcherBusy=true;render()
+        lifecycleScope.launch{
+            try{
+                val groups=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){
+                    val credentials=if(pairing==null)WatcherLink.load(this@PocActivity)?:error("WATCHER_PAIRING_REQUIRED") else WatcherLink.parsePairing(pairing)
+                    val value=WatcherLink.groups(credentials,verifyDevice=pairing!=null)
+                    if(pairing!=null)WatcherLink.save(this@PocActivity,credentials)
+                    value
+                }
+                val cache=org.json.JSONObject().put("version",1).put("groups",org.json.JSONArray(groups.map{org.json.JSONObject().put("groupId",it.id).put("url",it.url).put("name",it.name)})).toString()
+                check(preferences.edit().putString("watcher_active_groups",cache).commit())
+                archiveRevision++;savedResult=null;savedThumbnails.clear();ocrResults.clear();archiveError=null
+                WatcherGroups.setActive(groups)
+                val selected=PocPolicy.APPROVED_GROUP_ID.takeIf{WatcherGroups.isActive(it)}?:groups.firstOrNull()?.id
+                if(selected!=null){PocPolicy.selectGroup(selected);preferences.edit().putString("selected_watcher_group",selected).apply()}
+                photoLast=null;ocrLast=null;reviewLast=null;reviewSnapshot=null
+                photoReportPending=false;ocrReportPending=false;reviewReportPending=false
+                showSavedResult();readSavedResult()
+                output.text="Połączono z Watcherem. Aktywne grupy: ${groups.size}. Zapisane oferty i zdjęcia pozostały na telefonie."
+            }catch(e:kotlinx.coroutines.CancellationException){throw e}
+            catch(_:Exception){output.text="Nie zsynchronizowano grup. Sprawdź połączenie i kod parowania. Zachowana baza oraz poprzednia lista grup pozostają bez zmian."}
+            finally{watcherBusy=false;render()}
+        }
+    }
+
     private fun groupPreference(base:String)=if(PocPolicy.APPROVED_GROUP_ID==WatcherGroups.LEGACY_GROUP)base else base+"_"+PocPolicy.APPROVED_GROUP_ID
 
     private fun chooseWatcherGroup(){
         if(busyForTabs()||deletingResults||archiveWritePending)return
-        val groups=WatcherGroups.configured
+        val groups=WatcherGroups.active
+        if(groups.isEmpty()){AlertDialog.Builder(this).setMessage("Watcher nie ma aktywnych grup. Włącz grupy w Managerze i zsynchronizuj ponownie.").setPositiveButton("OK",null).show();return}
         val selected=groups.indexOfFirst{it.id==PocPolicy.APPROVED_GROUP_ID}
         AlertDialog.Builder(this).setTitle("Grupy z Watchera")
             .setSingleChoiceItems(groups.map{it.name}.toTypedArray(),selected){dialog,index->
@@ -1420,6 +1468,7 @@ class PocActivity : ComponentActivity() {
         val open = session != null
         val stop = haltMessage ?: if (open && !reviewWorking() && !desktopBusy && !shareBusy && shareResolver?.status != ShareLinkResolver.Status.CONFIRMED) PocPolicy.stopMessage(kind, loginRequested) else null
         banner.text = when {
+            watcherBusy -> "Synchronizacja grup z Watcherem…"
             stop != null -> stop
             !open -> "Sesja zamknięta. „Otwórz sesję” uruchamia przeglądarkę tylko dla grupy ${PocPolicy.APPROVED_GROUP_ID}."
             loginRequested && kind == PageKind.LOGIN -> "Logowanie ręczne na stronie Facebooka. Po zalogowaniu użyj „Wróć do grupy”."
@@ -1461,9 +1510,10 @@ class PocActivity : ComponentActivity() {
             facebookTab.isEnabled=enabled;offersTab.isEnabled=enabled
             offersTab.text="Oferty (${displayedRows().count{DesktopSummary.eligible(it)}})"
         }
-        listOf("desktopResult","reviewResult","ocrResult","deleteResults","savedOcr","photoDiagnosis","watcherGroups").forEach{buttons[it]?.isEnabled=!busyForTabs()}
+        listOf("desktopResult","reviewResult","ocrResult","deleteResults","savedOcr","photoDiagnosis","watcherGroups","watcherConnect").forEach{buttons[it]?.isEnabled=!busyForTabs()}
         buttons["savedOcr"]?.isEnabled=!busyForTabs()&&!archiveWritePending&&savedResult?.photos?.any{it.crop}==true
         if(deletingResults||ocrBusy||reviewWorking())buttons.filterKeys{it!="open"}.values.forEach{it.isEnabled=false}
+        if(watcherBusy)buttons.values.forEach{it.isEnabled=false}
         val p = probe
         diagnostics.text = buildString {
             appendLine("STAN: ${banner.text}")
@@ -1579,6 +1629,7 @@ class PocActivity : ComponentActivity() {
             orientation=LinearLayout.VERTICAL
             addView(row(button("desktopPreview","Automatyczny podgląd • 30 s"){startDesktopPreview()}))
             addView(row(button("desktopResult","Oferty"){selectContentTab(true)}))
+            addView(row(button("watcherConnect","Połącz / synchronizuj Watchera"){watcherConnection()}))
             addView(row(button("watcherGroups","Wybierz grupę Watchera"){chooseWatcherGroup()}))
             addView(row(button("deleteResults","Kasuj bazę"){askDeleteResults()}))
             addView(row(button("reviewResult","Ostatni wynik uzupełniania"){showReviewResult()}))

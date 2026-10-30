@@ -21,6 +21,13 @@ object WatcherGroups {
         WatcherGroup("w.lodzkim.dzialka.dom.mieszkanie","Nieruchomości woj. Łódzkie"),
         WatcherGroup("ogloszenia.lodzkie","Ogłoszenia Nieruchomości Łódzkie"),
     )
+    @Volatile private var activeSources:List<WatcherGroup>?=null
+    val active:List<WatcherGroup> get()=activeSources?:configured
+    fun setActive(groups:List<WatcherGroup>){
+        require(groups.map{it.id}.toSet().size==groups.size&&groups.all{find(it.id)!=null})
+        activeSources=groups.toList()
+    }
+    fun isActive(id:String)=active.any{it.id==id}
     fun find(id:String)=configured.singleOrNull{it.id==id}
     /** The old encrypted file is retained byte-for-byte; other groups cannot replace it. */
     fun archiveFile(groupId:String):String {

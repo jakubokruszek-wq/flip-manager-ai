@@ -2,7 +2,7 @@
 # Isolation guard of the GeckoView POC (run from the repo root in CI):
 #  1. the change touches only the POC directory, its workflow and nothing else
 #     (no Finder, Radar, OLX, OFFLINE_TEST, PR #44 files, backend or database);
-#  2. the POC sources contain no backend client, no production URL and no secret;
+#  2. only WatcherLink may make fixed-origin, read-only authenticated metadata requests;
 #  3. collector-core.js is byte-identical to the base branch (reused, not forked).
 set -euo pipefail
 base="${1:-origin/main}"
@@ -14,10 +14,12 @@ outside="$(echo "$changed" | grep -v -E "^($poc/|\.github/workflows/android-geck
 if [ -n "$outside" ]; then echo "FAIL: files outside the POC were changed:"; echo "$outside"; exit 1; fi
 
 src="$poc/app/src/main"
-if grep -R -n -i -E "okhttp|HttpURLConnection|URLConnection|retrofit|supabase|onrender\.com|vercel\.app|fetch\(" "$src" --include='*.kt' --include='*.js' --include='*.json' --exclude='main-transport.js' --exclude='main-bootstrap.js'; then
+if grep -R -n -i -E "okhttp|HttpURLConnection|URLConnection|retrofit|supabase|onrender\.com|vercel\.app|fetch\(" "$src" --include='*.kt' --include='*.js' --include='*.json' --exclude='main-transport.js' --exclude='main-bootstrap.js' --exclude='WatcherLink.kt'; then
   echo "FAIL: network client or backend reference in POC sources"; exit 1
 fi
-# The only client-shaped exception is the reviewed MAIN wrapper; it never originates requests.
+# WatcherLink.kt is the explicit device-token boundary for read-only group synchronization.
+# Its origin and paths are fixed; it never receives Facebook cookies or post contents.
+# The MAIN wrappers never originate requests.
 # Case-sensitive: the webRequest type name "xmlhttprequest" is a filter, not a client.
 if grep -R -n -E "XMLHttpRequest|sendBeacon|WebSocket" "$src" --include='*.kt' --include='*.js' --include='*.json' --exclude='main-transport.js' --exclude='main-bootstrap.js'; then
   echo "FAIL: network client in POC sources"; exit 1
@@ -83,4 +85,13 @@ if(!s.includes('ReviewDataGate.matches(target,group,previous.postId,fixture)') |
 NODE
 
 git diff --quiet "$base"...HEAD -- extensions/facebook-collector/collector-core.js || { echo "FAIL: collector-core.js changed"; exit 1; }
-echo "OK: POC isolated, no backend, collector-core.js unchanged"
+echo "OK: POC isolated, group metadata client bounded, collector-core.js unchanged"
+
+# New paired-device boundary: group metadata only, never browser/session/offer data.
+node - "$src/java/pl/jakubokruszek/flipwatcher/geckopoc/WatcherLink.kt" <<'NODE'
+const s=require('node:fs').readFileSync(process.argv[2],'utf8');
+if(!s.includes('const val ORIGIN="https://flip-manager-ai.vercel.app"')||!s.includes('connection.instanceFollowRedirects=false'))process.exit(1);
+if(!s.includes('path in setOf("/api/collector/devices/current","/api/collector/facebook/groups")'))process.exit(1);
+if(/requestMethod|outputStream|doOutput|CollectorChannel|GeckoSession|DesktopRow|SavedPhoto|Bitmap|CookieManager|setRequestProperty\("Cookie"/.test(s))process.exit(1);
+if((s.match(/openConnection\(/g)||[]).length!==1||!s.includes('AndroidKeyStore')||!s.includes('AES/GCM/NoPadding'))process.exit(1);
+NODE

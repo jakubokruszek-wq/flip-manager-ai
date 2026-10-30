@@ -1,11 +1,13 @@
 package pl.jakubokruszek.flipwatcher.geckopoc
 
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.After
 import org.junit.Test
 
 class WatcherGroupsTest {
-    @After fun reset(){PocPolicy.selectGroup(WatcherGroups.LEGACY_GROUP)}
+    @Before fun before(){WatcherGroups.setActive(WatcherGroups.configured);PocPolicy.selectGroup(WatcherGroups.LEGACY_GROUP)}
+    @After fun reset(){WatcherGroups.setActive(WatcherGroups.configured);PocPolicy.selectGroup(WatcherGroups.LEGACY_GROUP)}
     @Test fun watcherSnapshotExcludesDisabledGroupsAndProfiles(){
         assertEquals(11,WatcherGroups.configured.size)
         assertEquals(11,WatcherGroups.configured.map{it.id}.toSet().size)
