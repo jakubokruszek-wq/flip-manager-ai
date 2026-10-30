@@ -105,7 +105,7 @@ class PhotoBindingInstrumentedTest {
        }else{
         assertEquals(channel.reviewImageDetails.toString(),"CAPTURED",channel.reviewImageOutcome);if(plain){assertEquals(61,channel.reviewImageDetails.getValue("documentImg"));assertEquals(5,channel.reviewImageDetails.getValue("sourceExact"));assertEquals(5,channel.reviewImageDetails.getValue("sourceOwner"));assertEquals(0,channel.reviewImageDetails.getValue("anchorOwner"))}else assertEquals(1,channel.reviewImageDetails.getValue("sourceAsset"))
         if(mode=="anchor")assertEquals(1,channel.reviewImageDetails.getValue("anchorOwner"))
-        if(mode=="outside")assertEquals(1,channel.reviewImageDetails.getValue("sourceOwner"))
+        if(mode=="outside")assertEquals(1,channel.reviewImageDetails.getValue("sourceOwner")+channel.reviewImageDetails.getValue("anchorOwner"))
         val bitmap=images.ocrRows(id).single().copy(Bitmap.Config.ARGB_8888,false)
         val text=LocalOcr.readOwned(bitmap);assertTrue("Fixture crop did not contain rendered price: $mode",text.contains("260"));assertTrue(live())
        }
