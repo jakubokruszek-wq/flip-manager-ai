@@ -112,6 +112,15 @@ class PocActivity : ComponentActivity() {
     private var archiveWritePending=false
     private var archiveError:String?=null
     private var watcherBusy=false
+    private var watcherMessage:String?=null
+    private var watcherDialog:AlertDialog?=null
+    private var watcherResultDialog:AlertDialog?=null
+    private fun showPendingWatcherResult(){
+        if(!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)||isFinishing||isDestroyed)return
+        val message=watcherMessage?:return;watcherMessage=null
+        watcherResultDialog?.dismiss()
+        watcherResultDialog=AlertDialog.Builder(this).setTitle("Połączenie z Watcherem").setMessage(message).setPositiveButton("OK",null).create().also{it.show()}
+    }
     private var deletingResults=false
     internal var deleteResultsDialog:AlertDialog?=null; private set
     private fun displayedRows()=desktopRows.ifEmpty{savedResult?.rows.orEmpty()}
@@ -212,13 +221,14 @@ class PocActivity : ComponentActivity() {
 
     override fun onDestroy() {
         diagnosticsDialog?.dismiss()
+        watcherDialog?.dismiss();watcherResultDialog?.dismiss()
         deleteResultsDialog?.dismiss();savedThumbnails.clear()
         lastShareResultDialog?.dismiss()
         closeSession()
         super.onDestroy()
     }
 
-    override fun onResume(){super.onResume();if(!reviewWorking())runCatching{session?.setActive(true)};window.decorView.post{showSavedResult();showPendingPhotosReport();showPendingReviewReport();showPendingOcrReport()}}
+    override fun onResume(){super.onResume();if(!reviewWorking())runCatching{session?.setActive(true)};window.decorView.post{showSavedResult();showPendingPhotosReport();showPendingReviewReport();showPendingOcrReport();showPendingWatcherResult()}}
 
     override fun onPause() {
         ocrConsentDialog?.dismiss();ocrConsentDialog=null;cancelOcr("PAUSED")
@@ -890,6 +900,7 @@ class PocActivity : ComponentActivity() {
     private fun watcherConnection(){
         if(busyForTabs()||archiveWritePending)return
         val input=android.widget.EditText(this).apply{
+            tag="watcher.pairing.code"
             hint="Kod parowania z Managera (JSON)";maxLines=6
             inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
             importantForAutofill=android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
@@ -900,7 +911,8 @@ class PocActivity : ComponentActivity() {
             .setView(input).setNegativeButton("Wróć",null)
             .setNeutralButton("Synchronizuj grupy"){_,_->synchronizeWatcher(null)}
             .setPositiveButton("Połącz"){_,_->val raw=input.text.toString();input.text.clear();synchronizeWatcher(raw)}.create()
-        dialog.setOnDismissListener{input.text.clear()}
+        watcherDialog=dialog
+        dialog.setOnDismissListener{input.text.clear();if(watcherDialog===dialog)watcherDialog=null}
         dialog.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
         dialog.show();dialog.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
     }
@@ -924,10 +936,11 @@ class PocActivity : ComponentActivity() {
                 photoLast=null;ocrLast=null;reviewLast=null;reviewSnapshot=null
                 photoReportPending=false;ocrReportPending=false;reviewReportPending=false
                 showSavedResult();readSavedResult()
-                output.text="Połączono z Watcherem. Aktywne grupy: ${groups.size}. Zapisane oferty i zdjęcia pozostały na telefonie."
+                watcherMessage="Połączono z Watcherem. Aktywne grupy: ${groups.size}. Zapisane oferty i zdjęcia pozostały na telefonie."
+                output.text=watcherMessage
             }catch(e:kotlinx.coroutines.CancellationException){throw e}
-            catch(_:Exception){output.text="Nie zsynchronizowano grup. Sprawdź połączenie i kod parowania. Zachowana baza oraz poprzednia lista grup pozostają bez zmian."}
-            finally{watcherBusy=false;render()}
+            catch(_:Exception){watcherMessage="Nie zsynchronizowano grup. Sprawdź połączenie i kod parowania. Zachowana baza oraz poprzednia lista grup pozostają bez zmian.";output.text=watcherMessage}
+            finally{watcherBusy=false;render();showPendingWatcherResult()}
         }
     }
 
