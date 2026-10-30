@@ -19,7 +19,7 @@ function photoMatch(raw,known){
  const key=photoAssetKey(raw);return key&&key===photoAssetKey(known)?2:0;
 }
 function create(){const used=new Set();return {async read(w,m,core,preview,exact,request){
- const details={documentImg:0,rawImg:0,rawSvg:0,rawCss:0,sourceProof:0,ownerAccepted:0,ownerRejected:0,sizeRejected:0,qualified:0,sourceExact:0,sourceAsset:0,sourceMiss:0,noArticle:0,foreignOwner:0,anchorOwner:0,excludedOwner:0,sourceOwner:0};
+ const details={documentImg:0,rawImg:0,rawSvg:0,rawCss:0,sourceProof:0,ownerAccepted:0,ownerRejected:0,sizeRejected:0,qualified:0,sourceExact:0,sourceAsset:0,sourceMiss:0,noArticle:0,foreignOwner:0,anchorOwner:0,excludedOwner:0,sourceOwner:0,regionMissing:0,regionAmbiguous:0,regionHidden:0,regionExcluded:0,regionLimit:0};
  const result=(status,count=0,reason=status==='STOP'?'CONTEXT':count===1?'CAPTURED':'NO_IMAGE')=>{const filters=root.FlipReviewPost.ownPhotoFilters(w,m);return{status,count,reason,details:{...details},...(filters?{filters}:{})};};
  const safe=()=>m.consent===true&&m.ocrConsent===true&&/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(m.nonce||'')&&w.location.href===m.expectedUrl&&exact(w.location.href,m.groupId,m.postId,m.fixture===true)&&['interactive','complete'].includes(w.document.readyState)&&w.document.visibilityState==='visible'&&!w.document.hidden&&w.document.hasFocus?.()===true&&!/log in|logowanie|captcha|checkpoint|security check/i.test(w.document.title||'')&&!w.document.querySelector('input[type="password"],form[action*="login"],form[action*="checkpoint"],iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="captcha"],[role="alertdialog"]');
  if(!safe()||used.has(m.nonce))return result('STOP');used.add(m.nonce);while(used.size>32)used.delete(used.values().next().value);
@@ -56,14 +56,21 @@ function create(){const used=new Set();return {async read(w,m,core,preview,exact
  const ownSourceScope=(n,audit=false)=>{
   if(n.tagName!=='IMG'||!sources().includes(source(n)))return null;
   const blockedRegion=excluded+',aside,nav,header,footer,[role="complementary"],[role="menu"],[role="listbox"]';
-  const visible=r=>r.ownerDocument===w.document&&r.isConnected!==false&&!r.closest(blockedRegion)&&r.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})!==false;
+  const reject=reason=>{if(audit)bump(reason);return null;};
+  // A semantic region can have display:contents and therefore no CSS box.
+  // Its already-visible candidate proves this ancestor is not hiding it.
+  const visible=r=>r.ownerDocument===w.document&&r.isConnected!==false&&!r.closest(blockedRegion)&&(r.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})!==false||r.contains(n)&&w.getComputedStyle(r).display==='contents');
   const dialog=n.closest('[role="dialog"]'),main=n.closest('main,[role="main"]');
   let scope=dialog||main;
   const roots=Array.from(w.document.querySelectorAll(scope?(dialog?'[role="dialog"]':'main,[role="main"]'):'main,[role="main"],[role="dialog"]'));
-  if(roots.length>20)return null;const active=roots.filter(visible);
-  if(scope){if(active.length!==1||active[0]!==scope)return null;}
-  else{if(active.length||!w.document.body)return null;scope=w.document.body;}
-  if(!visible(scope)||!scope.contains(n)||n.closest(blockedRegion))return null;
+  if(roots.length>20)return reject('regionLimit');const active=roots.filter(visible);
+  // Nested semantic aliases are one region; independent visible roots remain
+  // ambiguous. Never allow a sibling main merely because an outer main exists.
+  if(scope){if(!active.includes(scope))return reject('regionHidden');if(active.some(r=>r!==scope&&!r.contains(scope)))return reject('regionAmbiguous');}
+  else{if(active.length)return reject('regionMissing');if(!w.document.body)return reject('regionMissing');scope=w.document.body;}
+  if(n.closest(blockedRegion))return reject('regionExcluded');
+  if(!scope.contains(n))return reject('regionMissing');
+  if(!visible(scope))return reject('regionHidden');
   const conflict=a=>{
    let u;try{u=new URL(preview.photoAnchorHref(a)||'',w.location.href);}catch{return true;}
    const encloses=a===n||a.contains?.(n);
@@ -83,14 +90,14 @@ function create(){const used=new Set();return {async read(w,m,core,preview,exact
   };
   let p=n,depth=0;
   while(p&&depth++<32){
-   if(p.ownerDocument!==w.document||p.isConnected===false)return null;
+   if(p.ownerDocument!==w.document||p.isConnected===false)return reject('regionMissing');
    if(/comment|komentarz|reply|odpowiedź|suggest|recommend|polecan|proponowan/i.test(p.getAttribute?.('aria-label')||'')){if(audit)bump('excludedOwner');return null;}
    for(const attr of ['data-post-id','data-story-id']){const id=p.getAttribute?.(attr);if(id&&/^\d{5,30}$/.test(id)&&id!==m.postId){if(audit)bump('foreignOwner');return null;}}
    if(p.tagName==='A'&&p.hasAttribute?.('href')&&conflict(p)){if(audit)bump('foreignOwner');return null;}
    if(p===scope)break;p=p.parentElement;
   }
-  if(p!==scope)return null;
-  const anchors=Array.from(scope.querySelectorAll('a[href]'));if(anchors.length>200)return null;
+  if(p!==scope)return reject('regionLimit');
+  const anchors=Array.from(scope.querySelectorAll('a[href]'));if(anchors.length>200)return reject('regionLimit');
   for(const a of anchors){
    if(a.closest(blockedRegion)||a.closest('[role="article"],article')||a.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})===false)continue;
    const d=a.closest('[role="dialog"]');if(d&&d!==dialog)continue;

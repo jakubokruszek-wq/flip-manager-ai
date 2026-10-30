@@ -11,6 +11,7 @@ data class PhotoDiagnosis(val postId:String,val reason:String,val details:Map<St
         "Źródła potwierdzonego posta: ${details.getValue("sourceProof")} • powiązane elementy ${details.getValue("ownerAccepted")} • odrzucone powiązanie ${details.getValue("ownerRejected")} • odrzucony rozmiar ${details.getValue("sizeRejected")} • zakwalifikowane ${details.getValue("qualified")}\n")+
         "Dopasowanie źródła: dokładne ${details["sourceExact"]?:0} • ten sam plik CDN ${details["sourceAsset"]?:0} • brak dopasowania ${details["sourceMiss"]?:0}\n"+
         "Kontener: brak article ${details["noArticle"]?:0} • jawny link wybranego posta ${details["anchorOwner"]?:0} • własne źródło bez linku ${details["sourceOwner"]?:0} • obca tożsamość ${details["foreignOwner"]?:0} • komentarz/cytat ${details["excludedOwner"]?:0}. Nowe liczniki są zerowe także dla prób ze starszej wersji.\n"+
+        "Odrzucony obszar: brak właściwego ${details["regionMissing"]?:0} • niezależne obszary ${details["regionAmbiguous"]?:0} • ukryty ${details["regionHidden"]?:0} • wykluczony ${details["regionExcluded"]?:0} • limit przeglądania ${details["regionLimit"]?:0}.\n"+
         if(checks.isEmpty())"Etap zdjęcia nie został potwierdzony." else ReviewImageChecks.report(checks)
     companion object{
         fun decode(raw:String?):PhotoDiagnosis?=runCatching{

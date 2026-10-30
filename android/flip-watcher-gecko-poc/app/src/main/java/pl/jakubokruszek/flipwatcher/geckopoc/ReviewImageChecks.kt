@@ -20,10 +20,12 @@ object ReviewImageChecks{
  }
  private val legacyDetailKeys=setOf("documentImg","rawImg","rawSvg","rawCss","sourceProof","ownerAccepted","ownerRejected","sizeRejected","qualified")
  private val renditionDetailKeys=legacyDetailKeys+setOf("sourceExact","sourceAsset","sourceMiss","noArticle","foreignOwner","anchorOwner","excludedOwner")
- val detailKeys=renditionDetailKeys+"sourceOwner"
+ private val sourceDetailKeys=renditionDetailKeys+"sourceOwner"
+ val regionDetailKeys=setOf("regionMissing","regionAmbiguous","regionHidden","regionExcluded","regionLimit")
+ val detailKeys=sourceDetailKeys+regionDetailKeys
  fun details(j:JSONObject?):Map<String,Int>?{
   if(j==null)return null;if(!j.has("details"))return emptyMap()
-  val d=j.optJSONObject("details")?:return null;val actual=d.keys().asSequence().toSet();if(actual!=detailKeys&&actual!=renditionDetailKeys&&actual!=legacyDetailKeys)return null
+  val d=j.optJSONObject("details")?:return null;val actual=d.keys().asSequence().toSet();if(actual!=detailKeys&&actual!=sourceDetailKeys&&actual!=renditionDetailKeys&&actual!=legacyDetailKeys)return null
   val result=detailKeys.associateWith{k->val n=if(k in actual)d.opt(k)else 0;if(n !is Int||n !in 0..700)return null;n}
   if(result.getValue("documentImg")>500||result.getValue("sourceProof")>20||result.getValue("qualified")+result.getValue("sizeRejected")>result.getValue("ownerAccepted")||result.getValue("sourceOwner")>result.getValue("sourceExact")||result.getValue("sourceOwner")>result.getValue("ownerAccepted"))return null
   return result

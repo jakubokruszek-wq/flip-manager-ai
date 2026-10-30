@@ -148,3 +148,28 @@ test('exact own photo may have an album or gm link without treating album/media 
   assert.equal((await h.run()).count,0,set);assert.equal(h.calls.length,0,set);
  }
 });
+
+test('boxless display contents main and body retain exact-source ownership of visible images',async()=>{
+ for(const bodyOnly of [false,true]){
+  const h=plainOwnPhoto(bodyOnly);h.main.checkVisibility=()=>false;h.w.getComputedStyle=()=>({display:'contents',pointerEvents:'auto'});
+  const r=await h.run();assert.equal(r.reason,'CAPTURED');assert.equal(r.details.sourceOwner,1);assert.equal(r.details.regionHidden,0);
+ }
+ const hidden=plainOwnPhoto();hidden.main.checkVisibility=()=>false;hidden.w.getComputedStyle=()=>({display:'none'});const r=await hidden.run();assert.equal(r.count,0);assert.equal(r.details.regionHidden,1);
+});
+test('nested main aliases are one region but independent sibling roots stay ambiguous',async()=>{
+ for(const sibling of [false,true]){
+  const h=plainOwnPhoto();const outer={...h.main,contains:n=>n===h.main||n===h.image};const independent={...h.main,contains:()=>false};const previous=h.doc.querySelectorAll;
+  h.doc.querySelectorAll=s=>s==='main,[role="main"]'?[outer,h.main,...(sibling?[independent]:[])]:previous(s);
+  const r=await h.run();assert.equal(r.reason,sibling?'NO_IMAGE':'CAPTURED');assert.equal(r.details.regionAmbiguous,sibling?1:0);assert.equal(h.calls.length,sibling?0:2);
+ }
+});
+test('region limit and absent scope produce explicit count-only diagnostics',async()=>{
+ for(const kind of ['roots','depth','anchors','missing']){
+  const h=plainOwnPhoto();
+  if(kind==='roots'){const previous=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='main,[role="main"]'?Array(21).fill(h.main):previous(s);}
+  if(kind==='depth'){let p=h.main;for(let i=0;i<40;i++)p={ownerDocument:h.doc,isConnected:true,parentElement:p,getAttribute:()=>null};h.wrapper.parentElement=p;}
+  if(kind==='anchors')h.main.querySelectorAll=()=>Array(201).fill({});
+  if(kind==='missing'){h.image.closest=()=>null;h.doc.body=null;}
+  const r=await h.run();assert.equal(r.count,0,kind);assert.equal(r.details[kind==='missing'?'regionMissing':'regionLimit'],1,kind);assert.equal(h.calls.length,0,kind);assert(Object.values(r.details).every(Number.isInteger));
+ }
+});

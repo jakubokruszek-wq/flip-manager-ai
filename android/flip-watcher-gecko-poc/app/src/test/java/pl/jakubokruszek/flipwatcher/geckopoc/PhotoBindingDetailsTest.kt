@@ -24,9 +24,20 @@ class PhotoBindingDetailsTest {
   }
  }
  @Test fun previousSixteenCounterDiagnosisGetsZeroForNewSourceScopeCounter(){
-  val old=ReviewImageChecks.detailKeys.filter{it!="sourceOwner"}.associateWith{0}
+  val old=ReviewImageChecks.detailKeys.filter{it!="sourceOwner"&&it !in ReviewImageChecks.regionDetailKeys}.associateWith{0}
   val restored=PhotoDiagnosis.decode(PhotoDiagnosis("550000000000091","NO_IMAGE",old,emptyMap()).encode())!!
   assertEquals(0,restored.details.getValue("sourceOwner"));assertTrue(restored.report().contains("własne źródło bez linku 0"))
+ }
+ @Test fun previousSeventeenCounterDiagnosisGetsZeroForRegionCounters(){
+  val old=ReviewImageChecks.detailKeys.filter{it !in ReviewImageChecks.regionDetailKeys}.associateWith{0}
+  val restored=PhotoDiagnosis.decode(PhotoDiagnosis("550000000000091","NO_IMAGE",old,emptyMap()).encode())!!
+  for(key in ReviewImageChecks.regionDetailKeys)assertEquals(0,restored.details.getValue(key))
+ }
+ @Test fun regionReasonsRoundTripWithoutAllowingStringsOrUnknownFields(){
+  val values=ReviewImageChecks.detailKeys.associateWith{if(it in ReviewImageChecks.regionDetailKeys)5 else 0}
+  val diagnosis=PhotoDiagnosis("550000000000091","NO_IMAGE",values,emptyMap());assertEquals(diagnosis,PhotoDiagnosis.decode(diagnosis.encode()))
+  assertTrue(diagnosis.report().contains("niezależne obszary 5"))
+  for(key in ReviewImageChecks.regionDetailKeys){val bad=JSONObject(values).put(key,"5");assertNull(ReviewImageChecks.details(JSONObject().put("details",bad)))}
  }
  @Test fun exactSourceScopeCountersRoundTripAndCannotExceedAcceptedOrExactMatches(){
   val values=ReviewImageChecks.detailKeys.associateWith{0}.toMutableMap().apply{put("documentImg",61);put("rawImg",61);put("sourceProof",5);put("sourceExact",5);put("sourceOwner",5);put("noArticle",5);put("ownerAccepted",5);put("qualified",5)}
