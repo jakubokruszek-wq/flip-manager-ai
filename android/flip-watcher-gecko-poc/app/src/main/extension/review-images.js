@@ -120,7 +120,10 @@ function create(){const used=new Set();return {async read(w,m,core,preview,exact
   const dom=card&&card.isConnected!==false&&root.FlipReviewPost.cards(w,m,core,preview).includes(card)&&(n.closest('[role="article"],article')===card||region!==card&&!n.closest('[role="article"],article'))&&region.contains(n);
   if(dom){if(audit)sourceMatch(source(n),true);return true;}return proofOwn(n,audit);
  };
- const scope=region||w.document,limit=region?100:500;
+ // When a verified post has its media rendered outside the article card,
+ // inspect the document too, but keep the existing per-image ownership proof.
+ // This never grants ownership based on proximity or selection order.
+ const scope=region&&sources().length===0?region:w.document,limit=region&&sources().length===0?100:500;
  const pool=Array.from(scope.querySelectorAll('img')).slice(0,limit);details.rawImg=pool.length;
  for(const n of Array.from(scope.querySelectorAll('svg image')).slice(0,100)){
   details.rawSvg++;const svg=preview.photoSvgRoot(n);if(!svg||rendered.has(svg))continue;
