@@ -129,7 +129,8 @@ class PocActivity : ComponentActivity() {
                     android.graphics.BitmapFactory.decodeByteArray(p.jpeg,0,p.jpeg.size)?.let{savedThumbnails.put(p.postId,p.slot,it)}
                 }
             }.onFailure{archiveError="Nie udało się odczytać zapisanej bazy. Plik pozostaje zachowany; nie zastępujemy go pustym wynikiem."}
-            showSavedResult();render()
+            if(::offersPanel.isInitialized&&desktopRows.isNotEmpty())offersPanel.showRows(desktopRows,thumbnails=::offerPictures)else showSavedResult()
+            render()
             if(desktopRows.isEmpty()&&session==null&&savedResult?.rows?.isNotEmpty()==true&&!busyForTabs())selectContentTab(true)
         }
     }
@@ -312,7 +313,7 @@ class PocActivity : ComponentActivity() {
         desktopThumbnails.retain(desktopRows.map{it.postId}.toSet())
         val saved=runCatching{desktopPrefs.edit().putString("last",summary.encode()).commit()}.getOrDefault(false)
         output.text=summary.report()+if(saved)"" else "\nUWAGA: nie zapisano raportu; skopiuj teraz."
-        if(::offersPanel.isInitialized){if(desktopRows.isEmpty())showSavedResult() else offersPanel.showRows(desktopRows,thumbnails={desktopThumbnails.rows(it)})}
+        if(::offersPanel.isInitialized){if(desktopRows.isEmpty())showSavedResult() else offersPanel.showRows(desktopRows,thumbnails=::offerPictures)}
         if(show&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))selectContentTab(true)
         render()
     }
@@ -368,7 +369,7 @@ class PocActivity : ComponentActivity() {
             selectContentTab(true)
         }
         if(result.reason=="NO_OWN_POST"&&desktopRows.isNotEmpty()){
-            offersPanel.showRows(desktopRows,"Nie odczytano szczegółów. Dotychczasowe wyniki grupy pozostają dostępne; możesz otworzyć post ręcznie.",thumbnails={desktopThumbnails.rows(it)})
+            offersPanel.showRows(desktopRows,"Nie odczytano szczegółów. Dotychczasowe wyniki grupy pozostają dostępne; możesz otworzyć post ręcznie.",thumbnails=::offerPictures)
             selectContentTab(true)
         }
         showReviewResult()
@@ -419,7 +420,7 @@ class PocActivity : ComponentActivity() {
                         if(!ocrBusy||ocrEpoch!=epoch)return@launch
                         ocrBusy=false;saveOcr(outcome.summary);ocrReportPending=true
                         if(outcome.summary.reason=="DONE"){ocrResults.putAll(outcome.rows);saveResult()} else if(outcome.summary.reason in setOf("CONTEXT","PROTOCOL"))clearDesktopDetails()
-                        offersPanel.showRows(desktopRows,"OCR: ${outcome.summary.suggestions} wyników do sprawdzenia",thumbnails={desktopThumbnails.rows(it)})
+                        offersPanel.showRows(desktopRows,"OCR: ${outcome.summary.suggestions} wyników do sprawdzenia",thumbnails=::offerPictures)
                     }catch(_:kotlinx.coroutines.TimeoutCancellationException){if(ocrBusy&&ocrEpoch==epoch){ocrBusy=false;saveOcr((ocrLast?:OcrSummary("INTERRUPTED",count,0,0,0,0)).copy(reason="TIMEOUT"));ocrReportPending=true}}
                     catch(e:kotlinx.coroutines.CancellationException){throw e}
                     catch(_:Exception){if(ocrBusy&&ocrEpoch==epoch){ocrBusy=false;saveOcr((ocrLast?:OcrSummary("INTERRUPTED",count,0,0,0,0)).copy(reason="ERROR"));ocrReportPending=true}}
@@ -462,7 +463,7 @@ class PocActivity : ComponentActivity() {
                     if(outcome.rows.values.any{candidate->persisted.ocr.none{it==candidate}})throw IllegalStateException("SAVE_FAILED")
                 }
                 if(live()){
-                    if(desktopRows==saved.rows){ocrResults.putAll(saved.ocr.associateBy{it.postId});ocrResults.putAll(outcome.rows);offersPanel.showRows(desktopRows,"OCR zapisanych zdjęć: ${outcome.summary.suggestions} nowych sugestii do sprawdzenia",thumbnails={desktopThumbnails.rows(it)})}
+                    if(desktopRows==saved.rows){ocrResults.putAll(saved.ocr.associateBy{it.postId});ocrResults.putAll(outcome.rows);offersPanel.showRows(desktopRows,"OCR zapisanych zdjęć: ${outcome.summary.suggestions} nowych sugestii do sprawdzenia",thumbnails=::offerPictures)}
                     saveOcr(outcome.summary);ocrBusy=false;ocrReportPending=true
                 }
             }catch(_:kotlinx.coroutines.TimeoutCancellationException){if(live()){saveOcr((ocrLast?:OcrSummary("TIMEOUT",saved.rows.size,0,0,0,0)).copy(reason="TIMEOUT"));ocrReportPending=true}}
@@ -475,7 +476,7 @@ class PocActivity : ComponentActivity() {
     private var photoLast:PhotoSummary?=null
     private var photoReportPending=false
     private val photoPrefs by lazy{getSharedPreferences("photo_collection_v1",MODE_PRIVATE)}
-    private fun offerPictures(id:String)=savedThumbnails.rows(id).ifEmpty{desktopThumbnails.rows(id)}
+    private fun offerPictures(id:String)=desktopThumbnails.rows(id).ifEmpty{savedThumbnails.rows(id)}
     private fun hasOfferPhoto(id:String)=desktopThumbnails.rows(id).isNotEmpty()||savedResult?.photos?.any{it.postId==id&&!it.crop}==true
     private fun savePhotos(value:PhotoSummary){photoLast=value;photoPrefs.edit().putString("last",value.encode()).commit()}
     private fun showPhotosReport(){
@@ -641,7 +642,7 @@ class PocActivity : ComponentActivity() {
                         if(outcome.summary.reason=="DONE"){
                             ocrResults.putAll(previousOcr)
                             if(withOcr){ocrResults.putAll(pendingOcr);ocrProgress("DONE",completed=outcome.summary);ocrReportPending=true};desktopRows=outcome.rows.take(20);desktopThumbnails.retain(desktopRows.map{it.postId}.toSet())
-                            offersPanel.showRows(desktopRows,"Uzupełniono: ${outcome.summary.enriched} • bez potwierdzonego odczytu: ${outcome.summary.unresolved}",thumbnails={desktopThumbnails.rows(it)})
+                            offersPanel.showRows(desktopRows,"Uzupełniono: ${outcome.summary.enriched} • bez potwierdzonego odczytu: ${outcome.summary.unresolved}",thumbnails=::offerPictures)
                             saveResult()
                             output.text=outcome.summary.report();selectContentTab(true);render()
                         }else{
@@ -650,7 +651,7 @@ class PocActivity : ComponentActivity() {
                             publishReviewFailure(outcome.summary,preservePreview=keep)
                             if(withOcr&&keep){
                                 ocrResults.putAll(previousOcr);ocrResults.putAll(cachedOcr);saveResult()
-                                offersPanel.showRows(desktopRows,"OCR z pamięci ukończony; otwieranie zatrzymane. Dotychczasowe wyniki pozostają dostępne.",thumbnails={desktopThumbnails.rows(it)})
+                                offersPanel.showRows(desktopRows,"OCR z pamięci ukończony; otwieranie zatrzymane. Dotychczasowe wyniki pozostają dostępne.",thumbnails=::offerPictures)
                                 selectContentTab(true)
                             }
                             output.text=outcome.summary.report();render()

@@ -54,6 +54,7 @@ class PhotoCollectionInstrumentedTest {
    scenario.onActivity{a->val reply=DesktopReply("OK","DONE",listOf(updated),DesktopProtocol.emptyStats().toMutableMap().apply{put("candidates",1);put("verified",1);put("desktop",1);put("dom",1)});a.publishDesktop(DesktopSummary.create("DONE",0,reply),listOf(updated),show=false)}
    ArchiveTestSupport.drain(context)
    val saved=ResultArchive(context).load()!!;assertEquals(updated,saved.rows.single());assertEquals(1,saved.photos.size);assertEquals(r.postId,saved.photos.single().postId)
+   scenario.onActivity{a->assertNotNull(a.findViewById<ViewGroup>(android.R.id.content).findViewWithTag<android.view.View>("poc.offer.photo.${r.postId}.0"))}
   }}finally{ArchiveTestSupport.clear(context)}
  }
  @Test fun photosButtonIncludesRecognizedOffersAndDoesNotInvokeOcr(){
