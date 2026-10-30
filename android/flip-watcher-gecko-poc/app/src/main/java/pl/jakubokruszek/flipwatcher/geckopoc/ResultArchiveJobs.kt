@@ -14,12 +14,12 @@ object ResultArchiveJobs {
     suspend fun read(context:Context):Result<SavedResult?> = kotlinx.coroutines.suspendCancellableCoroutine{continuation->
         load(context){value->if(continuation.isActive)continuation.resumeWith(Result.success(value))}
     }
-    fun load(context:Context,done:(Result<SavedResult?>)->Unit){val app=context.applicationContext
-        worker.execute{val result=runCatching{ResultArchive(app).load()};main.post{done(result)}}
+    fun load(context:Context,done:(Result<SavedResult?>)->Unit){val app=context.applicationContext;val groupId=PocPolicy.APPROVED_GROUP_ID
+        worker.execute{val result=runCatching{ResultArchive(app,groupId).load()};main.post{done(result)}}
     }
     fun save(context:Context,rows:List<DesktopRow>,ocr:List<DesktopRow>,images:DesktopThumbnails?,replacePhotos:Boolean=false,done:(Boolean)->Unit){
         if(rows.isEmpty())return
-        val app=context.applicationContext;val copies=mutableListOf<OwnedPhoto>()
+        val app=context.applicationContext;val groupId=PocPolicy.APPROVED_GROUP_ID;val copies=mutableListOf<OwnedPhoto>()
         // Copy bounded pixel ownership before the Activity is allowed to recycle its cache.
         try{if(images!=null)for(row in rows){
             for((slot,b) in images.rows(row.postId).withIndex())copies+=OwnedPhoto(row.postId,slot,false,checkNotNull(b.copy(Bitmap.Config.ARGB_8888,false)))
@@ -28,7 +28,7 @@ object ResultArchiveJobs {
         val timestamp=System.currentTimeMillis()
         worker.execute{
             val success=try{
-                val store=ResultArchive(app)
+                val store=ResultArchive(app,groupId)
                 val previous=if(!replacePhotos)store.load() else null
                 val ids=rows.map{it.postId}.toSet()
                 val incoming=copies.map{ResultArchive.photo(it.id,it.slot,it.crop,it.bitmap)}
@@ -46,8 +46,8 @@ object ResultArchiveJobs {
             save(context,rows,ocr,images){ok->if(continuation.isActive)continuation.resumeWith(Result.success(ok))}
         }
     }
-    fun delete(context:Context,done:(Boolean)->Unit){val app=context.applicationContext
+    fun delete(context:Context,done:(Boolean)->Unit){val app=context.applicationContext;val groupId=PocPolicy.APPROVED_GROUP_ID
         // FIFO: every earlier save finishes before deletion. No queued write can resurrect it.
-        worker.execute{val ok=runCatching{ResultArchive(app).delete()}.isSuccess;main.post{done(ok)}}
+        worker.execute{val ok=runCatching{ResultArchive(app,groupId).delete()}.isSuccess;main.post{done(ok)}}
     }
 }

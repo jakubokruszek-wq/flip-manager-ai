@@ -89,7 +89,7 @@ class PocActivity : ComponentActivity() {
     private var reviewLast:ReviewDataSummary?=null
     private var reviewSnapshot:ReviewDataSummary?=null
     private var reviewReportPending=false
-    private val reviewPrefs by lazy {getSharedPreferences("review_data_counts_v1",MODE_PRIVATE)}
+    private val reviewPrefs get()=getSharedPreferences(groupPreference("review_data_counts_v1"),MODE_PRIVATE)
     private var desktopBusy=false
     private var desktopGate:DesktopTrial?=null
     private var desktopNonce:String?=null
@@ -104,7 +104,7 @@ class PocActivity : ComponentActivity() {
     private var ocrReportPending=false
     private var reviewOcrActive=false
     private val ocrResults=linkedMapOf<String,DesktopRow>()
-    private val ocrPrefs by lazy{getSharedPreferences("ocr_counts_v1",MODE_PRIVATE)}
+    private val ocrPrefs get()=getSharedPreferences(groupPreference("ocr_counts_v1"),MODE_PRIVATE)
     private var desktopRows:List<DesktopRow> = emptyList()
     private var savedResult:SavedResult?=null
     private val savedThumbnails=DesktopThumbnails()
@@ -151,7 +151,7 @@ class PocActivity : ComponentActivity() {
         if(busyForTabs()||deletingResults)return
         deleteResultsDialog?.dismiss()
         deleteResultsDialog=AlertDialog.Builder(this).setTitle("Kasuj bazę")
-            .setMessage("Usunąć zachowany wynik wyszukiwania, zdjęcia i sugestie OCR z tej nakładki? Nie wyloguje to z Facebooka. Historia wysłanych danych i limity skanu pozostają bez zmian.")
+            .setMessage("Usunąć zachowany wynik wyszukiwania, zdjęcia i sugestie OCR wybranej grupy? Nie wyloguje to z Facebooka. Historia wysłanych danych i limity skanu pozostają bez zmian.")
             .setNegativeButton("Anuluj",null).setPositiveButton("Kasuj bazę"){_,_->
                 deletingResults=true;archiveRevision++;clearDesktopDetails();render()
                 ResultArchiveJobs.delete(this){success->
@@ -164,7 +164,7 @@ class PocActivity : ComponentActivity() {
             }.create().also{it.show()}
     }
     private var desktopResultText:TextView?=null
-    private val desktopPrefs by lazy { getSharedPreferences("desktop_trial_summary_v1",MODE_PRIVATE) }
+    private val desktopPrefs get()=getSharedPreferences(groupPreference("desktop_trial_summary_v1"),MODE_PRIVATE)
     private var shareResolver: ShareLinkResolver? = null
     internal var lastShareResultDialog: AlertDialog? = null; private set
     private val shareResults by lazy { ShareLinkResultStore(this) }
@@ -194,6 +194,8 @@ class PocActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if(android.os.Build.VERSION.SDK_INT>=33)setRecentsScreenshotEnabled(false)
+        PocPolicy.selectGroup(preferences.getString("selected_watcher_group",WatcherGroups.LEGACY_GROUP)
+            ?.takeIf{WatcherGroups.find(it)!=null}?:WatcherGroups.LEGACY_GROUP)
         setContentView(buildLayout())
         readSavedResult()
         lifecycleScope.launch {
@@ -475,7 +477,7 @@ class PocActivity : ComponentActivity() {
     private var reviewPhotosActive=false
     private var photoLast:PhotoSummary?=null
     private var photoReportPending=false
-    private val photoPrefs by lazy{getSharedPreferences("photo_collection_v1",MODE_PRIVATE)}
+    private val photoPrefs get()=getSharedPreferences(groupPreference("photo_counts_v1"),MODE_PRIVATE)
     private fun offerPictures(id:String)=desktopThumbnails.rows(id).ifEmpty{savedThumbnails.rows(id)}
     private fun hasOfferPhoto(id:String)=desktopThumbnails.rows(id).isNotEmpty()||savedResult?.photos?.any{it.postId==id&&!it.crop}==true
     private fun savePhotos(value:PhotoSummary){photoLast=value;photoPrefs.edit().putString("last",value.encode()).commit()}
@@ -554,7 +556,7 @@ class PocActivity : ComponentActivity() {
             .setNegativeButton("Anuluj",null).setPositiveButton("Zapisz zdjęcia"){_,_->start()}.create().also{it.setCanceledOnTouchOutside(false);it.show()}
     }
 
-    private val photoDiagnosisPrefs by lazy{getSharedPreferences("photo_diagnosis_v1",MODE_PRIVATE)}
+    private val photoDiagnosisPrefs get()=getSharedPreferences(groupPreference("photo_diagnosis_v1"),MODE_PRIVATE)
     private fun savePhotoDiagnosis(id:String,reason:String,details:Map<String,Int>,checks:Map<String,Int>){
         photoDiagnosisPrefs.edit().putString("last",PhotoDiagnosis(id,reason,details,checks).encode()).commit()
     }
@@ -882,6 +884,30 @@ class PocActivity : ComponentActivity() {
             .show()
     }
 
+    private fun groupPreference(base:String)=if(PocPolicy.APPROVED_GROUP_ID==WatcherGroups.LEGACY_GROUP)base else base+"_"+PocPolicy.APPROVED_GROUP_ID
+
+    private fun chooseWatcherGroup(){
+        if(busyForTabs()||deletingResults||archiveWritePending)return
+        val groups=WatcherGroups.configured
+        val selected=groups.indexOfFirst{it.id==PocPolicy.APPROVED_GROUP_ID}
+        AlertDialog.Builder(this).setTitle("Grupy z Watchera")
+            .setSingleChoiceItems(groups.map{it.name}.toTypedArray(),selected){dialog,index->
+                val group=groups[index]
+                if(busyForTabs()||deletingResults||archiveWritePending){dialog.dismiss();return@setSingleChoiceItems}
+                if(group.id!=PocPolicy.APPROVED_GROUP_ID){
+                    // Close/cancel while the old policy is still active; old disk jobs already own their group.
+                    closeSession();archiveRevision++;savedResult=null;savedThumbnails.clear();archiveError=null
+                    ocrResults.clear();photoLast=null;photoReportPending=false;ocrLast=null;ocrReportPending=false
+                    reviewSnapshot=null;reviewLast=null;reviewReportPending=false
+                    PocPolicy.selectGroup(group.id)
+                    preferences.edit().putString("selected_watcher_group",group.id).apply()
+                    navTrace.clear();haltMessage=null
+                    showSavedResult();readSavedResult();render()
+                }
+                dialog.dismiss();diagnosticsDialog?.dismiss()
+            }.setNegativeButton("Wróć",null).show()
+    }
+
     private fun openSession() {
         if (session != null) return
         val ext = extension ?: run { output.text = "Rozszerzenie kolektora nie jest gotowe: ${extensionError ?: "instalacja w toku"}"; return }
@@ -953,19 +979,19 @@ class PocActivity : ComponentActivity() {
 
     private fun scan(scrolls: Int) {
         val current = channel ?: return
-        if (scanning || preferences.getBoolean(KEY_ONE_SCAN_USED, false)) return
+        if (scanning || preferences.getBoolean(groupPreference(KEY_ONE_SCAN_USED), false)) return
         val started = Instant.now().toString()
         // Record one-shot consent AND the pending attempt in a single durable commit.
         // Never reset this permission merely because scanning failed.
         val permitted = preferences.edit()
-            .putBoolean(KEY_ONE_SCAN_USED, true)
-            .putString(KEY_ATTEMPT_STAGE, "STARTED")
-            .putString(KEY_ATTEMPT_AT, started)
-            .putString(KEY_ATTEMPT_STATUS, "PENDING")
-            .putInt(KEY_ATTEMPT_POSTS, 0)
-            .putInt(KEY_ATTEMPT_REJECTED, 0)
-            .putString(KEY_ATTEMPT_ERROR, "")
-            .putString(KEY_ATTEMPT_SAVE_ERROR, "")
+            .putBoolean(groupPreference(KEY_ONE_SCAN_USED), true)
+            .putString(groupPreference(KEY_ATTEMPT_STAGE), "STARTED")
+            .putString(groupPreference(KEY_ATTEMPT_AT), started)
+            .putString(groupPreference(KEY_ATTEMPT_STATUS), "PENDING")
+            .putInt(groupPreference(KEY_ATTEMPT_POSTS), 0)
+            .putInt(groupPreference(KEY_ATTEMPT_REJECTED), 0)
+            .putString(groupPreference(KEY_ATTEMPT_ERROR), "")
+            .putString(groupPreference(KEY_ATTEMPT_SAVE_ERROR), "")
             .commit()
         if (!permitted) {
             output.text = "STOP: nie udało się zapisać rozpoczęcia próby. Żądanie NIE zostało wysłane."
@@ -977,9 +1003,9 @@ class PocActivity : ComponentActivity() {
             "STARTED", emptyList(), emptyList(), 0, mapOf("source" to PocPolicy.APPROVED_GROUP_ID, "scrolls" to scrolls.toString()))) }
         if (journal.isFailure) {
             val reason = journal.exceptionOrNull()?.javaClass?.simpleName ?: "UNKNOWN"
-            preferences.edit().putString(KEY_ATTEMPT_STAGE, "ABORTED")
-                .putString(KEY_ATTEMPT_STATUS, "NO_REQUEST_SENT")
-                .putString(KEY_ATTEMPT_ERROR, "START_WRITE_FAILED:$reason").commit()
+            preferences.edit().putString(groupPreference(KEY_ATTEMPT_STAGE), "ABORTED")
+                .putString(groupPreference(KEY_ATTEMPT_STATUS), "NO_REQUEST_SENT")
+                .putString(groupPreference(KEY_ATTEMPT_ERROR), "START_WRITE_FAILED:$reason").commit()
             output.text = "STOP: nie zapisano początku skanu ($reason). Żądanie NIE zostało wysłane. Limit pozostaje wykorzystany."
             render()
             return
@@ -1000,12 +1026,12 @@ class PocActivity : ComponentActivity() {
                 val saved = runCatching { store.append(PocResultStore.fromReport("GROUP_SCAN", started, Instant.now().toString(), report, notes)) }
                 val saveError = saved.exceptionOrNull()?.javaClass?.simpleName.orEmpty()
                 val persisted = preferences.edit()
-                    .putString(KEY_ATTEMPT_STAGE, "FINISHED")
-                    .putString(KEY_ATTEMPT_STATUS, report.status.name)
-                    .putInt(KEY_ATTEMPT_POSTS, report.posts.size)
-                    .putInt(KEY_ATTEMPT_REJECTED, report.rejectedByApp)
-                    .putString(KEY_ATTEMPT_ERROR, if (report.error.isNullOrBlank()) "" else "SCAN_RESPONSE_ERROR")
-                    .putString(KEY_ATTEMPT_SAVE_ERROR, if (saveError.isEmpty()) "" else "RESULT_WRITE_FAILED:$saveError")
+                    .putString(groupPreference(KEY_ATTEMPT_STAGE), "FINISHED")
+                    .putString(groupPreference(KEY_ATTEMPT_STATUS), report.status.name)
+                    .putInt(groupPreference(KEY_ATTEMPT_POSTS), report.posts.size)
+                    .putInt(groupPreference(KEY_ATTEMPT_REJECTED), report.rejectedByApp)
+                    .putString(groupPreference(KEY_ATTEMPT_ERROR), if (report.error.isNullOrBlank()) "" else "SCAN_RESPONSE_ERROR")
+                    .putString(groupPreference(KEY_ATTEMPT_SAVE_ERROR), if (saveError.isEmpty()) "" else "RESULT_WRITE_FAILED:$saveError")
                     .commit()
                 output.text = describe(report) + when {
                     !persisted -> "\nUWAGA: nie udało się zachować trwałego podsumowania próby."
@@ -1019,10 +1045,10 @@ class PocActivity : ComponentActivity() {
                 val saved = runCatching { store.append(StoredRun("GROUP_SCAN", started, Instant.now().toString(),
                     result, emptyList(), emptyList(), 0, mapOf("errorClass" to reason))) }
                 preferences.edit()
-                    .putString(KEY_ATTEMPT_STAGE, "ABORTED")
-                    .putString(KEY_ATTEMPT_STATUS, result)
-                    .putString(KEY_ATTEMPT_ERROR, reason)
-                    .putString(KEY_ATTEMPT_SAVE_ERROR,
+                    .putString(groupPreference(KEY_ATTEMPT_STAGE), "ABORTED")
+                    .putString(groupPreference(KEY_ATTEMPT_STATUS), result)
+                    .putString(groupPreference(KEY_ATTEMPT_ERROR), reason)
+                    .putString(groupPreference(KEY_ATTEMPT_SAVE_ERROR),
                         if (saved.isSuccess) "" else "RESULT_WRITE_FAILED:${saved.exceptionOrNull()?.javaClass?.simpleName}")
                     .commit()
                 output.text = "STOP: skan nieukończony ($result, $reason). Limit pozostaje wykorzystany."
@@ -1042,14 +1068,14 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun scanAttemptSummary(): String = ScanAttemptJournal.summary(
-        consumed = preferences.getBoolean(KEY_ONE_SCAN_USED, false),
-        stage = preferences.getString(KEY_ATTEMPT_STAGE, null),
-        status = preferences.getString(KEY_ATTEMPT_STATUS, null),
-        posts = preferences.getInt(KEY_ATTEMPT_POSTS, 0),
-        rejected = preferences.getInt(KEY_ATTEMPT_REJECTED, 0),
-        startedAt = preferences.getString(KEY_ATTEMPT_AT, null),
-        error = preferences.getString(KEY_ATTEMPT_ERROR, null),
-        saveError = preferences.getString(KEY_ATTEMPT_SAVE_ERROR, null),
+        consumed = preferences.getBoolean(groupPreference(KEY_ONE_SCAN_USED), false),
+        stage = preferences.getString(groupPreference(KEY_ATTEMPT_STAGE), null),
+        status = preferences.getString(groupPreference(KEY_ATTEMPT_STATUS), null),
+        posts = preferences.getInt(groupPreference(KEY_ATTEMPT_POSTS), 0),
+        rejected = preferences.getInt(groupPreference(KEY_ATTEMPT_REJECTED), 0),
+        startedAt = preferences.getString(groupPreference(KEY_ATTEMPT_AT), null),
+        error = preferences.getString(groupPreference(KEY_ATTEMPT_ERROR), null),
+        saveError = preferences.getString(groupPreference(KEY_ATTEMPT_SAVE_ERROR), null),
     )
 
     private fun showResults() {
@@ -1407,14 +1433,14 @@ class PocActivity : ComponentActivity() {
             shareResolver?.status == ShareLinkResolver.Status.CONFIRMED -> "Link zatwierdzonej grupy potwierdzony. Bez skanu."
             scanning -> "Trwa skan (max ${PocPolicy.MAX_POSTS} postów, ${PocPolicy.SCAN_TIMEOUT_MS / 1000} s)…"
             kind == PageKind.APPROVED_POST -> "Post zatwierdzonej grupy — podgląd ręczny, bez skanu i automatycznego odczytu."
-            kind == PageKind.APPROVED_GROUP && preferences.getBoolean(KEY_ONE_SCAN_USED, false) ->
+            kind == PageKind.APPROVED_GROUP && preferences.getBoolean(groupPreference(KEY_ONE_SCAN_USED), false) ->
                 "Zatwierdzona grupa otwarta. Limit jednego skanu testowego wykorzystany; wyniki dostępne lokalnie."
             kind == PageKind.APPROVED_GROUP -> "Zatwierdzona grupa otwarta. Możesz uruchomić jeden skan."
             else -> "Sesja otwarta (${kind.name})."
         }
         banner.setBackgroundColor(if (stop != null) Color.parseColor("#B3261E") else Color.parseColor("#1E5AA8"))
 
-        val canScan = open && !reviewWorking() && !desktopBusy && !shareBusy && !responseBusy && !scanning && stop == null && !preferences.getBoolean(KEY_ONE_SCAN_USED, false) && PocPolicy.canScan(kind) && channel?.isConnected == true
+        val canScan = open && !reviewWorking() && !desktopBusy && !shareBusy && !responseBusy && !scanning && stop == null && !preferences.getBoolean(groupPreference(KEY_ONE_SCAN_USED), false) && PocPolicy.canScan(kind) && channel?.isConnected == true
         buttons["open"]?.text = if(ocrBusy) "Przerwij OCR" else if(reviewClosing) "Kończenie uzupełniania" else if(reviewBusy&&reviewPhotosActive) "Przerwij zdjęcia" else if(reviewBusy) "Przerwij uzupełnianie" else if(desktopBusy) "Przerwij próbę" else if (open) "Zamknij sesję" else "Otwórz sesję"
         listOf("group", "login", "back").forEach { buttons[it]?.isEnabled = open && !reviewWorking() && !desktopBusy && !scanning }
         listOf("scan", "scan3").forEach { buttons[it]?.isEnabled = canScan }
@@ -1435,7 +1461,7 @@ class PocActivity : ComponentActivity() {
             facebookTab.isEnabled=enabled;offersTab.isEnabled=enabled
             offersTab.text="Oferty (${displayedRows().count{DesktopSummary.eligible(it)}})"
         }
-        listOf("desktopResult","reviewResult","ocrResult","deleteResults","savedOcr","photoDiagnosis").forEach{buttons[it]?.isEnabled=!busyForTabs()}
+        listOf("desktopResult","reviewResult","ocrResult","deleteResults","savedOcr","photoDiagnosis","watcherGroups").forEach{buttons[it]?.isEnabled=!busyForTabs()}
         buttons["savedOcr"]?.isEnabled=!busyForTabs()&&!archiveWritePending&&savedResult?.photos?.any{it.crop}==true
         if(deletingResults||ocrBusy||reviewWorking())buttons.filterKeys{it!="open"}.values.forEach{it.isEnabled=false}
         val p = probe
@@ -1553,6 +1579,7 @@ class PocActivity : ComponentActivity() {
             orientation=LinearLayout.VERTICAL
             addView(row(button("desktopPreview","Automatyczny podgląd • 30 s"){startDesktopPreview()}))
             addView(row(button("desktopResult","Oferty"){selectContentTab(true)}))
+            addView(row(button("watcherGroups","Wybierz grupę Watchera"){chooseWatcherGroup()}))
             addView(row(button("deleteResults","Kasuj bazę"){askDeleteResults()}))
             addView(row(button("reviewResult","Ostatni wynik uzupełniania"){showReviewResult()}))
             addView(row(button("ocrResult","Ostatni wynik OCR"){showOcrReport()}))

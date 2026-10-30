@@ -2,7 +2,7 @@
 (function(root){'use strict';
 function create(){const used=new Set();return{project(m,core,fields,preview){
  const stop=()=>({type:'ocrFieldsResult',status:'STOP',reason:'CONTEXT',rows:[],stats:preview.zero()});
- if(m?.consent!==true||!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(m.nonce||'')||used.has(m.nonce)||m.groupId!=='lodzsprzedazzakupwynajem'||!/^\d{5,30}$/.test(m.postId||'')||!Array.isArray(m.texts)||m.texts.length<1||m.texts.length>3||m.texts.some(t=>typeof t!=='string'||!t.trim()||t.length>12000)||m.texts.reduce((n,t)=>n+t.length,0)>24000)return stop();
+ if(m?.consent!==true||!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(m.nonce||'')||used.has(m.nonce)||!["lodzsprzedazzakupwynajem","1253809205540869","1689328011096404","1424921570856189","mieszkania.na.sprzedaz.lodz","402796264871862","308185249243000","441817689512680","mieszkaniawlodzi","w.lodzkim.dzialka.dom.mieszkanie","ogloszenia.lodzkie"].includes(m.groupId)||!/^\d{5,30}$/.test(m.postId||'')||!Array.isArray(m.texts)||m.texts.length<1||m.texts.length>3||m.texts.some(t=>typeof t!=='string'||!t.trim()||t.length>12000)||m.texts.reduce((n,t)=>n+t.length,0)>24000)return stop();
  used.add(m.nonce);while(used.size>32)used.delete(used.values().next().value);
  const model=preview.createModel(core,fields,m.groupId);
  try{for(const original of m.texts){

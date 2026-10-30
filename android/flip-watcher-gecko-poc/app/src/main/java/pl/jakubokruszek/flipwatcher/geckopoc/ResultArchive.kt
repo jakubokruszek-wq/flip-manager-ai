@@ -28,23 +28,23 @@ object SavedResultCodec {
         put("neighborhood",r.neighborhood?:JSONObject.NULL);put("street",r.street?:JSONObject.NULL)
         put("intent",r.intent);put("usable",r.usable);put("photos",r.photos);put("qualification",r.qualification)
     }
-    fun rows(a:JSONArray):List<DesktopRow>? {
+    fun rows(a:JSONArray,groupId:String=PocPolicy.APPROVED_GROUP_ID):List<DesktopRow>? {
         // This is validation of persisted DTOs, not authorization for any browser operation.
         val stats=JSONObject(DesktopProtocol.emptyStats()).put("verified",1).put("candidates",a.length())
         return DesktopProtocol.parse(JSONObject().put("type","desktopPreviewResult").put("nonce","archive")
-            .put("status","OK").put("reason","DONE").put("stats",stats).put("rows",a),"archive")?.rows
+            .put("status","OK").put("reason","DONE").put("stats",stats).put("rows",a),"archive",groupId)?.rows
     }
-    fun metadata(value:SavedResult):ByteArray {
-        require(value.savedAt>0&&rows(JSONArray(value.rows.map(::row)))==value.rows)
-        require(rows(JSONArray(value.ocr.map(::row)))==value.ocr&&value.ocr.all{o->value.rows.any{it.postId==o.postId&&it.permalink==o.permalink}})
+    fun metadata(value:SavedResult,groupId:String=PocPolicy.APPROVED_GROUP_ID):ByteArray {
+        require(value.savedAt>0&&rows(JSONArray(value.rows.map(::row)),groupId)==value.rows)
+        require(rows(JSONArray(value.ocr.map(::row)),groupId)==value.ocr&&value.ocr.all{o->value.rows.any{it.postId==o.postId&&it.permalink==o.permalink}})
         return JSONObject().put("version",1).put("savedAt",value.savedAt).put("rows",JSONArray(value.rows.map(::row)))
             .put("ocr",JSONArray(value.ocr.map(::row))).toString().toByteArray(Charsets.UTF_8)
     }
 }
 
 /** Atomic, private, encrypted last result. Empty/error runs cannot erase the last good result. */
-class ResultArchive(context:Context) {
-    private val file=AtomicFile(File(context.noBackupFilesDir,"saved-search-v1.bin"))
+class ResultArchive(context:Context,private val groupId:String=PocPolicy.APPROVED_GROUP_ID) {
+    private val file=AtomicFile(File(context.noBackupFilesDir,WatcherGroups.archiveFile(groupId)))
     private fun key():SecretKey {
         val store=KeyStore.getInstance("AndroidKeyStore").apply{load(null)}
         (store.getKey(KEY,null) as? SecretKey)?.let{return it}
@@ -57,7 +57,7 @@ class ResultArchive(context:Context) {
         if(value.rows.isEmpty())return false
         var stream:FileOutputStream?=null
         try {
-            val metadata=SavedResultCodec.metadata(value)
+            val metadata=SavedResultCodec.metadata(value,groupId)
             require(metadata.size<=128*1024&&value.photos.size<=80&&value.photos.sumOf{it.jpeg.size.toLong()}<=MAX_PHOTO_BYTES)
             val ids=value.rows.map{it.postId}.toSet();val seen=HashSet<String>()
             for(p in value.photos)require(p.postId in ids&&p.slot in 0..2&&p.jpeg.size in 1..MAX_IMAGE_BYTES&&seen.add("${p.postId}/${p.slot}/${p.crop}"))
@@ -83,8 +83,8 @@ class ResultArchive(context:Context) {
             val size=input.readInt();require(size in 1..128*1024)
             val metadata=ByteArray(size);input.readFully(metadata);val j=JSONObject(String(metadata,Charsets.UTF_8))
             require(j.keys().asSequence().toSet()==setOf("version","savedAt","rows","ocr")&&j.getInt("version")==1&&j.getLong("savedAt")>0)
-            val rows=SavedResultCodec.rows(j.getJSONArray("rows"))?:error("ARCHIVE_ROWS")
-            val ocr=SavedResultCodec.rows(j.getJSONArray("ocr"))?:error("ARCHIVE_OCR")
+            val rows=SavedResultCodec.rows(j.getJSONArray("rows"),groupId)?:error("ARCHIVE_ROWS")
+            val ocr=SavedResultCodec.rows(j.getJSONArray("ocr"),groupId)?:error("ARCHIVE_OCR")
             require(rows.isNotEmpty()&&ocr.all{o->rows.any{it.postId==o.postId&&it.permalink==o.permalink}})
             val count=input.readInt();require(count in 0..80);var total=0L;val seen=HashSet<String>()
             val photos=(0 until count).map{

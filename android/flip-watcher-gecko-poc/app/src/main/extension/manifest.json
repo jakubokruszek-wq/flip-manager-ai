@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "name": "Flip Watcher Gecko POC collector",
   "version": "0.5.66",
-  "description": "Built-in GeckoView extension: reads post ids of the one approved Facebook group with the unchanged collector-core.js.",
+  "description": "Built-in GeckoView extension: selected Watcher group, explicit consent, unchanged collector-core.js.",
   "browser_specific_settings": {
     "gecko": {
       "id": "flip-gecko-poc@flip-manager.local"
@@ -12,8 +12,38 @@
     {
       "matches": [
         "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/*",
+        "https://www.facebook.com/groups/1253809205540869/*",
+        "https://www.facebook.com/groups/1689328011096404/*",
+        "https://www.facebook.com/groups/1424921570856189/*",
+        "https://www.facebook.com/groups/mieszkania.na.sprzedaz.lodz/*",
+        "https://www.facebook.com/groups/402796264871862/*",
+        "https://www.facebook.com/groups/308185249243000/*",
+        "https://www.facebook.com/groups/441817689512680/*",
+        "https://www.facebook.com/groups/mieszkaniawlodzi/*",
+        "https://www.facebook.com/groups/w.lodzkim.dzialka.dom.mieszkanie/*",
+        "https://www.facebook.com/groups/ogloszenia.lodzkie/*",
         "https://m.facebook.com/groups/lodzsprzedazzakupwynajem/*",
+        "https://m.facebook.com/groups/1253809205540869/*",
+        "https://m.facebook.com/groups/1689328011096404/*",
+        "https://m.facebook.com/groups/1424921570856189/*",
+        "https://m.facebook.com/groups/mieszkania.na.sprzedaz.lodz/*",
+        "https://m.facebook.com/groups/402796264871862/*",
+        "https://m.facebook.com/groups/308185249243000/*",
+        "https://m.facebook.com/groups/441817689512680/*",
+        "https://m.facebook.com/groups/mieszkaniawlodzi/*",
+        "https://m.facebook.com/groups/w.lodzkim.dzialka.dom.mieszkanie/*",
+        "https://m.facebook.com/groups/ogloszenia.lodzkie/*",
         "https://facebook.com/groups/lodzsprzedazzakupwynajem/*",
+        "https://facebook.com/groups/1253809205540869/*",
+        "https://facebook.com/groups/1689328011096404/*",
+        "https://facebook.com/groups/1424921570856189/*",
+        "https://facebook.com/groups/mieszkania.na.sprzedaz.lodz/*",
+        "https://facebook.com/groups/402796264871862/*",
+        "https://facebook.com/groups/308185249243000/*",
+        "https://facebook.com/groups/441817689512680/*",
+        "https://facebook.com/groups/mieszkaniawlodzi/*",
+        "https://facebook.com/groups/w.lodzkim.dzialka.dom.mieszkanie/*",
+        "https://facebook.com/groups/ogloszenia.lodzkie/*",
         "http://127.0.0.1/groups/*"
       ],
       "js": [

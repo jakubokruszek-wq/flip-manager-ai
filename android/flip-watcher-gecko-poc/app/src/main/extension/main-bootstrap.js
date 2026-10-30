@@ -2,7 +2,7 @@
 (function(g){
   'use strict';
   const u=new URL(location.href),group=u.pathname.match(/^\/groups\/([^/]+)\/$/)?.[1];
-  const real=u.protocol==='https:'&&!u.port&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&group==='lodzsprzedazzakupwynajem';
+  const real=u.protocol==='https:'&&!u.port&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&["lodzsprzedazzakupwynajem","1253809205540869","1689328011096404","1424921570856189","mieszkania.na.sprzedaz.lodz","402796264871862","308185249243000","441817689512680","mieszkaniawlodzi","w.lodzkim.dzialka.dom.mieszkanie","ogloszenia.lodzkie"].includes(group);
   const fixture=u.protocol==='http:'&&u.hostname==='127.0.0.1'&&group==='1234567890123'&&u.searchParams.get('fixture')==='main-native';
   if(!real&&!fixture)return;
   const key=Symbol.for('flip.main.transport.bootstrap');if(g[key])return;
