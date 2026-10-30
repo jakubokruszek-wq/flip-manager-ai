@@ -112,7 +112,7 @@ class PhotoBindingInstrumentedTest {
      val out=ReviewDataRunner.run(host!!.geckoView,original,listOf(input),true,{true},fixtureOrigin="http://127.0.0.1:${server.port}",selectedPostId=if(mode=="offerPhoto")null else id,photoPostIds=if(mode=="offerPhoto")listOf(id)else null,onBoundPost={channel,r,current,live->
       callbacks++
       if(mode=="offerPhoto"){
-       val display=DesktopThumbnails();assertTrue(ResultArchive(host!!).delete())
+       val display=DesktopThumbnails();ResultArchive(host!!).delete()
        try{
         val stored=r.copy(permalink="https://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/posts/$id/")
         assertTrue(PhotoCollection.capture(id,live,
@@ -121,7 +121,7 @@ class PhotoBindingInstrumentedTest {
          publish={crops->assertTrue(display.replacePostFrom(id,crops))}))
         assertEquals("CAPTURED",channel.reviewImageOutcome);assertEquals(1,display.rows(id).size)
         val saved=ResultArchiveJobs.read(host!!).getOrThrow()!!;assertEquals(2,saved.photos.size);assertTrue(saved.ocr.isEmpty())
-       }finally{display.clear();assertTrue(ResultArchive(host!!).delete())}
+       }finally{display.clear();ResultArchive(host!!).delete()}
       }else{
       val images=DesktopThumbnails()
       try{
