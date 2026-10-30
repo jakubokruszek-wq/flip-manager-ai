@@ -28,10 +28,11 @@ class DesktopConsentInstrumentedTest {
             val choices=mutableListOf<Boolean>()
             scenario.onActivity{a->
                 val automatic=DesktopConsentDialog(a){choices.add(it)};automatic.show()
-                assertTrue(automatic.window!!.decorView.findViewWithTag<CheckBox>("poc.desktop.autoOcr").isChecked)
+                assertTrue(automatic.window!!.decorView.findViewWithTag<CheckBox>("poc.desktop.autoPhotos").isChecked)
+                assertTrue(automatic.window!!.decorView.findViewWithTag<CheckBox>("poc.desktop.autoPhotos").text.contains("bez OCR"))
                 automatic.window!!.decorView.findViewWithTag<Button>("poc.desktop.consentAccept").performClick();assertEquals(listOf(true),choices)
                 val searchOnly=DesktopConsentDialog(a){choices.add(it)};searchOnly.show()
-                searchOnly.window!!.decorView.findViewWithTag<CheckBox>("poc.desktop.autoOcr").isChecked=false
+                searchOnly.window!!.decorView.findViewWithTag<CheckBox>("poc.desktop.autoPhotos").isChecked=false
                 searchOnly.window!!.decorView.findViewWithTag<Button>("poc.desktop.consentAccept").performClick();assertEquals(listOf(true,false),choices)
                 val cancelled=DesktopConsentDialog(a){choices.add(it)};cancelled.show()
                 cancelled.window!!.decorView.findViewWithTag<Button>("poc.desktop.consentCancel").performClick();assertEquals(2,choices.size)

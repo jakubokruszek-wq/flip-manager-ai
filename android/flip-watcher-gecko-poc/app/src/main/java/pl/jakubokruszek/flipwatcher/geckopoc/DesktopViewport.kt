@@ -63,6 +63,19 @@ class DesktopThumbnails {
         }
         return true
     }
+    fun replacePostFrom(id:String,source:DesktopThumbnails):Boolean {
+        if(source===this)return false
+        val small=linkedMapOf<Int,Bitmap>();val large=linkedMapOf<Int,Bitmap>()
+        try {
+            source.images[id]?.forEach{(slot,b)->small[slot]=checkNotNull(b.copy(Bitmap.Config.ARGB_8888,false))}
+            source.ocr[id]?.forEach{(slot,b)->large[slot]=checkNotNull(b.copy(Bitmap.Config.ARGB_8888,false))}
+        } catch(_:Exception){(small.values+large.values).forEach{if(!it.isRecycled)it.recycle()};return false}
+        if(small.isEmpty()){large.values.forEach{it.recycle()};return false}
+        images.remove(id)?.values?.forEach{it.recycle()};ocr.remove(id)?.values?.forEach{it.recycle()}
+        for((slot,b) in small)put(id,slot,b,large.remove(slot))
+        large.values.forEach{it.recycle()}
+        return rows(id).isNotEmpty()
+    }
     fun retain(ids:Set<String>){for(map in listOf(images,ocr))for(id in map.keys.toList())if(id !in ids)map.remove(id)?.values?.forEach{it.recycle()}}
     fun clearOcr(){ocr.values.flatMap{it.values}.forEach{if(!it.isRecycled)it.recycle()};ocr.clear()}
     fun clear(){for(map in listOf(images,ocr)){map.values.flatMap{it.values}.forEach{if(!it.isRecycled)it.recycle()};map.clear()}}

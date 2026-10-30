@@ -21,7 +21,7 @@ import java.text.NumberFormat
 import java.util.Locale
 
 /** Erase detached view callbacks; the private archive is managed separately from live browser state. */
-class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private val onReport:()->Unit,private val onEnrich:(()->Unit)?=null,private val onOcr:(()->Unit)?=null,private val ocrAvailable:(String)->Boolean={false},private val ocrResult:(String)->DesktopRow?={null},private val onDelete:(()->Unit)?=null,private val onSavedOcr:(()->Unit)?=null,private val savedCrops:()->Int={0},private val onInspect:((DesktopRow)->Unit)?=null):ScrollView(context){
+class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private val onReport:()->Unit,private val onEnrich:(()->Unit)?=null,private val onOcr:(()->Unit)?=null,private val ocrAvailable:(String)->Boolean={false},private val ocrResult:(String)->DesktopRow?={null},private val onDelete:(()->Unit)?=null,private val onSavedOcr:(()->Unit)?=null,private val savedCrops:()->Int={0},private val onInspect:((DesktopRow)->Unit)?=null,private val onPhotos:(()->Unit)?=null,private val photoAvailable:(String)->Boolean={false}):ScrollView(context){
     private var filter=OfferFilter()
     private var filterDialog:AlertDialog?=null
     private val content=LinearLayout(context).apply{orientation=LinearLayout.VERTICAL;isSaveEnabled=false}
@@ -53,6 +53,15 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
         })
         content.addView(label("Filtry zmieniają tylko widok. Uzupełnianie i OCR obejmują całą zachowaną listę. Sugestie OCR nie są używane do filtrowania.",13f))
         if(visible.isEmpty()&&rows.isNotEmpty())content.addView(label("Żaden post nie pasuje do filtrów. Zmień lub wyczyść filtry; zachowane posty nie zostały usunięte."))
+        val photoCandidates=rows.filter{DesktopSummary.eligible(it)||DesktopPresentation.reviewable(it)}
+        if(onPhotos!=null&&photoCandidates.isNotEmpty()){
+            val missing=photoCandidates.count{!photoAvailable(it.postId)}
+            content.addView(Button(context).apply{
+                tag="poc.photos.collect";text="Uzupełnij zdjęcia ofert ($missing)";isAllCaps=false;isSaveEnabled=false
+                setOnClickListener{onPhotos.invoke()}
+            })
+            content.addView(label("Ze zdjęciem: ${photoCandidates.size-missing}/${photoCandidates.size}. Najpierw rozpoznane oferty bez zdjęcia. Zapis lokalny, OCR osobno.",14f))
+        }
         if(onSavedOcr!=null)content.addView(Button(context).apply{
             tag="poc.saved.ocr";text="OCR zapisanych zdjęć (${savedCrops()})";isAllCaps=false;isEnabled=savedCrops()>0
             setOnClickListener{onSavedOcr.invoke()}

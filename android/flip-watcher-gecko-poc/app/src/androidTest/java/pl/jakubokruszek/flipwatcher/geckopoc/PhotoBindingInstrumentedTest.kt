@@ -45,6 +45,7 @@ class PhotoBindingInstrumentedTest {
  @Test fun twentyFiveHiddenRegionsDoNotBlockOwnPhoto()=runCase("manyRoots")
  @Test fun foreignIdentityBeyondThirtyTwoWrappersIsStillRejected()=runCase("deepForeign")
  @Test fun foreignPostAfterThreeHundredLinksIsStillRejected()=runCase("anchorForeign")
+ @Test fun recognizedOfferIsOpenedAndSavedByPhotoQueueWithoutRunningOcr()=runCase("offerPhoto")
  private fun png():String{
   val b=Bitmap.createBitmap(800,400,Bitmap.Config.ARGB_8888);val c=Canvas(b);c.drawColor(Color.WHITE)
   val p=Paint(Paint.ANTI_ALIAS_FLAG).apply{color=Color.BLACK;textSize=60f}
@@ -81,7 +82,7 @@ class PhotoBindingInstrumentedTest {
     val known="https://scontent-waw2-1.xx.fbcdn.net$path?oh=old&oe=123&_nc_cat=1"
     val rendered="https://scontent-fra3-2.xx.fbcdn.net$path?stp=dst-jpg_s960x960&oh=new&oe=456&_nc_cat=2&_nc_test=$mode"
     val stress=mode in setOf("deep","manyAnchors","manyRoots","deepForeign","anchorForeign")
-    val plain=stress||mode in setOf("plain","body","plainForeign","plainComment","album","foreignGm","contents","nested","nestedSibling")
+    val plain=stress||mode in setOf("plain","body","plainForeign","plainComment","album","foreignGm","contents","nested","nestedSibling","offerPhoto")
     val sourceUris=if(plain)(0 until 5).map{if(it==0)rendered else "$rendered&_nc_slot=$it"}else listOf(known)
     val story=JSONObject().put("__typename","Story").put("post_id",id).put("permalink_url",link)
       .put("message",JSONObject().put("text","Sprzedam mieszkanie 45,8 m2 za 260000 zł"))
@@ -105,9 +106,24 @@ class PhotoBindingInstrumentedTest {
      source.attach(GeckoHost.collectorExtension(host!!));original.open(GeckoHost.runtime(host!!));host!!.geckoView.setSession(original);original.setActive(true)
      original.loadUri(server.url("/groups/$FIXTURE_GROUP_ID/","home"));assertTrue(source.awaitPort(15000));delay(300)
      val row=DesktopRow(id,link,"DOM",null,"NONE",null,null,null,null,null,"UNKNOWN",false,1,"NO_TEXT")
+     if(mode=="offerPhoto")assertTrue(ReviewDataGate.queue(listOf(row.copy(price=260000.0,priceSource="EXPLICIT_TOTAL",area=45.8,intent="SELL_PROPERTY",usable=true,qualification="CANDIDATE")),FIXTURE_GROUP_ID).isEmpty())
+     val input=if(mode=="offerPhoto")row.copy(price=260000.0,priceSource="EXPLICIT_TOTAL",area=45.8,intent="SELL_PROPERTY",usable=true,qualification="CANDIDATE")else row
      var callbacks=0
-     val out=ReviewDataRunner.run(host!!.geckoView,original,listOf(row),true,{true},fixtureOrigin="http://127.0.0.1:${server.port}",selectedPostId=id,onBoundPost={channel,r,current,live->
-      callbacks++;val images=DesktopThumbnails()
+     val out=ReviewDataRunner.run(host!!.geckoView,original,listOf(input),true,{true},fixtureOrigin="http://127.0.0.1:${server.port}",selectedPostId=if(mode=="offerPhoto")null else id,photoPostIds=if(mode=="offerPhoto")listOf(id)else null,onBoundPost={channel,r,current,live->
+      callbacks++
+      if(mode=="offerPhoto"){
+       val display=DesktopThumbnails();assertTrue(ResultArchive(host!!).delete())
+       try{
+        val stored=r.copy(permalink="https://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/posts/$id/")
+        assertTrue(PhotoCollection.capture(id,live,
+         capture={crops->channel.reviewImages(r,current,host!!.geckoView,crops,true,group=FIXTURE_GROUP_ID,alive=live)},
+         persist={crops->ResultArchiveJobs.saveAwait(host!!,listOf(stored),emptyList(),crops)},
+         publish={crops->assertTrue(display.replacePostFrom(id,crops))}))
+        assertEquals("CAPTURED",channel.reviewImageOutcome);assertEquals(1,display.rows(id).size)
+        val saved=ResultArchiveJobs.read(host!!).getOrThrow()!!;assertEquals(2,saved.photos.size);assertTrue(saved.ocr.isEmpty())
+       }finally{display.clear();assertTrue(ResultArchive(host!!).delete())}
+      }else{
+      val images=DesktopThumbnails()
       try{
        val imageReply=channel.reviewImages(r,current,host!!.geckoView,images,true,group=FIXTURE_GROUP_ID,alive=live)
        assertTrue("failure=${channel.reviewImageFixtureFailure}, outcome=${channel.reviewImageOutcome}, details=${channel.reviewImageDetails}, live=${live()}, redirects=${lab.redirects.get()}",imageReply)
@@ -123,6 +139,7 @@ class PhotoBindingInstrumentedTest {
         val text=LocalOcr.readOwned(bitmap);assertTrue("Fixture crop did not contain rendered price: $mode",text.contains("260"));assertTrue(live())
        }
       }finally{images.clear()}
+      }
      })
      assertEquals(out.summary.report(),"DONE",out.summary.reason);assertEquals(1,callbacks);assertEquals(1,out.summary.opened);assertTrue("Local image redirect was not observed",lab.redirects.get()>0)
     }finally{source.close();if(host!!.geckoView.session!=null)host!!.geckoView.releaseSession();original.close();server.close();lab.extension.setMessageDelegate(null,"photo_binding_lab");lab.port.disconnect()}

@@ -14,10 +14,10 @@ import org.mozilla.geckoview.WebRequestError
 object ReviewDataRunner{
     private const val POSTS_PER_SESSION=1
     data class Outcome(val summary:ReviewDataSummary,val rows:List<DesktopRow>)
-    suspend fun run(view:GeckoView,original:GeckoSession,rows:List<DesktopRow>,consent:Boolean,alive:()->Boolean,progress:(Int,Int)->Unit={_,_->},restoreActive:()->Boolean=alive,fixtureOrigin:String?=null,observe:(String)->Unit={},snapshot:(ReviewDataSummary)->Unit={},originalChannel:CollectorChannel?=null,selectedPostId:String?=null,onValidatedRows:(List<DesktopRow>)->Unit={},onBoundPost:suspend(CollectorChannel,DesktopRow,String,()->Boolean)->Unit={_,_,_,_->}):Outcome=withContext(Dispatchers.Main){
+    suspend fun run(view:GeckoView,original:GeckoSession,rows:List<DesktopRow>,consent:Boolean,alive:()->Boolean,progress:(Int,Int)->Unit={_,_->},restoreActive:()->Boolean=alive,fixtureOrigin:String?=null,observe:(String)->Unit={},snapshot:(ReviewDataSummary)->Unit={},originalChannel:CollectorChannel?=null,selectedPostId:String?=null,onValidatedRows:(List<DesktopRow>)->Unit={},onBoundPost:suspend(CollectorChannel,DesktopRow,String,()->Boolean)->Unit={_,_,_,_->},photoPostIds:List<String>?=null):Outcome=withContext(Dispatchers.Main){
         val ownerJob=kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
         val fixture=fixtureOrigin!=null;val group=if(fixture)FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID
-        val queue=ReviewDataGate.queue(rows,group,selectedPostId);var opened=0;var bound=0;var text=0;var enriched=0;var unchanged=0;var unresolved=0;var filtered=0;var unboundStreak=0;var evidence:Map<String,Int> = emptyMap()
+        val queue=if(photoPostIds==null)ReviewDataGate.queue(rows,group,selectedPostId)else if(selectedPostId==null)PhotoCollection.selected(rows,photoPostIds,group)else emptyList();var opened=0;var bound=0;var text=0;var enriched=0;var unchanged=0;var unresolved=0;var filtered=0;var unboundStreak=0;var evidence:Map<String,Int> = emptyMap()
         var batchSessions=0;var batchSessionsClosed=0;var restorePermitted=false
         fun summary(reason:String)=ReviewDataSummary(reason,queue.size,opened,bound,text,enriched,unchanged,unresolved,filtered,evidence,batchSessions,batchSessionsClosed)
         fun outcome(reason:String,result:List<DesktopRow> = emptyList()):Outcome{restorePermitted=reason in setOf("DONE","NO_OWN_POST");observe("END_"+reason);val value=summary(reason);snapshot(value);return Outcome(value,result)}

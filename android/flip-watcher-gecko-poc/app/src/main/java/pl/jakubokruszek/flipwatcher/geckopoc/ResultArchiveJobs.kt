@@ -40,6 +40,12 @@ object ResultArchiveJobs {
             main.post{done(success)}
         }
     }
+    suspend fun saveAwait(context:Context,rows:List<DesktopRow>,ocr:List<DesktopRow>,images:DesktopThumbnails):Boolean {
+        if(rows.isEmpty())return false
+        return kotlinx.coroutines.suspendCancellableCoroutine{continuation->
+            save(context,rows,ocr,images){ok->if(continuation.isActive)continuation.resumeWith(Result.success(ok))}
+        }
+    }
     fun delete(context:Context,done:(Boolean)->Unit){val app=context.applicationContext
         // FIFO: every earlier save finishes before deletion. No queued write can resurrect it.
         worker.execute{val ok=runCatching{ResultArchive(app).delete()}.isSuccess;main.post{done(ok)}}
