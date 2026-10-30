@@ -11,12 +11,12 @@ import org.mozilla.geckoview.GeckoSessionSettings
 object DesktopSessionPreview {
     data class Outcome(val reason:String,val reply:DesktopReply?,val userAgent:String?)
     suspend fun run(session:GeckoSession,channel:CollectorChannel,gate:DesktopTrial,nonce:String,target:String,
-                    currentUrl:()->String?,pageReady:()->Boolean,fixture:Boolean=false,windowMs:Int=60_000,view:org.mozilla.geckoview.GeckoView?=null,images:DesktopThumbnails?=null,baseline:Boolean=false,gesture:Boolean=false,fastScroll:Boolean=false):Outcome=withContext(Dispatchers.Main){
-        val group=if(fixture)FIXTURE_GROUP_ID else PocPolicy.APPROVED_GROUP_ID
+                    currentUrl:()->String?,pageReady:()->Boolean,fixture:Boolean=false,windowMs:Int=60_000,view:org.mozilla.geckoview.GeckoView?=null,images:DesktopThumbnails?=null,baseline:Boolean=false,gesture:Boolean=false,fastScroll:Boolean=false,groupId:String=PocPolicy.APPROVED_GROUP_ID,alive:()->Boolean={true}):Outcome=withContext(Dispatchers.Main){
+        val group=if(fixture)FIXTURE_GROUP_ID else groupId
         var ua:String?=null
         val start=android.os.SystemClock.elapsedRealtime()
         fun remaining()=minOf(gate.remainingMs,windowMs.toLong()-(android.os.SystemClock.elapsedRealtime()-start)).coerceAtLeast(0)
-        fun live():Boolean {if(remaining()==0L&&gate.active)gate.stop("DEADLINE_${gate.phase.name}");return gate.tick()}
+        fun live():Boolean {if(!alive())gate.stop("CANCELLED");if(remaining()==0L&&gate.active)gate.stop("DEADLINE_${gate.phase.name}");return gate.tick()}
         fun failure(reason:String,reply:DesktopReply?=null):Outcome {if(gate.active)gate.stop(reason);return Outcome(gate.reason,reply,ua)}
         try {
             if(gesture&&!baseline)return@withContext failure("PROTOCOL")

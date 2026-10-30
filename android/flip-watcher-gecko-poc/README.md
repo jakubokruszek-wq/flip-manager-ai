@@ -1,3 +1,13 @@
+# 0.5.68 — automat telefonu (kandydat)
+
+Trzy okna dziennie, zaszyfrowana lokalna kolejka, wysyłka wybranych pól i miniatur
+zdjęć do sparowanego Managera oraz idempotentne ponawianie. Istniejąca baza ręczna,
+profil Facebooka, pakiet i podpis pozostają zachowane. Wymaga wdrożenia endpointu
+Managera i przejścia nowych testów urządzeniowych przed wydaniem APK.
+[Instrukcja, ograniczenia i weryfikacja](docs/automation-0568.md).
+
+Poniższe sekcje opisują wcześniejsze etapy prototypu.
+
 # Aktualizacja 0.3.8
 
 Mechanizm desktopowego fetch/XHR zintegrowany z natywną zgodą i prywatnym API MAIN, do 5 adaptacyjnych przewinięć. [Zakres i jedna próba Samsung](docs/poc-038.md). Wyniki CI i APK w Draft PR #45; bez skanu i uploadu.

@@ -13,16 +13,16 @@ import { canonicalFacebookIdentity } from "@/features/listing-identity";
 type ImportRow = { id: string; listingId: string | null; status: string };
 export type FacebookImportResult = { status: "created" | "updated" | "duplicate"; listingId: string; matchedFilters: string[]; rejectedFilters: Array<{ filterId: string; reasons: string[] }>; calculatedPricePerSqm: number | null; missingFields: string[] };
 
-export async function importFacebookCollectorPayload(deviceId: string, idempotencyKey: string, rawPayload: unknown): Promise<FacebookImportResult> {
+export async function importFacebookCollectorPayload(deviceId: string, idempotencyKey: string, rawPayload: unknown, options: { mobileSnapshot?: boolean } = {}): Promise<FacebookImportResult> {
   const payload = normalizeFacebookCollectorPayload(rawPayload);
   const supabase = createAdminClient();
   const existing = await findImport(supabase, deviceId, idempotencyKey);
   if (existing && existing.status !== "failed" && existing.listingId) return duplicateResult(existing.listingId, payload);
   const importRow = existing ?? await createImport(supabase, deviceId, idempotencyKey, payload);
   try {
-    const saved = await upsertListing(supabase, payload);
-    await upsertMetadata(supabase, saved.id, payload);
-    const filters = await applyFilters(supabase, saved.id, payload);
+    const saved = await upsertListing(supabase, payload, options.mobileSnapshot);
+    await upsertMetadata(supabase, saved.id, payload, options.mobileSnapshot);
+    const filters = options.mobileSnapshot ? { matchedFilters: [], rejectedFilters: [] } : await applyFilters(supabase, saved.id, payload);
     const result: FacebookImportResult = { status: saved.status, listingId: saved.id, matchedFilters: filters.matchedFilters, rejectedFilters: filters.rejectedFilters, calculatedPricePerSqm: payload.pricePerSqm, missingFields: missingFields(payload) };
     const { error } = await supabase.from("collector_imports").update({ listing_id: saved.id, status: "imported", error_message: null, result }).eq("id", importRow.id);
     if (error) throw new Error("Nie udało się zakończyć importu Collectora.");
@@ -46,7 +46,20 @@ async function createImport(supabase: ReturnType<typeof createAdminClient>, devi
   return { id: data.id, listingId: stringOrNull(data.listing_id), status: data.status };
 }
 
-async function upsertListing(supabase: ReturnType<typeof createAdminClient>, payload: NormalizedFacebookImport): Promise<{ id: string; status: "created" | "updated" }> {
+async function upsertListing(supabase: ReturnType<typeof createAdminClient>, payload: NormalizedFacebookImport, mobileSnapshot = false): Promise<{ id: string; status: "created" | "updated" }> {
+  async function savedMobile(id: string): Promise<{ id: string; status: "updated" }> {
+    // Add mobile evidence conservatively: never clear richer existing text/photos,
+    // and persist photos before collector_imports is marked imported.
+    const previous = await supabase.from("listings").select("price,area,rooms,address,images").eq("id", id).eq("source", "facebook").single();
+    if (previous.error || !previous.data) throw new Error("MOBILE_EXISTING_RETRY");
+    const row = previous.data;
+    const priorImages = Array.isArray(row.images) ? row.images.filter((v: unknown): v is string => typeof v === "string") : [];
+    const values = { price: row.price ?? payload.price, area: row.area ?? payload.area, rooms: row.rooms ?? payload.rooms,
+      address: row.address ?? payload.location, images: [...new Set([...priorImages, ...payload.imageUrls])].slice(0, 20), last_seen_at: new Date().toISOString() };
+    const saved = await supabase.from("listings").update(values).eq("id", id).eq("source", "facebook").select("id").single();
+    if (saved.error || !saved.data) throw new Error("MOBILE_EXISTING_RETRY");
+    return { id, status: "updated" };
+  }
   const identity = canonicalFacebookIdentity({ source: "facebook", sourcePostUrl: payload.normalizedPostUrl, externalListingId: payload.externalListingId });
   const { data: exact, error: exactError } = await supabase.from("listings").select("id").eq("source", "facebook").eq("external_listing_id", payload.externalListingId).maybeSingle();
   if (exactError) throw new Error("Nie udało się sprawdzić istniejącej oferty Facebooka.");
@@ -54,33 +67,44 @@ async function upsertListing(supabase: ReturnType<typeof createAdminClient>, pay
     const metadataByUrl = await supabase.from("listing_source_metadata").select("listing_id").eq("source", "facebook").eq("source_post_url", payload.normalizedPostUrl).order("collected_at", { ascending: false }).limit(1);
     if (metadataByUrl.error) throw new Error("Nie udało się sprawdzić metadanych posta Facebooka.");
     const metadataUrlListingId = Array.isArray(metadataByUrl.data) && isRecord(metadataByUrl.data[0]) && typeof metadataByUrl.data[0].listing_id === "string" ? metadataByUrl.data[0].listing_id : null;
-    if (metadataUrlListingId) return { id: metadataUrlListingId, status: "updated" };
+    if (metadataUrlListingId) return mobileSnapshot ? savedMobile(metadataUrlListingId) : { id: metadataUrlListingId, status: "updated" };
     if (identity.postId) {
       const metadataByPost = await supabase.from("listing_source_metadata").select("listing_id").eq("source", "facebook").filter("metadata->>postId", "eq", identity.postId).order("collected_at", { ascending: false }).limit(1);
       if (metadataByPost.error) throw new Error("Nie udało się sprawdzić tożsamości posta Facebooka.");
       const metadataPostListingId = Array.isArray(metadataByPost.data) && isRecord(metadataByPost.data[0]) && typeof metadataByPost.data[0].listing_id === "string" ? metadataByPost.data[0].listing_id : null;
-      if (metadataPostListingId) return { id: metadataPostListingId, status: "updated" };
+      if (metadataPostListingId) return mobileSnapshot ? savedMobile(metadataPostListingId) : { id: metadataPostListingId, status: "updated" };
     }
     const { data: sameUrl, error: urlError } = await supabase.from("listings").select("id").eq("source", "facebook").eq("normalized_url", payload.normalizedPostUrl).maybeSingle();
     if (urlError) throw new Error("Nie udało się sprawdzić adresu źródłowego Facebooka.");
-    if (isRecord(sameUrl) && typeof sameUrl.id === "string") return { id: sameUrl.id, status: "updated" };
-    const { data: sameContent, error } = await supabase.from("listings").select("id").eq("source", "facebook").eq("content_hash", payload.contentHash).maybeSingle();
-    if (error) throw new Error("Nie udało się sprawdzić duplikatu treści Facebooka.");
-    if (isRecord(sameContent) && typeof sameContent.id === "string") return { id: sameContent.id, status: "updated" };
+    if (isRecord(sameUrl) && typeof sameUrl.id === "string") return mobileSnapshot ? savedMobile(sameUrl.id) : { id: sameUrl.id, status: "updated" };
+    if (!mobileSnapshot) {
+      const { data: sameContent, error } = await supabase.from("listings").select("id").eq("source", "facebook").eq("content_hash", payload.contentHash).maybeSingle();
+      if (error) throw new Error("Nie udało się sprawdzić duplikatu treści Facebooka.");
+      if (isRecord(sameContent) && typeof sameContent.id === "string") return { id: sameContent.id, status: "updated" };
+    }
   }
+  if (mobileSnapshot && isRecord(exact) && typeof exact.id === "string") return savedMobile(exact.id);
   const title = payload.title ?? payload.content?.split(/\r?\n/, 1)[0].slice(0, 180) ?? "Oferta z Facebooka";
   const seenAt = new Date().toISOString();
-  const { data, error } = await supabase.from("listings").upsert({ source: "facebook", external_listing_id: payload.externalListingId, original_url: payload.normalizedPostUrl, normalized_url: payload.normalizedPostUrl, title, price: payload.price, area: payload.area, price_per_sqm: payload.pricePerSqm, rooms: payload.rooms, address: payload.location, description: payload.content, images: payload.imageUrls, status: "active", removed_at: null, last_seen_at: seenAt, content_hash: payload.contentHash }, { onConflict: "source,external_listing_id" }).select("id").single();
-  if (error || !isRecord(data) || typeof data.id !== "string") throw new Error("Nie udało się zapisać oferty Facebooka.");
+  const { data, error } = await supabase.from("listings").upsert({ source: "facebook", external_listing_id: payload.externalListingId, original_url: payload.normalizedPostUrl, normalized_url: payload.normalizedPostUrl, title, price: payload.price, area: payload.area, price_per_sqm: payload.pricePerSqm, rooms: payload.rooms, address: payload.location, description: payload.content, images: payload.imageUrls, status: "active", removed_at: null, last_seen_at: seenAt, content_hash: payload.contentHash }, { onConflict: "source,external_listing_id", ignoreDuplicates: mobileSnapshot }).select("id").single();
+  if (error || !isRecord(data) || typeof data.id !== "string") {
+    if (mobileSnapshot) {
+      // A concurrent importer may have inserted a richer version after our read.
+      // ON CONFLICT DO NOTHING protects it; recover its canonical identity.
+      const concurrent = await supabase.from("listings").select("id").eq("source", "facebook").eq("external_listing_id", payload.externalListingId).maybeSingle();
+      if (!concurrent.error && isRecord(concurrent.data) && typeof concurrent.data.id === "string") return savedMobile(concurrent.data.id);
+    }
+    throw new Error("Nie udało się zapisać oferty Facebooka.");
+  }
   return { id: data.id, status: isRecord(exact) && typeof exact.id === "string" ? "updated" : "created" };
 }
 
-async function upsertMetadata(supabase: ReturnType<typeof createAdminClient>, listingId: string, payload: NormalizedFacebookImport): Promise<void> {
-  const existing = await supabase.from("listing_source_metadata").select("metadata").eq("source", "facebook").eq("source_post_url", payload.normalizedPostUrl).maybeSingle();
+async function upsertMetadata(supabase: ReturnType<typeof createAdminClient>, listingId: string, payload: NormalizedFacebookImport, mobileSnapshot = false): Promise<void> {
+  const existing = await supabase.from("listing_source_metadata").select("metadata,group_name,author_name,published_at").eq("source", "facebook").eq("source_post_url", payload.normalizedPostUrl).maybeSingle();
   if (existing.error) throw new Error("Nie udało się odczytać workflow posta Facebooka.");
   const previous = isRecord(existing.data?.metadata) ? existing.data.metadata : {};
   const identity = canonicalFacebookIdentity({ source: "facebook", sourcePostUrl: payload.normalizedPostUrl, externalListingId: payload.externalListingId });
-  const { error } = await supabase.from("listing_source_metadata").upsert({ listing_id: listingId, source: "facebook", source_post_url: payload.normalizedPostUrl, group_name: payload.groupName, author_name: payload.authorName, published_at: payload.publishedAt, collected_at: payload.collectedAt, metadata: { ...previous, source: "collector", postId: identity.postId ?? previous.postId ?? null, firstImportedAt: typeof previous.firstImportedAt === "string" ? previous.firstImportedAt : payload.collectedAt, imageCount: payload.imageUrls.length, workflowStatus: typeof previous.workflowStatus === "string" ? previous.workflowStatus : "new" } }, { onConflict: "source,source_post_url" });
+  const { error } = await supabase.from("listing_source_metadata").upsert({ listing_id: listingId, source: "facebook", source_post_url: payload.normalizedPostUrl, group_name: payload.groupName ?? (mobileSnapshot ? existing.data?.group_name ?? null : null), author_name: payload.authorName ?? (mobileSnapshot ? existing.data?.author_name ?? null : null), published_at: payload.publishedAt ?? (mobileSnapshot ? existing.data?.published_at ?? null : null), collected_at: payload.collectedAt, metadata: { ...previous, source: "collector", postId: identity.postId ?? previous.postId ?? null, firstImportedAt: typeof previous.firstImportedAt === "string" ? previous.firstImportedAt : payload.collectedAt, imageCount: mobileSnapshot ? Math.max(typeof previous.imageCount === "number" ? previous.imageCount : 0, payload.imageUrls.length) : payload.imageUrls.length, ...(mobileSnapshot ? { androidSnapshot: true } : {}), workflowStatus: typeof previous.workflowStatus === "string" ? previous.workflowStatus : mobileSnapshot ? "review" : "new" } }, { onConflict: "source,source_post_url" });
   if (error) throw new Error("Nie udało się zapisać metadanych posta Facebooka.");
 }
 

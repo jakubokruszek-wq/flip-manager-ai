@@ -203,6 +203,7 @@ class PocActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WatcherAutomation.uiVisible=true
         if(android.os.Build.VERSION.SDK_INT>=33)setRecentsScreenshotEnabled(false)
         preferences.getString("watcher_active_groups",null)?.let{raw->runCatching{WatcherGroups.setActive(WatcherLink.parseGroups(raw))}}
         val selected=preferences.getString("selected_watcher_group",WatcherGroups.LEGACY_GROUP)
@@ -228,7 +229,7 @@ class PocActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    override fun onResume(){super.onResume();if(!reviewWorking())runCatching{session?.setActive(true)};window.decorView.post{showSavedResult();showPendingPhotosReport();showPendingReviewReport();showPendingOcrReport();showPendingWatcherResult()}}
+    override fun onResume(){super.onResume();WatcherAutomation.uiVisible=true;if(!reviewWorking())runCatching{session?.setActive(true)};window.decorView.post{showSavedResult();showPendingPhotosReport();showPendingReviewReport();showPendingOcrReport();showPendingWatcherResult()}}
 
     override fun onPause() {
         ocrConsentDialog?.dismiss();ocrConsentDialog=null;cancelOcr("PAUSED")
@@ -239,6 +240,7 @@ class PocActivity : ComponentActivity() {
         lastShareResultDialog?.dismiss(); lastShareResultDialog = null
         finishShare("PAUSED", clear = true)
         stopVisiblePosts()
+        WatcherAutomation.uiVisible=false
         super.onPause()
     }
 
@@ -340,7 +342,7 @@ class PocActivity : ComponentActivity() {
         showSavedResult()
         if(::offersTab.isInitialized)offersTab.text="Oferty (${displayedRows().count{DesktopSummary.eligible(it)}})"
     }
-    private fun busyForTabs()=watcherBusy||deletingResults||ocrBusy||reviewWorking()||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad
+    private fun busyForTabs()=WatcherAutomation.lock.isLocked||watcherBusy||deletingResults||ocrBusy||reviewWorking()||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad
     private fun selectContentTab(offers:Boolean){
         if(busyForTabs()||!::offersPanel.isInitialized)return
         if(offers&&desktopRows.isEmpty())showSavedResult()
@@ -889,12 +891,37 @@ class PocActivity : ComponentActivity() {
                 "Otworzy się zwykła przeglądarka (silnik Firefox/GeckoView) tylko dla zatwierdzonej grupy testowej.\n\n" +
                     "• Logujesz się sam na oficjalnej stronie Facebooka; aplikacja nie czyta haseł ani pól formularzy.\n" +
                     "• Sesja (ciasteczka) zostaje wyłącznie w tej aplikacji na telefonie; możesz ją usunąć przyciskiem „Wyloguj i usuń dane”.\n" +
-                    "• Oferty, zdjęcia i dane sesji pozostają lokalnie. Osobne parowanie z Managerem synchronizuje tylko konfigurację grup; skan uruchamiasz ręcznie.\n" +
+                    "• Dane sesji zostają lokalnie. Oferty i zdjęcia zapisujemy lokalnie; po osobnym włączeniu automatu wysyłamy je do sparowanego Managera.\n" +
                     "• Przy CAPTCHA, checkpoincie lub utracie dostępu automat staje.",
             )
             .setPositiveButton("Zgadzam się") { _, _ -> preferences.edit().putBoolean(KEY_CONSENT, true).apply(); openSession() }
             .setNegativeButton("Anuluj", null)
             .show()
+    }
+
+    private val automationPermission=registerForActivityResult(ActivityResultContracts.RequestPermission()){ }
+    private fun automationSettings(){
+        val enabled=WatcherAutomation.enabled(this)
+        lifecycleScope.launch {
+            val status=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){WatcherOutbox(this@PocActivity).use{it.status()}}
+            if(isDestroyed)return@launch
+            AlertDialog.Builder(this@PocActivity).setTitle("Automat: "+if(enabled)"włączony" else "wyłączony")
+                .setMessage("Trzy okna dziennie: 07:00, 15:00, 23:00 według czasu telefonu. Android może opóźnić pracę. Skan działa po opuszczeniu aplikacji, bez komputera. Powiadomienie informuje o pracy.\n\nOferty i przypisane miniatury zdjęć trafiają do sparowanego Managera. Kolejka ponawia wysyłkę bez tworzenia drugiej oferty. Sesja Facebooka i lokalna baza pozostają na telefonie. CAPTCHA lub logowanie zatrzymują odczyt.\n\n"+status)
+                .setNegativeButton("Zamknij",null)
+                .setNeutralButton("Ponów wysyłkę"){_,_->lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO){WatcherOutbox(this@PocActivity).use{it.retry()};if(WatcherAutomation.enabled(this@PocActivity))WatcherAutomation.retry(this@PocActivity)}}
+                .setPositiveButton(if(enabled)"Wyłącz automat" else "Włącz automat"){_,_->
+                    if(enabled)WatcherAutomation.configure(this@PocActivity,false)
+                    else lifecycleScope.launch {
+                        val paired=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){runCatching{WatcherLink.load(this@PocActivity)!=null}.getOrDefault(false)}
+                        if(!paired){output.text="Najpierw połącz Watchera z Managerem.";return@launch}
+                        closeSession()
+                        if(android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)
+                            automationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                        WatcherAutomation.configure(this@PocActivity,true)
+                        output.text="Automat włączony. Opuść aplikację, aby rozpocząć skan. Stan i błędy znajdziesz w panelu automatu."
+                    }
+                }.show()
+        }
     }
 
     private fun watcherConnection(){
@@ -907,7 +934,7 @@ class PocActivity : ComponentActivity() {
             filters=arrayOf(android.text.InputFilter.LengthFilter(4096))
         }
         val dialog=AlertDialog.Builder(this).setTitle("Połącz z Watcherem")
-            .setMessage("W Managerze otwórz Połącz Flip Collector i wybierz Kod dla aplikacji Android. Wklej kod poniżej. Połączenie synchronizuje aktywne grupy; oferty i zdjęcia pozostają lokalnie.")
+            .setMessage("W Managerze otwórz Połącz Flip Collector i wybierz Kod dla aplikacji Android. Wklej kod poniżej. Połączenie synchronizuje aktywne grupy. Osobny przycisk automatu włącza wysyłkę ofert i zdjęć.")
             .setView(input).setNegativeButton("Wróć",null)
             .setNeutralButton("Synchronizuj grupy"){_,_->synchronizeWatcher(null)}
             .setPositiveButton("Połącz"){_,_->val raw=input.text.toString();input.text.clear();synchronizeWatcher(raw)}.create()
@@ -931,6 +958,7 @@ class PocActivity : ComponentActivity() {
                 check(preferences.edit().putString("watcher_active_groups",cache).commit())
                 archiveRevision++;savedResult=null;savedThumbnails.clear();ocrResults.clear();archiveError=null
                 WatcherGroups.setActive(groups)
+                WatcherAutomation.preferences(this@PocActivity).edit().remove("completed_slot").apply()
                 val selected=PocPolicy.APPROVED_GROUP_ID.takeIf{WatcherGroups.isActive(it)}?:groups.firstOrNull()?.id
                 if(selected!=null){PocPolicy.selectGroup(selected);preferences.edit().putString("selected_watcher_group",selected).apply()}
                 photoLast=null;ocrLast=null;reviewLast=null;reviewSnapshot=null
@@ -970,6 +998,7 @@ class PocActivity : ComponentActivity() {
     }
 
     private fun openSession() {
+        if(WatcherAutomation.lock.isLocked){output.text="Automat kończy pracę w tle. Spróbuj za chwilę.";return}
         if (session != null) return
         val ext = extension ?: run { output.text = "Rozszerzenie kolektora nie jest gotowe: ${extensionError ?: "instalacja w toku"}"; return }
         // Default settings: normal mobile Firefox user agent, JavaScript and cookies as in the browser. No override, no spoofing.
@@ -1643,6 +1672,7 @@ class PocActivity : ComponentActivity() {
             addView(row(button("desktopPreview","Automatyczny podgląd • 30 s"){startDesktopPreview()}))
             addView(row(button("desktopResult","Oferty"){selectContentTab(true)}))
             addView(row(button("watcherConnect","Połącz / synchronizuj Watchera"){watcherConnection()}))
+            addView(row(button("automation","Automat 3× dziennie / stan"){automationSettings()}))
             addView(row(button("watcherGroups","Wybierz grupę Watchera"){chooseWatcherGroup()}))
             addView(row(button("deleteResults","Kasuj bazę"){askDeleteResults()}))
             addView(row(button("reviewResult","Ostatni wynik uzupełniania"){showReviewResult()}))

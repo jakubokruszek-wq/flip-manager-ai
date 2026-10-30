@@ -82,9 +82,27 @@ class DesktopThumbnails {
     override fun toString()="DesktopThumbnails(redacted)"
 }
 
+interface WatcherViewport {
+    val isShown:Boolean
+    val width:Int
+    val height:Int
+    fun hasWindowFocus():Boolean
+    fun onGenericMotionEvent(event:MotionEvent):Boolean
+    fun capturePixels():org.mozilla.geckoview.GeckoResult<Bitmap>
+}
+private class VisibleWatcherViewport(private val view:GeckoView):WatcherViewport {
+    override val isShown get()=view.isShown
+    override val width get()=view.width
+    override val height get()=view.height
+    override fun hasWindowFocus()=view.hasWindowFocus()
+    override fun onGenericMotionEvent(event:MotionEvent)=view.onGenericMotionEvent(event)
+    override fun capturePixels()=view.capturePixels()
+}
+
 /** Official GeckoView wheel input and rendered-pixel crops, under the same live native gate. */
-class DesktopViewportBridge(private val view:GeckoView,private val nonce:String,private val images:DesktopThumbnails,
+class DesktopViewportBridge(private val view:WatcherViewport,private val nonce:String,private val images:DesktopThumbnails,
                             private val live:()->Boolean,private val now:()->Long={android.os.SystemClock.elapsedRealtime()}) {
+    constructor(view:GeckoView,nonce:String,images:DesktopThumbnails,live:()->Boolean):this(VisibleWatcherViewport(view),nonce,images,live)
     internal val captureCounts=IntArray(8) // attempts,inactive,aspect,frame,late,error,pending,committed; counts only
     private var closed=false;private var busy=false;private var captures=0;private var scrolls=0;private var lastScroll=Long.MIN_VALUE
     private val requests=HashSet<String>()
