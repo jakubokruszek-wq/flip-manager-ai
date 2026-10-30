@@ -35,6 +35,8 @@ class PhotoBindingInstrumentedTest {
  @Test fun exactOwnPhotosWithoutMainOrArticleCaptureReadablePixels()=runCase("body")
  @Test fun ownSourceInForeignUnboundRegionIsNotCaptured()=runCase("plainForeign")
  @Test fun ownSourceInCommentRegionIsNotCaptured()=runCase("plainComment")
+ @Test fun exactOwnPhotoInMediaAlbumWithoutPostLinkCapturesReadablePixels()=runCase("album")
+ @Test fun exactOwnPhotoInDifferentGmPostIsNotCaptured()=runCase("foreignGm")
  private fun png():String{
   val b=Bitmap.createBitmap(800,400,Bitmap.Config.ARGB_8888);val c=Canvas(b);c.drawColor(Color.WHITE)
   val p=Paint(Paint.ANTI_ALIAS_FLAG).apply{color=Color.BLACK;textSize=60f}
@@ -70,13 +72,13 @@ class PhotoBindingInstrumentedTest {
     val path="/v/t39.30808-6/123456789_987654321_555555555_n.jpg"
     val known="https://scontent-waw2-1.xx.fbcdn.net$path?oh=old&oe=123&_nc_cat=1"
     val rendered="https://scontent-fra3-2.xx.fbcdn.net$path?stp=dst-jpg_s960x960&oh=new&oe=456&_nc_cat=2&_nc_test=$mode"
-    val plain=mode in setOf("plain","body","plainForeign","plainComment")
+    val plain=mode in setOf("plain","body","plainForeign","plainComment","album","foreignGm")
     val sourceUris=if(plain)(0 until 5).map{if(it==0)rendered else "$rendered&_nc_slot=$it"}else listOf(known)
     val story=JSONObject().put("__typename","Story").put("post_id",id).put("permalink_url",link)
       .put("message",JSONObject().put("text","Sprzedam mieszkanie 45,8 m2 za 260000 zł"))
       .put("attachments",org.json.JSONArray(sourceUris.mapIndexed{index,uri->JSONObject().put("media",JSONObject().put("__typename","Photo").put("id",(880000000000001L+index).toString()).put("image",JSONObject().put("uri",uri).put("width",800).put("height",400)))}))
     val heading=if(mode=="foreign"||mode=="plainForeign")"<a href='${link.replace(id,"550000000000092")}'>Other post</a>" else if(plain)"" else "<a href='https://www.facebook.com/'>Author</a>"
-    val photo=if(plain)sourceUris.mapIndexed{index,uri->"<div role=link tabindex=0><img id='photo$index' style='display:block;width:600px;height:300px' src='$uri'></div>"}.joinToString("") else "<a href='https://www.facebook.com/photo/?fbid=880000000000001&amp;set=pcb.$id'><img id='photo' style='display:block;width:600px;height:300px' src='$rendered'></a>"
+    val photo=if(mode=="album"||mode=="foreignGm")sourceUris.mapIndexed{index,uri->"<div><a href='https://www.facebook.com/photo/?fbid=${880000000000001L+index}&amp;set=${if(mode=="album")"a.880000000000099" else "gm.550000000000092"}'><img id='photo$index' style='display:block;width:600px;height:300px' src='$uri'></a></div>"}.joinToString("") else if(plain)sourceUris.mapIndexed{index,uri->"<div role=link tabindex=0><img id='photo$index' style='display:block;width:600px;height:300px' src='$uri'></div>"}.joinToString("") else "<a href='https://www.facebook.com/photo/?fbid=880000000000001&amp;set=pcb.$id'><img id='photo' style='display:block;width:600px;height:300px' src='$rendered'></a>"
     val icons=if(plain)(0 until 56).joinToString(""){"<img style='width:8px;height:8px' src='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='>"} else ""
     val body=when{mode=="plainComment"->"<div role=comment>$photo</div>$icons";plain->"$heading<div>$photo</div>$icons";mode=="anchor"->photo;else->"<div role=article>$heading$photo</div>"}
     val region=if(mode=="body")body else "<main>$body</main>"
@@ -96,7 +98,7 @@ class PhotoBindingInstrumentedTest {
        val imageReply=channel.reviewImages(r,current,host!!.geckoView,images,true,group=FIXTURE_GROUP_ID,alive=live)
        assertTrue("failure=${channel.reviewImageFixtureFailure}, outcome=${channel.reviewImageOutcome}, details=${channel.reviewImageDetails}, live=${live()}, redirects=${lab.redirects.get()}",imageReply)
        assertEquals(channel.reviewImageDetails.toString(),sourceUris.size,channel.reviewImageDetails.getValue("sourceProof"))
-       if(mode in setOf("foreign","plainForeign","plainComment")){
+       if(mode in setOf("foreign","plainForeign","plainComment","foreignGm")){
         assertEquals("NO_IMAGE",channel.reviewImageOutcome);assertTrue(images.ocrRows(id).isEmpty())
         if(mode=="plainComment")assertEquals(5,channel.reviewImageDetails.getValue("excludedOwner"))else assertEquals(sourceUris.size,channel.reviewImageDetails.getValue("foreignOwner"))
        }else{

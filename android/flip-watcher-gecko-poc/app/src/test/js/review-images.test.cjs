@@ -137,3 +137,14 @@ test('exact own bare-media link is allowed, but absent own Story proof or change
  const missing=plainOwnPhoto();missing.image.currentSrc=knownAsset.replace('987654321','987654322');assert.equal((await missing.run()).count,0);
  const changed=plainOwnPhoto();changed.setBeforeAck(()=>changed.image.currentSrc=variantAsset);assert.equal((await changed.run()).status,'STOP');assert.deepEqual(changed.calls.map(c=>c.action),['photos','drop']);
 });
+
+test('exact own photo may have an album or gm link without treating album/media ids as post ids',async()=>{
+ for(const set of ['a.880000000000099','gm.'+id]){
+  const h=plainOwnPhoto();h.wrapper.tagName='A';h.wrapper.hasAttribute=()=>true;h.wrapper.contains=n=>n===h.image;h.wrapper.href='https://www.facebook.com/photo/?fbid=880000000000001&set='+set;
+  const r=await h.run();assert.equal(r.reason,'CAPTURED',set);assert.equal(r.details.sourceOwner,1);assert.equal(r.details.sourceExact,1);
+ }
+ for(const set of ['gm.550000000000092','pcb.550000000000092','unknown.880000000000099','a.880000000000099&set=a.880000000000098']){
+  const h=plainOwnPhoto();h.wrapper.tagName='A';h.wrapper.hasAttribute=()=>true;h.wrapper.contains=n=>n===h.image;h.wrapper.href='https://www.facebook.com/photo/?fbid=880000000000001&set='+set;
+  assert.equal((await h.run()).count,0,set);assert.equal(h.calls.length,0,set);
+ }
+});

@@ -75,7 +75,9 @@ function create(){const used=new Set();return {async read(w,m,core,preview,exact
    if(u.protocol!=='https:'||u.username||u.password||u.port||!['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))return true;
    if(/^\/photo(?:\.php)?\/?$/i.test(u.pathname)){
     const sets=u.searchParams.getAll('set'),media=u.searchParams.getAll('fbid');
-    if(sets.length>1||sets.length===1&&sets[0]!=='pcb.'+m.postId||media.length>1||media.length===1&&!/^\d{5,30}$/.test(media[0])||u.searchParams.has('story_fbid'))return true;
+    // a.ALBUM_ID is media grouping, not a post identity. pcb/gm explicitly
+    // identify a parent post and may contradict the already verified source.
+    if(sets.length>1||sets.length===1&&!(/^a\.\d{5,30}$/.test(sets[0])||sets[0]==='pcb.'+m.postId||sets[0]==='gm.'+m.postId)||media.length>1||media.length===1&&!/^\d{5,30}$/.test(media[0])||u.searchParams.has('story_fbid'))return true;
    }
    return false;
   };
