@@ -46,6 +46,7 @@ class WatcherPairingUiInstrumentedTest {
                 val text=result.findViewById<android.widget.TextView>(android.R.id.message).text.toString()
                 assertTrue(text.contains("Nie zsynchronizowano"));assertFalse(text.contains("invalid code"))
                 assertTrue(activity.findViewById<View>(android.R.id.content).findViewWithTag<Button>("poc.tool.open").isEnabled)
+                assertTrue(activity.findViewById<View>(android.R.id.content).findViewWithTag<Button>("poc.tool.tools").isEnabled)
             }
             assertArrayEquals(before,path.readBytes());assertEquals(11,WatcherGroups.active.size)
         }}finally{ArchiveTestSupport.clear(context)}

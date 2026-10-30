@@ -152,7 +152,7 @@ jobs:
           force-avd-creation: true
           script: |
             adb logcat -c || true
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.PhotoBindingInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.PhotoBindingInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.GroupArchiveInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherLinkInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherPairingUiInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.DesktopConsentInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ArchiveProcessInstrumentedTest#a_seed || (adb logcat -d -s AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             adb -e shell am force-stop pl.jakubokruszek.flipwatcher.geckopoc

@@ -1503,6 +1503,7 @@ class PocActivity : ComponentActivity() {
         banner.setBackgroundColor(if (stop != null) Color.parseColor("#B3261E") else Color.parseColor("#1E5AA8"))
 
         val canScan = open && !reviewWorking() && !desktopBusy && !shareBusy && !responseBusy && !scanning && stop == null && !preferences.getBoolean(groupPreference(KEY_ONE_SCAN_USED), false) && PocPolicy.canScan(kind) && channel?.isConnected == true
+        buttons["open"]?.isEnabled = !watcherBusy
         buttons["open"]?.text = if(ocrBusy) "Przerwij OCR" else if(reviewClosing) "Kończenie uzupełniania" else if(reviewBusy&&reviewPhotosActive) "Przerwij zdjęcia" else if(reviewBusy) "Przerwij uzupełnianie" else if(desktopBusy) "Przerwij próbę" else if (open) "Zamknij sesję" else "Otwórz sesję"
         listOf("group", "login", "back").forEach { buttons[it]?.isEnabled = open && !reviewWorking() && !desktopBusy && !scanning }
         listOf("scan", "scan3").forEach { buttons[it]?.isEnabled = canScan }
@@ -1517,7 +1518,7 @@ class PocActivity : ComponentActivity() {
 
         buttons["sharedLink"]?.isEnabled = buttons["responses"]?.isEnabled == true
         buttons["desktopPreview"]?.isEnabled = buttons["responses"]?.isEnabled == true
-        buttons["tools"]?.isEnabled = !reviewWorking() && !desktopBusy && !shareBusy && !responseBusy && !visibleBusy && !scanning && !inspectingDom && !measuringLoad
+        buttons["tools"]?.isEnabled = !watcherBusy && !reviewWorking() && !desktopBusy && !shareBusy && !responseBusy && !visibleBusy && !scanning && !inspectingDom && !measuringLoad
         if(::offersTab.isInitialized){
             val enabled=!busyForTabs()
             facebookTab.isEnabled=enabled;offersTab.isEnabled=enabled
@@ -1526,7 +1527,6 @@ class PocActivity : ComponentActivity() {
         listOf("desktopResult","reviewResult","ocrResult","deleteResults","savedOcr","photoDiagnosis","watcherGroups","watcherConnect").forEach{buttons[it]?.isEnabled=!busyForTabs()}
         buttons["savedOcr"]?.isEnabled=!busyForTabs()&&!archiveWritePending&&savedResult?.photos?.any{it.crop}==true
         if(deletingResults||ocrBusy||reviewWorking())buttons.filterKeys{it!="open"}.values.forEach{it.isEnabled=false}
-        if(watcherBusy)buttons.values.forEach{it.isEnabled=false}
         val p = probe
         diagnostics.text = buildString {
             appendLine("STAN: ${banner.text}")
