@@ -47,11 +47,11 @@ android {
         applicationId = "pl.jakubokruszek.flipwatcher.geckopoc"
         minSdk = 26
         targetSdk = 36
-        versionCode = providers.gradleProperty("GECKO_POC_VERSION_CODE").orElse("2700").get().toInt()
-        versionName = "0.5.67-gecko-poc"
+        versionCode = providers.gradleProperty("GECKO_POC_VERSION_CODE").orElse("5000").get().toInt()
+        versionName = "0.5.68-gecko-poc"
         buildConfigField("String", "COLLECTOR_CORE_SHA256", "\"$collectorCoreSha256\"")
-        // Paired read-only source metadata; offer/photo uploads remain disabled.
-        buildConfigField("boolean", "LIVE_UPLOAD_ENABLED", "false")
+        // Transfers require explicit automation opt-in and paired device credentials.
+        buildConfigField("boolean", "LIVE_UPLOAD_ENABLED", "true")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -127,6 +127,7 @@ dependencies {
     implementation("org.mozilla.geckoview:geckoview:$geckoviewVersion")
     // Bundled offline Latin OCR; never use play-services model download or a cloud API.
     implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("androidx.work:work-runtime-ktx:2.10.5")
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.1")

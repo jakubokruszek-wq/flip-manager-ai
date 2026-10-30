@@ -5,6 +5,8 @@ type QueryResult = { data: unknown; error: null | { message: string } };
 
 const state = {
   listingUpsertCalls: 0,
+  mobile: false,
+  listingUpdates: [] as Array<Record<string, unknown>>,
   metadataUpsertPayloads: [] as Array<Record<string, unknown>>,
   reconciliationInputs: [] as Array<Record<string, unknown>>,
 };
@@ -27,7 +29,7 @@ class Query {
   maybeSingle() { return Promise.resolve(this.result("maybeSingle")); }
   single() { return Promise.resolve(this.result("single")); }
   insert(payload: Record<string, unknown>) { this.operation = "insert"; this.payload = payload; return this; }
-  update(payload: Record<string, unknown>) { this.operation = "update"; this.payload = payload; return this; }
+  update(payload: Record<string, unknown>) { this.operation = "update"; this.payload = payload; if(this.table === "listings") state.listingUpdates.push(payload); return this; }
   upsert(payload: Record<string, unknown>) {
     this.operation = "upsert";
     this.payload = payload;
@@ -41,6 +43,8 @@ class Query {
   }
 
   private result(terminal: string): QueryResult {
+    if (state.mobile && this.table === "listings" && this.operation === "select") return { data: { id: "legacy-listing", price: 439000, area: 50, rooms: 2, address: "Existing address", images: ["https://storage.test/original.jpg"] }, error: null };
+    if (state.mobile && this.table === "listings" && this.operation === "update") return { data: { id: "legacy-listing" }, error: null };
     if (this.table === "collector_imports" && this.operation === "select") return { data: null, error: null };
     if (this.table === "collector_imports" && this.operation === "insert" && terminal === "single") return { data: { id: "import-1", listing_id: null, status: "received" }, error: null };
     if (this.table === "listings" && this.operation === "select") return { data: null, error: null };
@@ -87,4 +91,21 @@ test("collector reuses a legacy listing found by canonical Facebook post metadat
   assert.equal(state.reconciliationInputs.length, 1);
   assert.equal(state.reconciliationInputs[0]?.matchOrigin, "collector_import");
   assert.equal(state.reconciliationInputs[0]?.matchedAt, "2026-09-27T20:00:00.000Z", "canonical reconciliation must use the time the post was collected, not import processing time");
+});
+
+test("mobile snapshot adds bound photos without replacing authoritative fields or filter decisions", async () => {
+  state.mobile = true; state.listingUpdates = []; state.reconciliationInputs = [];
+  try {
+    const result = await importFacebookCollectorPayload("device-1", "mobile-1", {
+      sourcePostUrl: "https://www.facebook.com/groups/new-route/posts/4486483384955652/",
+      title: "Oferta z Facebooka", content: null, price: 1, area: 1, rooms: 1, location: null,
+      imageUrls: ["https://storage.test/crop.jpg"],
+    }, { mobileSnapshot: true });
+    assert.equal(result.listingId, "legacy-listing");
+    const saved = state.listingUpdates[0];
+    assert.equal(saved.price, 439000);assert.equal(saved.area, 50);assert.equal(saved.address, "Existing address");
+    assert.equal("title" in saved, false);assert.equal("description" in saved, false);
+    assert.deepEqual(saved.images,["https://storage.test/original.jpg","https://storage.test/crop.jpg"]);
+    assert.equal(state.reconciliationInputs.length,0,"a typed snapshot cannot reject a richer existing listing");
+  } finally { state.mobile = false; }
 });

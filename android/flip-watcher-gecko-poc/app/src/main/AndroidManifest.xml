@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- GeckoView loads pages. OCR uses a bundled local model; only Watcher group metadata can be synchronized with a paired device token. -->
+    <!-- GeckoView loads pages. OCR is local. Opted-in automation sends selected offer fields and bound image crops to the paired Manager. -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- Stage C local screen-off test only: one short foreground service started by one alarm. -->
+    <!-- Foreground data sync covers opted-in automatic scans and the local screen-off test. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -37,5 +37,8 @@
             android:name=".ScreenOffTestService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <service android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync" android:exported="false"
+            xmlns:tools="http://schemas.android.com/tools" tools:node="merge" />
     </application>
 </manifest>
