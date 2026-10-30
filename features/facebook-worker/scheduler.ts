@@ -11,6 +11,8 @@ import { resolveFacebookGroupDisplayName } from "@/features/facebook-groups/disp
 import { enqueueFacebookJobs } from "./jobs";
 import { activeJobDecision, orderSchedulerSources, schedulerCooldownMinutes, schedulerCycleDecision, withExclusiveSchedulerLock, type SchedulerSource } from "./scheduler-core";
 
+import { readDailySchedule, dailyCycleDecision } from "./daily-schedule";
+
 type Row = Record<string, unknown>;
 type SchedulerMarker = { automatic: true; cycleId: string; cycleStartedAt: string; cooldownMinutes: number; sourceId: string; plannedSourceIds: string[] };
 const LOCK_NONCE = "facebook-automatic-scheduler-production";
@@ -38,6 +40,7 @@ export async function runFacebookSchedulerTick(now = new Date()): Promise<Facebo
 }
 
 async function runLockedSchedulerTick(supabase: ReturnType<typeof createFacebookWatcherAdminClient>, now: Date): Promise<FacebookSchedulerTickResult> {
+    const dailySchedule = readDailySchedule(process.env.FACEBOOK_WATCHER_DAILY_SCAN_TIMES);
     const active = await activeBrowserJob(supabase);
     if (active) {
       const decision = activeJobDecision({ status: text(active.status) ?? "unknown", attempts: count(active.attempts), createdAt: text(active.created_at), heartbeatAt: text(active.heartbeat_at) }, now.getTime());
@@ -61,9 +64,12 @@ async function runLockedSchedulerTick(supabase: ReturnType<typeof createFacebook
       const cooldownMinutes = cycleComplete ? schedulerCooldownMinutes(context.filter.scanIntervalMinutes) : cycle.cooldownMinutes;
       const decision = schedulerCycleDecision({ plan: cycle.plan, terminalSourceIds, cycleStartedAt: cycle.startedAt, cooldownMinutes, nowMs: now.getTime() });
       if (decision.type === "ADVANCE") return enqueueAutomaticSource(context.filter, cycle.cycleId, cycle.startedAt, cycle.cooldownMinutes, cycle.plan, decision.source, terminalSourceIds.length > 0 ? "ADVANCED" : "STARTED");
-      if (decision.type === "WAIT_COOLDOWN") return output("COMPLETED", cycle.cycleId, null, null, null);
+      if (!dailySchedule && decision.type === "WAIT_COOLDOWN") return output("COMPLETED", cycle.cycleId, null, null, null);
     }
 
+    if (dailySchedule && !dailyCycleDecision(dailySchedule, now, cycle?.startedAt ?? null).due) {
+      return output(cycle ? "COMPLETED" : "IDLE", cycle?.cycleId ?? null, null, null, "WAITING_FOR_DAILY_SCHEDULE");
+    }
     const cycleId = randomUUID();
     return enqueueAutomaticSource(context.filter, cycleId, now.toISOString(), schedulerCooldownMinutes(context.filter.scanIntervalMinutes), context.sources, context.sources[0], "STARTED");
 }
@@ -98,8 +104,10 @@ export async function getFacebookSchedulerDiagnostics() {
   const device = record(devicesResult.data?.[0]);
   const counts = { queued: 0, running: 0, completed: 0, failed: 0 };
   for (const job of jobs) if (typeof job.status === "string" && job.status in counts) counts[job.status as keyof typeof counts] += 1;
+  const dailySchedule = readDailySchedule(process.env.FACEBOOK_WATCHER_DAILY_SCAN_TIMES);
+  const dailyDecision = dailySchedule ? dailyCycleDecision(dailySchedule, new Date(), cycle?.startedAt ?? null) : null;
   return {
-    scheduler: { lastCycle: cycle ? latestTimestamp(cycle.scans.map((scan) => text(scan.finished_at))) : null, nextCycle: cycle && diagnosticCooldown !== undefined ? new Date(Date.parse(cycle.startedAt) + diagnosticCooldown * 60_000).toISOString() : null, cycleId: cycle?.cycleId ?? null, activeSource: active ? snapshotSourceId(active.group_snapshot) : null, cycleStatus: active ? "RUNNING" : cycle && cycle.scans.length < cycle.plan.length ? "WAITING" : "IDLE", automaticScanCount: automaticScans.length, latestAutomaticScan: automaticScans[0] ? { id: text(automaticScans[0].id), scanRunId: text(automaticScans[0].scan_run_id), status: text(automaticScans[0].status), sourceId: markerFromScan(automaticScans[0])?.sourceId ?? null, startedAt: text(automaticScans[0].started_at), finishedAt: text(automaticScans[0].finished_at), error: text(automaticScans[0].error_message) } : null,
+    scheduler: { schedule: dailySchedule ?? { mode: "INTERVAL" }, lastCycle: cycle ? latestTimestamp(cycle.scans.map((scan) => text(scan.finished_at))) : null, nextCycle: dailyDecision ? dailyDecision.nextCycleAt : cycle && diagnosticCooldown !== undefined ? new Date(Date.parse(cycle.startedAt) + diagnosticCooldown * 60_000).toISOString() : null, cycleId: cycle?.cycleId ?? null, activeSource: active ? snapshotSourceId(active.group_snapshot) : null, cycleStatus: active ? "RUNNING" : cycle && cycle.scans.length < cycle.plan.length ? "WAITING" : "IDLE", automaticScanCount: automaticScans.length, latestAutomaticScan: automaticScans[0] ? { id: text(automaticScans[0].id), scanRunId: text(automaticScans[0].scan_run_id), status: text(automaticScans[0].status), sourceId: markerFromScan(automaticScans[0])?.sourceId ?? null, startedAt: text(automaticScans[0].started_at), finishedAt: text(automaticScans[0].finished_at), error: text(automaticScans[0].error_message) } : null,
       preflight: {
         lockStore: lockResult.error ? `ERROR:${lockResult.error.code ?? "QUERY_FAILED"}` : "PASS",
         lockPresent: Boolean(lockResult.data),

@@ -1,0 +1,7 @@
+{
+  "name": "flip-watcher-server",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node server.mjs", "test": "node --test *.test.mjs" },
+  "dependencies": { "playwright": "1.61.1" }
+}

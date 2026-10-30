@@ -1,0 +1,64 @@
+name: Facebook server collector checks
+on:
+  pull_request:
+    paths: ['workers/facebook-server/**', 'extensions/facebook-collector/**', 'features/facebook-worker/daily-schedule*', 'features/facebook-worker/scheduler.ts', '.github/workflows/facebook-server-ci.yml']
+  push:
+    branches: ['codex/watcher-server-automation']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Calendar, scheduler and protected desktop regression
+        run: |
+          node --test workers/facebook-server/access.test.mjs
+          node --experimental-strip-types --test features/facebook-worker/daily-schedule.test.ts features/facebook-worker/scheduler-core.test.ts features/facebook-worker/scheduler-integration.test.cjs
+          node --import ./scripts/test-alias-loader.mjs --experimental-strip-types --experimental-test-module-mocks --test features/facebook-worker/scheduler-group-registry.test.ts features/facebook-worker/scheduler-settings.test.ts
+          npx tsc --noEmit --incremental false
+          npx eslint features/facebook-worker/daily-schedule.ts features/facebook-worker/daily-schedule.test.ts features/facebook-worker/scheduler.ts
+      - name: Build actual browser image
+        run: docker build -f workers/facebook-server/Dockerfile -t flip-watcher-server:test .
+      - name: Boot actual browser, verify protected desktop, restart same profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          desktop_password="$(openssl rand -hex 24)"
+          echo "::add-mask::$desktop_password"
+          export WATCHER_DESKTOP_PASSWORD="$desktop_password"
+          docker volume create watcher-ci-profile
+          docker run -d --name watcher-ci -p 127.0.0.1:18080:8080 \
+            --shm-size=1g --mount source=watcher-ci-profile,target=/data \
+            -e WATCHER_DESKTOP_PASSWORD -e WATCHER_DESKTOP_ORIGIN=https://desktop.example \
+            flip-watcher-server:test
+          for phase in initial restarted; do
+            for attempt in $(seq 1 60); do
+              if curl --fail --silent http://127.0.0.1:18080/healthz >/dev/null; then break; fi
+              sleep 2
+            done
+            curl --fail --silent http://127.0.0.1:18080/healthz
+            test "$(curl --silent -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/vnc.html)" = 401
+            curl --fail --silent -u "flip:$desktop_password" -H 'Host: desktop.example' -H 'X-Forwarded-Proto: https' \
+              http://127.0.0.1:18080/status | tee /tmp/watcher-status.json
+            jq -e '.state == "BROWSER_RUNNING" and .pairing == "DISCONNECTED"' /tmp/watcher-status.json
+            curl --fail --silent -u "flip:$desktop_password" -H 'Host: desktop.example' -H 'X-Forwarded-Proto: https' \
+              http://127.0.0.1:18080/vnc.html >/dev/null
+            if [ "$phase" = initial ]; then docker restart --time 15 watcher-ci; fi
+          done
+          docker stop --time 15 watcher-ci
+      - name: Browser startup logs
+        if: always()
+        run: docker logs watcher-ci 2>&1 || true
+      - name: Clean test browser and profile
+        if: always()
+        run: |
+          docker rm -f watcher-ci || true
+          docker volume rm watcher-ci-profile || true
