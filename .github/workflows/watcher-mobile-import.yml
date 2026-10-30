@@ -1,0 +1,29 @@
+name: Watcher mobile import contract
+on:
+  pull_request:
+    paths:
+      - "features/collector/facebook-mobile*"
+      - "features/collector/facebook-import*"
+      - "app/api/collector/facebook/mobile/**"
+      - ".github/workflows/watcher-mobile-import.yml"
+  push:
+    paths:
+      - "features/collector/facebook-mobile*"
+      - "features/collector/facebook-import*"
+      - "app/api/collector/facebook/mobile/**"
+      - ".github/workflows/watcher-mobile-import.yml"
+permissions:
+  contents: read
+jobs:
+  contract:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Mobile import, idempotency and image bounds
+        run: node --test features/collector/facebook-mobile.test.ts
+      - name: Preserve existing Manager records
+        run: node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/collector/facebook-import.test.ts

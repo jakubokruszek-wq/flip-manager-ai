@@ -95,8 +95,8 @@ export function CollectorSetupPage() {
         </> : null}
         {pairingStatus.status === "UNVERIFIED" ? <Button variant="outline" disabled={busy} onClick={requestStatus}>Sprawdź ponownie</Button> : null}
         <div className="space-y-3 border-t pt-4">
-          <p className="font-medium">Aplikacja Android — synchronizacja grup</p>
-          <p className="text-sm text-muted-foreground">Kod zawiera klucz urządzenia. Wklej go tylko do swojej aplikacji Flip Watcher. Oferty i zdjęcia pozostają na telefonie.</p>
+          <p className="font-medium">Aplikacja Android — połączenie z Managerem</p>
+          <p className="text-sm text-muted-foreground">Kod zawiera klucz urządzenia. Wklej go tylko do swojej aplikacji Flip Watcher. Połączenie synchronizuje grupy; wysyłkę ofert i zdjęć włączasz osobno w automacie aplikacji Android.</p>
           <Button variant="outline" disabled={busy || androidCode !== null} onClick={() => void registerAndroid()}>Kod dla aplikacji Android</Button>
           {androidCode ? <div className="space-y-2">
             <label className="block text-sm">Kod parowania<textarea readOnly autoComplete="off" spellCheck={false} className="mt-1 w-full rounded-lg border p-2 font-mono text-xs" rows={5} value={androidCode} /></label>
