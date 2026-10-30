@@ -1,0 +1,11 @@
+# Zdjęcia bez article i href — 0.5.63
+
+Raport telefonu dla posta 1634880338330109: IMG61, źródeł własnego potwierdzonego posta5, dokładnych dopasowań URI5, brak article5, linków z postem0, powiązanych elementów0. To odrzucenie poprawnie dopasowanych mediów przez dodatkowy warunek DOM, przed geometrią lub OCR.
+
+Nowa ścieżka przyjmuje wyłącznie IMG z bajtowo identycznym URI z już potwierdzonej własnej sekcji Story na świeżo otwartym, dokładnym permalinku. Nie rozszerza normalizacji CDN. Wymaga jednej widocznej przestrzeni main/dialog; gdy strona nie ma takich znaczników, granicą jest body tego samego dokumentu. To nadal wycinek jednego obrazu, nigdy OCR całej strony. Zdjęcia poza istniejącym main, w nawigacji, formularzu, komentarzu, cytacie, przy obcym jawnym ID/permalinku, w wielu niejednoznacznych obszarach lub ze zmienionym źródłem nie są przyjmowane. Zgodność wariantów CDN bez article nadal wymaga wcześniejszego jawnego linku posta/albumu.
+
+Licznik sourceOwner oznacza przyjęte dokładne źródła bez linku. Protokół przyjmuje stare9/16 i nowe17 pól diagnostyki; nowy licznik nie może przekraczać dokładnych dopasowań ani przyjętych elementów. W starych raportach ma wartość0. Zapisane wyniki, cookies, zgody, limity, OCR bez przeglądarki i Kasuj bazę nie zmieniają się.
+
+Nowe przypadki Androida odtwarzają61 IMG i5 dokładnie zgodnych URI w plain DIV/role=link bez article/href. Warianty z main oraz bez main muszą przechwycić rzeczywisty lokalny wycinek i odczytać cenę przez MLKit. Te same URI przy obcym nagłówku lub w komentarzu muszą dać0 wycinków. Pomocnicze rozszerzenie dostarcza lokalny PNG wyłącznie do pierwszego literalnego zasobu testowego; pozostałe żądania testowego CDN są anulowane. Nie otwiera prawdziwego Facebooka. Testy JS obejmują także konflikty identyfikatorów, niejednoznaczne obszary, niezgodne źródło i podmianę po pikselach.
+
+Źródło dokładnie zgodne może być opakowane zwykłym linkiem a.ALBUM_ID lub gm.POST_ID. Album a nie jest dowodem obcego posta; gm/pcb wskazują rodzica i inny POST_ID nadal blokuje przechwycenie. Duplikaty set, nieznane typy set, komentarze i brak własnego źródła pozostają odrzucane. Dodatkowe dwa przypadki natywne sprawdzają prawdziwy wycinek z linku albumu oraz odrzucenie obcego gm.

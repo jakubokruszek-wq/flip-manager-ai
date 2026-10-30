@@ -1,0 +1,8 @@
+<!doctype html><html style="overflow:clip"><head><title>Local operator target fixture</title><meta name="viewport" content="width=device-width"></head><body style="margin:0;overflow:clip">
+<div id="decoy" style="position:fixed;left:0;top:0;width:45vw;height:100vh;overflow-y:auto">
+<article role="article"><a href="https://www.facebook.com/groups/1234567890123/posts/550000000000091/">Initial record A</a><div data-ad-preview="message">Sprzedam mieszkanie 42m2, cena 319000 zł.</div></article>
+<article role="article"><a href="https://www.facebook.com/groups/1234567890123/posts/550000000000092/">Initial record B</a></article><div style="height:2200px">Finite decoy range</div></div>
+<div id="chosen" style="position:fixed;left:50vw;top:0;width:50vw;height:100vh;overflow-y:auto"><div style="height:50000px">Swipe this ordinary content pane</div></div>
+<script>
+const feed=document.querySelector('#chosen');let seen=false;feed.addEventListener('scroll',()=>{if(seen||feed.scrollTop<2)return;seen=true;fetch('/gesture-ready');const more=document.createElement('article');more.setAttribute('role','article');more.innerHTML='<a href="https://www.facebook.com/groups/1234567890123/posts/550000000000096/">New exact record</a><div data-ad-preview="message">Sprzedam mieszkanie 68m2, cena 680000 zł.</div>';feed.prepend(more);});
+</script></body></html>

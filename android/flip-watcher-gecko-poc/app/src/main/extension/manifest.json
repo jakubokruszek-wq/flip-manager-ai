@@ -1,0 +1,107 @@
+{
+  "manifest_version": 2,
+  "name": "Flip Watcher Gecko POC collector",
+  "version": "0.5.67",
+  "description": "Built-in GeckoView extension: selected Watcher group, explicit consent, unchanged collector-core.js.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "flip-gecko-poc@flip-manager.local"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.facebook.com/groups/lodzsprzedazzakupwynajem/*",
+        "https://www.facebook.com/groups/1253809205540869/*",
+        "https://www.facebook.com/groups/1689328011096404/*",
+        "https://www.facebook.com/groups/1424921570856189/*",
+        "https://www.facebook.com/groups/mieszkania.na.sprzedaz.lodz/*",
+        "https://www.facebook.com/groups/402796264871862/*",
+        "https://www.facebook.com/groups/308185249243000/*",
+        "https://www.facebook.com/groups/441817689512680/*",
+        "https://www.facebook.com/groups/mieszkaniawlodzi/*",
+        "https://www.facebook.com/groups/w.lodzkim.dzialka.dom.mieszkanie/*",
+        "https://www.facebook.com/groups/ogloszenia.lodzkie/*",
+        "https://m.facebook.com/groups/lodzsprzedazzakupwynajem/*",
+        "https://m.facebook.com/groups/1253809205540869/*",
+        "https://m.facebook.com/groups/1689328011096404/*",
+        "https://m.facebook.com/groups/1424921570856189/*",
+        "https://m.facebook.com/groups/mieszkania.na.sprzedaz.lodz/*",
+        "https://m.facebook.com/groups/402796264871862/*",
+        "https://m.facebook.com/groups/308185249243000/*",
+        "https://m.facebook.com/groups/441817689512680/*",
+        "https://m.facebook.com/groups/mieszkaniawlodzi/*",
+        "https://m.facebook.com/groups/w.lodzkim.dzialka.dom.mieszkanie/*",
+        "https://m.facebook.com/groups/ogloszenia.lodzkie/*",
+        "https://facebook.com/groups/lodzsprzedazzakupwynajem/*",
+        "https://facebook.com/groups/1253809205540869/*",
+        "https://facebook.com/groups/1689328011096404/*",
+        "https://facebook.com/groups/1424921570856189/*",
+        "https://facebook.com/groups/mieszkania.na.sprzedaz.lodz/*",
+        "https://facebook.com/groups/402796264871862/*",
+        "https://facebook.com/groups/308185249243000/*",
+        "https://facebook.com/groups/441817689512680/*",
+        "https://facebook.com/groups/mieszkaniawlodzi/*",
+        "https://facebook.com/groups/w.lodzkim.dzialka.dom.mieszkanie/*",
+        "https://facebook.com/groups/ogloszenia.lodzkie/*",
+        "http://127.0.0.1/groups/*"
+      ],
+      "js": [
+        "main-bootstrap.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://www.facebook.com/*",
+        "https://m.facebook.com/*",
+        "https://facebook.com/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": [
+        "collector-core.js",
+        "poc-adapter.js",
+        "visible-posts.js",
+        "main-content.js",
+        "share-context.js",
+        "desktop-fields.js",
+        "desktop-viewport.js",
+        "desktop-notice.js",
+        "desktop-gesture.js",
+        "desktop-preview.js",
+        "review-post.js",
+        "review-images.js",
+        "poc-content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "permissions": [
+    "nativeMessaging",
+    "nativeMessagingFromContent",
+    "geckoViewAddons",
+    "scripting",
+    "webRequest",
+    "webRequestBlocking",
+    "https://*.facebook.com/*",
+    "https://facebook.com/*",
+    "https://*.fbcdn.net/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "scripts": [
+      "collector-core.js",
+      "poc-adapter.js",
+      "response-diagnosis.js",
+      "main-transport.js",
+      "desktop-fields.js",
+      "desktop-preview.js",
+      "desktop-background.js",
+      "ocr-fields.js",
+      "poc-background.js"
+    ]
+  }
+}

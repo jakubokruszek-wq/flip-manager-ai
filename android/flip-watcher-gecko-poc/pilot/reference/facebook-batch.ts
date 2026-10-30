@@ -1,0 +1,859 @@
+export const COLLECTOR_DISCOVERY_LAYERS = ["DOM", "HYDRATION", "NETWORK", "SEARCH_DOM", "SEARCH_HYDRATION", "SEARCH_NETWORK", "SEARCH_MEDIA_RESOLVE"] as const;
+export type CollectorDiscoveryLayer = (typeof COLLECTOR_DISCOVERY_LAYERS)[number];
+export type CollectorSourceType = "GROUP" | "PROFILE";
+export type CollectorDiscoveryHealth = "HEALTHY" | "DEGRADED" | "FAILED";
+export type CollectorIdentityConfidence = "EXACT" | "UNVERIFIED";
+export type CollectorDiscoverySource = "MAIN_FEED" | "SEARCH";
+export type CollectorFirstSeenPhase = "MAIN_FEED" | "SEARCH";
+export type CollectorImageMode = "SOURCE_SCAN_DATA_ONLY" | "GALLERY_HYDRATION_MEDIA_ALLOWED";
+
+export type CollectorImageNetworkDiagnostics = {
+  imageMode: CollectorImageMode;
+  imageRequestsBlocked: number;
+  imageRequestsAllowed: number;
+  imageResponsesReceived: number;
+  imageBytesReceived: number;
+  listingImageRequestsStarted: number;
+  listingImageResponsesReceived: number;
+  listingImageBytesReceived: number;
+  thumbnailsDownloaded: number;
+  fullImagesDownloaded: number;
+  fullGalleriesDownloaded: number;
+  photoViewerNavigations: number;
+  photoViewerNavigationsWithImageBytes: number;
+  imageRequestTypeCounts: Record<string, number>;
+  imageResponseTypeCounts: Record<string, number>;
+  imageResponseSamples: Array<{ type: string; host: string | null; path: string | null; tabId: number | null; bytes: number }>;
+};
+
+/** Safe source-scan tab topology. Source scans are intentionally one-tab and
+ * never open a photo/detail resolver tab; gallery hydration is separate. */
+export type CollectorSourceTabDiagnostics = {
+  primaryTabId: number | null;
+  childTabsCreated: number;
+  postNavigations: number;
+  mediaNavigations: number;
+  photoViewerNavigations: number;
+  inPageParentResolved: number;
+  structuredParentResolved: number;
+  unverifiedWithoutNavigation: number;
+};
+
+export type CollectorStageTelemetry = {
+  stage: string;
+  startedAt: string;
+  finishedAt: string | null;
+  elapsedMs: number | null;
+  status: "RUNNING" | "PASS" | "PARTIAL" | "FAIL";
+  errorCode: string | null;
+};
+
+export type CollectorMediaRecord = {
+  url: string;
+  mediaId: string | null;
+  exactPostId: string | null;
+  exactAssociation: boolean;
+  discoveryLayers: CollectorDiscoveryLayer[];
+};
+
+export type CollectorPostRecord = {
+  postId: string;
+  permalink: string;
+  sourceId: string;
+  sourceType: CollectorSourceType;
+  author: string | null;
+  text: string | null;
+  publishedAt: string | null;
+  timestampText: string | null;
+  media: CollectorMediaRecord[];
+  discoveryLayers: CollectorDiscoveryLayer[];
+  firstSeenIteration: number;
+  identityConfidence: CollectorIdentityConfidence;
+  identityReasons: string[];
+  discoverySource: CollectorDiscoverySource;
+  searchQuery: string | null;
+  searchQueries: string[];
+  foundInMainFeed: boolean;
+  firstSeenPhase: CollectorFirstSeenPhase;
+  resolvedFromMediaTile: boolean;
+  mediaIds: string[];
+  parentResolutionEvidence: string[];
+  rootPostId?: string | null;
+  rootAuthorSource?: string | null;
+  rootTextSource?: string | null;
+  rootTextVerified?: boolean;
+};
+
+export type CollectorSourceHealth = {
+  status: CollectorDiscoveryHealth;
+  visibleCardCount: number;
+  capturedPostCount: number;
+  captureRatio: number;
+  scrolls: number;
+  durationMs: number;
+  stopReason: string;
+  reasons: string[];
+};
+
+export type CollectorSearchQueryTelemetry = {
+  query: string;
+  executed: boolean;
+  status: CollectorDiscoveryHealth;
+  scrolls: number;
+  scrollCount?: number | null;
+  visibleCards: number;
+  captured: number;
+  unique: number;
+  duplicatesVsMainFeed: number;
+  uniqueContribution: number;
+  sellContribution: number;
+  tilesSeen: number;
+  rawTilesSeen?: number | null;
+  uniqueTilesFound?: number | null;
+  candidateBufferSize?: number | null;
+  candidateCapReached?: boolean | null;
+  resolutionCandidates?: number | null;
+  inPageTilesInspected?: number | null;
+  inPageParentResolved?: number | null;
+  structuredParentResolved?: number | null;
+  unverifiedWithoutNavigation?: number | null;
+  payloadObserved?: number | null;
+  tilesOpened: number;
+  tilesResolved: number;
+  tilesUnverified: number;
+  uniqueParentPosts: number;
+  verifiedParentPosts: number;
+  duplicatesByMedia: number;
+  discoveryDurationMs?: number | null;
+  resolutionDurationMs?: number | null;
+  discoveryDuration?: number | null;
+  resolutionDuration?: number | null;
+  discoveryStopReason?: string | null;
+  resolutionStopReason?: string | null;
+  discoveryEvidence?: CollectorSearchDiscoveryEvidence | null;
+  tabLoadAttempts?: number | null;
+  tabLoadRecovery?: string | null;
+  tabLoadError?: string | null;
+  durationMs: number;
+  stopReason: string;
+  tileDiagnostics?: CollectorSearchTileDiagnostic[];
+  sellIntentCandidates?: number;
+  exactSell?: number;
+  persistableSell?: number;
+  resultCardsInspected?: number;
+  unresolvedByReason?: Record<string, number>;
+  searchResultDiagnostics?: CollectorSearchResultDiagnostic[];
+};
+
+export type CollectorSearchDiscoveryEvidence = {
+  scrollAttempts: number;
+  reachedBottom: boolean;
+  consecutiveBottomChecks: number;
+  stableScrollPosition: boolean;
+  urlStable: boolean;
+  pageErrorFree: boolean;
+  consecutiveNoGrowthChecks: number;
+  consecutiveNoVisibleGrowthChecks: number;
+  networkQuietChecks: number;
+  noPendingContent: boolean;
+  finalScrollTop: number;
+  finalScrollHeight: number;
+  viewportHeight: number;
+  uniqueTileProgression: number[];
+};
+
+export type CollectorSearchTileDiagnostic = {
+  query: string;
+  tileIndex?: number;
+  mediaUrl?: string | null;
+  mediaId: string;
+  initialUrl?: string | null;
+  finalUrl?: string | null;
+  tabStatus?: string | null;
+  injectAttempted?: boolean;
+  injectSuccess?: boolean;
+  injectError?: string | null;
+  sendMessageError?: string | null;
+  photoOpenedAt?: string | null;
+  contentScriptReadyAt?: string | null;
+  sendMessageAttemptCount?: number;
+  sendMessageFirstAt?: string | null;
+  sendMessageSuccessAt?: string | null;
+  payloadObservedAt?: string | null;
+  responseAt?: string | null;
+  photoOpened: boolean;
+  structuredPayloadFound: boolean;
+  currMediaId: string | null;
+  containerStoryPostId: string | null;
+  topLevelPostId: string | null;
+  mediaAttachmentCrosscheck: boolean;
+  parentPostId: string | null;
+  parentPermalink: string | null;
+  rootAuthorFound: boolean;
+  rootTextFound: boolean;
+  identityResult: CollectorIdentityConfidence;
+  failSubstep: string | null;
+  elapsedMs: number;
+};
+
+/** Safe, card-bound search evidence. No post text or raw Facebook payload is
+ * persisted; only structural booleans, bounded canonical ids/URLs and the
+ * first failed identity hop are retained. */
+export type CollectorSearchResultDiagnostic = {
+  query: string | null;
+  candidateIndex: number;
+  hasResultContainer: boolean;
+  hasAnchor: boolean;
+  anchorHref: string | null;
+  hasPostIdInHref: boolean;
+  hasStoryFbid: boolean;
+  hasFtEntIdentifier: boolean;
+  hasTrackingData: boolean;
+  hasAuthor: boolean;
+  hasRootText: boolean;
+  hasTimestamp: boolean;
+  hasStructuredPayload: boolean;
+  hasCanonicalPostCandidate: boolean;
+  postIdCandidate: string | null;
+  permalinkCandidate: string | null;
+  sellIntentCandidate: boolean;
+  firstFailedHop: string | null;
+};
+
+export type CollectorMainFeedDiagnostic = {
+  postId: string;
+  sourceLayer: "NETWORK" | "DOM" | "BOTH";
+  structuredAuthorPresent: boolean;
+  structuredTextPresent: boolean;
+  structuredTextPath: string | null;
+  rootCardFound: boolean;
+  rootCardPostIdBound: boolean;
+  rootCardPermalink: string | null;
+  rootAuthorFound: boolean;
+  rootTextFound: boolean;
+  seeMorePresent: boolean;
+  seeMoreClicked: boolean;
+  rootTextAfterExpand: boolean;
+  authorMatch: boolean;
+  postIdMatch: boolean;
+  finalIdentity: CollectorIdentityConfidence;
+  failSubstep: string | null;
+};
+
+export type CollectorSearchTelemetry = {
+  hardTimeBudgetMs: number;
+  durationMs: number;
+  queriesPlanned: number;
+  queriesExecuted: number;
+  budgetExhausted: boolean;
+  queries: CollectorSearchQueryTelemetry[];
+};
+
+export type FacebookCollectorBatch = {
+  scanId: string;
+  batchId: string;
+  sourceId: string;
+  sourceType: CollectorSourceType;
+  sourceUrl: string;
+  collectedAt: string;
+  health: CollectorSourceHealth;
+  searchTelemetry: CollectorSearchTelemetry | null;
+  imageMode: CollectorImageMode;
+  imageNetworkDiagnostics: CollectorImageNetworkDiagnostics | null;
+  sourceTabDiagnostics?: CollectorSourceTabDiagnostics;
+  stageTelemetry?: CollectorStageTelemetry[];
+  mainFeedTelemetry?: CollectorMainFeedDiagnostic[];
+  mainFeedSummary?: CollectorMainFeedSummary | null;
+  recall?: CollectorRecallTelemetry | null;
+  posts: CollectorPostRecord[];
+};
+
+export function normalizeFacebookCollectorBatch(value: unknown): FacebookCollectorBatch {
+  if (!isRecord(value)) throw new Error("COLLECTOR_BATCH_INVALID");
+  const sourceType = enumValue(value.sourceType, ["GROUP", "PROFILE"] as const, "COLLECTOR_SOURCE_TYPE_INVALID");
+  const sourceUrl = facebookSourceUrl(requiredString(value.sourceUrl, "COLLECTOR_SOURCE_URL_REQUIRED"), sourceType);
+  const sourceId = requiredString(value.sourceId, "COLLECTOR_SOURCE_ID_REQUIRED");
+  if (facebookSourceId(sourceUrl, sourceType) !== sourceId) throw new Error("COLLECTOR_SOURCE_URL_ID_MISMATCH");
+  const posts = Array.isArray(value.posts) ? value.posts.slice(0, 150).map((post) => normalizePost(post, sourceId, sourceType)) : [];
+  const deduped = [...new Map(posts.map((post) => [post.postId || post.permalink, post])).values()];
+  const health = normalizeHealth(value.health, deduped.length);
+  return {
+    scanId: uuid(value.scanId, "COLLECTOR_SCAN_ID_INVALID"),
+    batchId: uuid(value.batchId, "COLLECTOR_BATCH_ID_INVALID"),
+    sourceId,
+    sourceType,
+    sourceUrl,
+    collectedAt: isoDate(value.collectedAt, "COLLECTOR_COLLECTED_AT_INVALID"),
+    health,
+    searchTelemetry: normalizeSearchTelemetry(value.searchTelemetry),
+    imageMode: imageMode(value.imageMode),
+    imageNetworkDiagnostics: normalizeImageNetworkDiagnostics(value.imageNetworkDiagnostics, value.imageMode),
+    sourceTabDiagnostics: normalizeSourceTabDiagnostics(value.sourceTabDiagnostics),
+    stageTelemetry: normalizeStageTelemetry(value.stageTelemetry),
+    mainFeedTelemetry: normalizeMainFeedTelemetry(value.mainFeedTelemetry),
+    mainFeedSummary: normalizeMainFeedSummary(value.mainFeedSummary),
+    recall: normalizeRecall(value.recall),
+    posts: deduped,
+  };
+}
+
+function normalizeStageTelemetry(value: unknown): CollectorStageTelemetry[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 24).flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const stage = nullableString(item.stage, 80);
+    const startedAt = nullableIsoTimestamp(item.startedAt);
+    if (!stage || !startedAt) return [];
+    const status = item.status === "PASS" || item.status === "PARTIAL" || item.status === "FAIL" ? item.status : "RUNNING";
+    return [{ stage, startedAt, finishedAt: nullableIsoTimestamp(item.finishedAt), elapsedMs: Number.isFinite(item.elapsedMs) ? boundedInteger(item.elapsedMs, 0, 600_000) : null, status, errorCode: nullableString(item.errorCode, 120) }];
+  });
+}
+
+export const COLLECTOR_ACQUISITION_MODES = ["NETWORK_FIRST", "SEARCH_ENABLED"] as const;
+export type CollectorAcquisitionMode = (typeof COLLECTOR_ACQUISITION_MODES)[number];
+export const COLLECTOR_FEED_DEPTH_MODES = ["CURRENT_DEPTH", "DEEPER_NETWORK_FEED"] as const;
+export type CollectorFeedDepthMode = (typeof COLLECTOR_FEED_DEPTH_MODES)[number];
+
+/** Per-scroll hydration measurement: how much of the fixed sleep was actually needed. */
+export type CollectorHydrationSample = { iteration: number; moved: boolean; plannedWaitMs: number; waitedMs: number; firstGrowthMs: number | null };
+
+export type CollectorMainFeedSummary = {
+  acquisitionMode: CollectorAcquisitionMode;
+  feedDepthMode: CollectorFeedDepthMode;
+  budgetMs: number;
+  maxScrolls: number;
+  maxPosts: number;
+  durationMs: number;
+  discoveryDurationMs: number;
+  scrolls: number;
+  visibleCardCount: number;
+  networkResponses: number;
+  postsDiscovered: number;
+  exactIdentities: number;
+  unverifiedIdentities: number;
+  networkSourcedPosts: number;
+  sellCandidates: number;
+  stopReason: string | null;
+  healthStatus: string | null;
+  hydrationSamples: CollectorHydrationSample[];
+};
+
+function normalizeMainFeedSummary(value: unknown): CollectorMainFeedSummary | null {
+  if (!isRecord(value)) return null;
+  const samples = Array.isArray(value.hydrationSamples) ? value.hydrationSamples.slice(0, 60) : [];
+  return {
+    acquisitionMode: typeof value.acquisitionMode === "string" && (COLLECTOR_ACQUISITION_MODES as readonly string[]).includes(value.acquisitionMode) ? value.acquisitionMode as CollectorAcquisitionMode : "NETWORK_FIRST",
+    feedDepthMode: typeof value.feedDepthMode === "string" && (COLLECTOR_FEED_DEPTH_MODES as readonly string[]).includes(value.feedDepthMode) ? value.feedDepthMode as CollectorFeedDepthMode : "CURRENT_DEPTH",
+    budgetMs: boundedInteger(value.budgetMs, 0, 600_000),
+    maxScrolls: boundedInteger(value.maxScrolls, 0, 500),
+    maxPosts: boundedInteger(value.maxPosts, 0, 1_000),
+    durationMs: boundedInteger(value.durationMs, 0, 600_000),
+    discoveryDurationMs: boundedInteger(value.discoveryDurationMs, 0, 600_000),
+    scrolls: boundedInteger(value.scrolls, 0, 500),
+    visibleCardCount: boundedInteger(value.visibleCardCount, 0, 5_000),
+    networkResponses: boundedInteger(value.networkResponses, 0, 100_000),
+    postsDiscovered: boundedInteger(value.postsDiscovered, 0, 1_000),
+    exactIdentities: boundedInteger(value.exactIdentities, 0, 1_000),
+    unverifiedIdentities: boundedInteger(value.unverifiedIdentities, 0, 1_000),
+    networkSourcedPosts: boundedInteger(value.networkSourcedPosts, 0, 1_000),
+    sellCandidates: boundedInteger(value.sellCandidates, 0, 1_000),
+    stopReason: nullableString(value.stopReason, 80),
+    healthStatus: nullableString(value.healthStatus, 40),
+    hydrationSamples: samples.filter(isRecord).map((sample) => ({
+      iteration: boundedInteger(sample.iteration, 0, 500),
+      moved: sample.moved === true,
+      plannedWaitMs: boundedInteger(sample.plannedWaitMs, 0, 60_000),
+      waitedMs: boundedInteger(sample.waitedMs, 0, 60_000),
+      firstGrowthMs: typeof sample.firstGrowthMs === "number" && Number.isFinite(sample.firstGrowthMs) ? boundedInteger(sample.firstGrowthMs, 0, 60_000) : null,
+    })),
+  };
+}
+
+/** One phase (CURRENT_DEPTH, or DEEPER_NETWORK_FEED as a delta against it) of the adaptive recall engine's telemetry. */
+export type CollectorRecallDepthPhase = {
+  mode: CollectorFeedDepthMode;
+  durationMs: number;
+  scrollCount: number;
+  visibleCardCount: number;
+  capturedPostCount: number;
+  uniqueCanonicalPosts?: number;
+  newCanonicalPosts: number;
+  freshPosts: number;
+  oldPosts: number;
+  unknownAgePosts: number;
+  duplicates: number;
+  networkResponses: number;
+  networkRecordCount: number;
+  captureRatio: number;
+  stopReason: string | null;
+};
+
+/** One bounded stuck-feed/oversized-media bypass attempt (V1.2.1). */
+export type CollectorStuckRecoveryEvent = {
+  iteration: number;
+  elapsedMs: number;
+  reason: string;
+  mediaDetected: boolean;
+  mediaKind: string;
+  viewportCoverageRatio: number;
+  scrollTopBefore: number;
+  scrollTopAfter: number;
+  scrollDelta: number;
+  newCanonicalPostsAfterRecovery: number;
+  outcome: "RECOVERY_PROGRESS" | "RECOVERY_NO_PROGRESS";
+};
+
+export type CollectorStuckRecoveryTelemetry = {
+  count: number;
+  attempted: number;
+  successful: number;
+  lastReason: string | null;
+  events: CollectorStuckRecoveryEvent[];
+};
+
+export type CollectorRecallTelemetry = {
+  initialFeedDepthMode: CollectorFeedDepthMode;
+  adaptiveDeeperTriggered: boolean;
+  effectiveFeedDepthMode: CollectorFeedDepthMode;
+  currentDepth: CollectorRecallDepthPhase | null;
+  deeperFeed: CollectorRecallDepthPhase | null;
+  deeperFeedTriggerReasons: string[];
+  currentDepthDurationMs: number;
+  deeperFeedDurationMs: number;
+  totalDurationMs: number;
+  totalUniqueCanonicalPosts: number;
+  stuckRecovery: CollectorStuckRecoveryTelemetry | null;
+};
+
+function feedDepthMode(value: unknown): CollectorFeedDepthMode {
+  return typeof value === "string" && (COLLECTOR_FEED_DEPTH_MODES as readonly string[]).includes(value) ? (value as CollectorFeedDepthMode) : "CURRENT_DEPTH";
+}
+
+function normalizeStuckRecoveryEvent(value: unknown): CollectorStuckRecoveryEvent | null {
+  if (!isRecord(value)) return null;
+  return {
+    iteration: boundedInteger(value.iteration, 0, 500),
+    elapsedMs: boundedInteger(value.elapsedMs, 0, 600_000),
+    reason: nullableString(value.reason, 60) ?? "UNKNOWN",
+    mediaDetected: value.mediaDetected === true,
+    mediaKind: nullableString(value.mediaKind, 40) ?? "UNKNOWN",
+    viewportCoverageRatio: typeof value.viewportCoverageRatio === "number" && Number.isFinite(value.viewportCoverageRatio) ? Math.min(1, Math.max(0, value.viewportCoverageRatio)) : 0,
+    scrollTopBefore: boundedInteger(value.scrollTopBefore, 0, 10_000_000),
+    scrollTopAfter: boundedInteger(value.scrollTopAfter, 0, 10_000_000),
+    scrollDelta: boundedInteger(value.scrollDelta, 0, 10_000_000),
+    newCanonicalPostsAfterRecovery: boundedInteger(value.newCanonicalPostsAfterRecovery, 0, 1_000),
+    outcome: value.outcome === "RECOVERY_PROGRESS" ? "RECOVERY_PROGRESS" : "RECOVERY_NO_PROGRESS",
+  };
+}
+
+function normalizeStuckRecovery(value: unknown): CollectorStuckRecoveryTelemetry | null {
+  if (!isRecord(value)) return null;
+  const events = Array.isArray(value.events) ? value.events.map(normalizeStuckRecoveryEvent).filter((event): event is CollectorStuckRecoveryEvent => event !== null).slice(0, 10) : [];
+  return {
+    count: boundedInteger(value.count, 0, 10),
+    attempted: boundedInteger(value.attempted, 0, 10),
+    successful: boundedInteger(value.successful, 0, 10),
+    lastReason: nullableString(value.lastReason, 60),
+    events,
+  };
+}
+
+function normalizeRecallDepthPhase(value: unknown): CollectorRecallDepthPhase | null {
+  if (!isRecord(value)) return null;
+  const captureRatio = typeof value.captureRatio === "number" && Number.isFinite(value.captureRatio) ? Math.min(1, Math.max(0, value.captureRatio)) : 0;
+  return {
+    mode: feedDepthMode(value.mode),
+    durationMs: boundedInteger(value.durationMs, 0, 600_000),
+    scrollCount: boundedInteger(value.scrollCount, 0, 500),
+    visibleCardCount: boundedInteger(value.visibleCardCount, 0, 5_000),
+    capturedPostCount: boundedInteger(value.capturedPostCount, 0, 1_000),
+    ...(typeof value.uniqueCanonicalPosts === "number" ? { uniqueCanonicalPosts: boundedInteger(value.uniqueCanonicalPosts, 0, 1_000) } : {}),
+    newCanonicalPosts: boundedInteger(value.newCanonicalPosts, 0, 1_000),
+    freshPosts: boundedInteger(value.freshPosts, 0, 1_000),
+    oldPosts: boundedInteger(value.oldPosts, 0, 1_000),
+    unknownAgePosts: boundedInteger(value.unknownAgePosts, 0, 1_000),
+    duplicates: boundedInteger(value.duplicates, 0, 1_000),
+    networkResponses: boundedInteger(value.networkResponses, 0, 100_000),
+    networkRecordCount: boundedInteger(value.networkRecordCount, 0, 100_000),
+    captureRatio,
+    stopReason: nullableString(value.stopReason, 80),
+  };
+}
+
+function normalizeRecall(value: unknown): CollectorRecallTelemetry | null {
+  if (!isRecord(value)) return null;
+  const reasons = Array.isArray(value.deeperFeedTriggerReasons) ? value.deeperFeedTriggerReasons.filter((reason): reason is string => typeof reason === "string").slice(0, 20) : [];
+  return {
+    initialFeedDepthMode: feedDepthMode(value.initialFeedDepthMode),
+    adaptiveDeeperTriggered: value.adaptiveDeeperTriggered === true,
+    effectiveFeedDepthMode: feedDepthMode(value.effectiveFeedDepthMode),
+    currentDepth: normalizeRecallDepthPhase(value.currentDepth),
+    deeperFeed: normalizeRecallDepthPhase(value.deeperFeed),
+    deeperFeedTriggerReasons: reasons,
+    currentDepthDurationMs: boundedInteger(value.currentDepthDurationMs, 0, 600_000),
+    deeperFeedDurationMs: boundedInteger(value.deeperFeedDurationMs, 0, 600_000),
+    totalDurationMs: boundedInteger(value.totalDurationMs, 0, 600_000),
+    totalUniqueCanonicalPosts: boundedInteger(value.totalUniqueCanonicalPosts, 0, 1_000),
+    stuckRecovery: normalizeStuckRecovery(value.stuckRecovery),
+  };
+}
+
+function normalizeSourceTabDiagnostics(value: unknown): CollectorSourceTabDiagnostics {
+  const row = isRecord(value) ? value : {};
+  return {
+    primaryTabId: Number.isSafeInteger(row.primaryTabId) && Number(row.primaryTabId) >= 0 ? Number(row.primaryTabId) : null,
+    childTabsCreated: boundedInteger(row.childTabsCreated, 0, 100),
+    postNavigations: boundedInteger(row.postNavigations, 0, 100),
+    mediaNavigations: boundedInteger(row.mediaNavigations, 0, 100),
+    photoViewerNavigations: boundedInteger(row.photoViewerNavigations, 0, 100),
+    inPageParentResolved: boundedInteger(row.inPageParentResolved, 0, 100),
+    structuredParentResolved: boundedInteger(row.structuredParentResolved, 0, 100),
+    unverifiedWithoutNavigation: boundedInteger(row.unverifiedWithoutNavigation, 0, 100),
+  };
+}
+
+export function evaluateCollectorHealth(input: {
+  visibleCardCount: number;
+  capturedPostCount: number;
+  scrolls: number;
+  durationMs: number;
+  feedGrew: boolean;
+  newIdsAfterScroll: boolean;
+  visibleFeedAdvanced?: boolean;
+  capturedAdvanced?: boolean;
+  failed?: boolean;
+  stopReason: string;
+}): CollectorSourceHealth {
+  const visible = nonnegativeInteger(input.visibleCardCount);
+  const captured = nonnegativeInteger(input.capturedPostCount);
+  const ratio = visible === 0 ? (captured > 0 ? 1 : 0) : Math.min(1, captured / visible);
+  const reasons: string[] = [];
+  if (input.stopReason === "MAX_POSTS") reasons.push("Limit postów osiągnięty — dalsze posty mogą istnieć.");
+  if (input.failed) reasons.push("COLLECTOR_SOURCE_FAILED");
+  if (!input.failed && visible === 0 && captured === 0) reasons.push("COLLECTOR_NO_VISIBLE_OR_CAPTURED_POSTS");
+  if (visible >= 3 && captured < 3) reasons.push("COLLECTOR_LOW_CAPTURE_COUNT");
+  if (visible >= 4 && ratio < 0.6) reasons.push("COLLECTOR_LOW_CAPTURE_RATIO");
+  if (input.feedGrew && !input.newIdsAfterScroll) reasons.push("COLLECTOR_GROWING_FEED_WITHOUT_NEW_IDS");
+  if (input.visibleFeedAdvanced && input.capturedAdvanced === false) reasons.push("COLLECTOR_VISIBLE_FEED_ADVANCED_WITHOUT_CAPTURE_GROWTH");
+  const status: CollectorDiscoveryHealth = input.failed ? "FAILED" : reasons.length > 0 ? "DEGRADED" : "HEALTHY";
+  return { status, visibleCardCount: visible, capturedPostCount: captured, captureRatio: ratio, scrolls: nonnegativeInteger(input.scrolls), durationMs: nonnegativeInteger(input.durationMs), stopReason: input.stopReason.slice(0, 120), reasons };
+}
+
+function normalizePost(value: unknown, sourceId: string, sourceType: CollectorSourceType): CollectorPostRecord {
+  if (!isRecord(value)) throw new Error("COLLECTOR_POST_INVALID");
+  const postId = requiredString(value.postId, "COLLECTOR_POST_ID_REQUIRED");
+  const permalink = facebookPostUrl(requiredString(value.permalink, "COLLECTOR_PERMALINK_REQUIRED"), postId, sourceId, sourceType);
+  if (requiredString(value.sourceId, "COLLECTOR_POST_SOURCE_ID_REQUIRED") !== sourceId || value.sourceType !== sourceType) throw new Error("COLLECTOR_POST_SOURCE_MISMATCH");
+  const identityConfidence: CollectorIdentityConfidence = value.identityConfidence === "EXACT" ? "EXACT" : "UNVERIFIED";
+  const identityReasons = Array.isArray(value.identityReasons) ? value.identityReasons.filter((item): item is string => typeof item === "string").slice(0, 10) : [];
+  return {
+    postId,
+    permalink,
+    sourceId,
+    sourceType,
+    author: nullableString(value.author, 200),
+    text: nullableString(value.text, 20_000),
+    publishedAt: nullableIsoDate(value.publishedAt),
+    timestampText: nullableString(value.timestampText, 300),
+    media: Array.isArray(value.media) ? value.media.slice(0, 30).flatMap((media) => normalizeMedia(media, postId)) : [],
+    discoveryLayers: layers(value.discoveryLayers),
+    firstSeenIteration: nonnegativeInteger(value.firstSeenIteration),
+    identityConfidence,
+    identityReasons: identityReasons.length > 0 ? identityReasons : identityConfidence === "EXACT" ? [] : ["COLLECTOR_IDENTITY_EVIDENCE_MISSING"],
+    discoverySource: value.discoverySource === "SEARCH" ? "SEARCH" : "MAIN_FEED",
+    searchQuery: nullableString(value.searchQuery, 120),
+    searchQueries: Array.isArray(value.searchQueries) ? value.searchQueries.filter((item): item is string => typeof item === "string").map((item) => item.trim().slice(0, 120)).filter(Boolean).slice(0, 20) : [],
+    foundInMainFeed: value.foundInMainFeed === true || value.discoverySource !== "SEARCH",
+    firstSeenPhase: value.firstSeenPhase === "SEARCH" ? "SEARCH" : "MAIN_FEED",
+    resolvedFromMediaTile: value.resolvedFromMediaTile === true,
+    mediaIds: Array.isArray(value.mediaIds) ? value.mediaIds.filter((item): item is string => typeof item === "string" && /^\d{5,30}$/.test(item)).slice(0, 30) : [],
+    parentResolutionEvidence: Array.isArray(value.parentResolutionEvidence) ? value.parentResolutionEvidence.filter((item): item is string => typeof item === "string").map((item) => item.slice(0, 120)).slice(0, 10) : [],
+    rootPostId: nullableString(value.rootPostId, 128),
+    rootAuthorSource: nullableString(value.rootAuthorSource, 120),
+    rootTextSource: nullableString(value.rootTextSource, 120),
+    rootTextVerified: value.rootTextVerified === true,
+  };
+}
+
+function normalizeMedia(value: unknown, postId: string): CollectorMediaRecord[] {
+  if (!isRecord(value)) return [];
+  const url = safeHttpsUrl(value.url);
+  if (!url) return [];
+  const exactPostId = nullableString(value.exactPostId, 128);
+  const exactAssociation = value.exactAssociation === true && exactPostId === postId;
+  return [{ url, mediaId: nullableString(value.mediaId, 128), exactPostId, exactAssociation, discoveryLayers: layers(value.discoveryLayers) }];
+}
+
+function normalizeHealth(value: unknown, captured: number): CollectorSourceHealth {
+  if (!isRecord(value)) throw new Error("COLLECTOR_HEALTH_REQUIRED");
+  const status = enumValue(value.status, ["HEALTHY", "DEGRADED", "FAILED"] as const, "COLLECTOR_HEALTH_INVALID");
+  const visible = nonnegativeInteger(value.visibleCardCount);
+  const count = nonnegativeInteger(value.capturedPostCount);
+  if (count !== captured) throw new Error("COLLECTOR_CAPTURE_COUNT_MISMATCH");
+  return { status, visibleCardCount: visible, capturedPostCount: count, captureRatio: visible === 0 ? (count > 0 ? 1 : 0) : Math.min(1, count / visible), scrolls: nonnegativeInteger(value.scrolls), durationMs: nonnegativeInteger(value.durationMs), stopReason: requiredString(value.stopReason, "COLLECTOR_STOP_REASON_REQUIRED").slice(0, 120), reasons: Array.isArray(value.reasons) ? value.reasons.filter((item): item is string => typeof item === "string").slice(0, 20) : [] };
+}
+
+function imageMode(value: unknown): CollectorImageMode {
+  return value === "GALLERY_HYDRATION_MEDIA_ALLOWED" ? "GALLERY_HYDRATION_MEDIA_ALLOWED" : "SOURCE_SCAN_DATA_ONLY";
+}
+
+function normalizeImageNetworkDiagnostics(value: unknown, mode: unknown): CollectorImageNetworkDiagnostics | null {
+  if (!isRecord(value)) return null;
+  const bounded = (candidate: unknown, max = 100_000_000): number => boundedInteger(candidate, 0, max);
+  const typeCounts = (candidate: unknown): Record<string, number> => {
+    if (!isRecord(candidate)) return {};
+    return Object.fromEntries(Object.entries(candidate).slice(0, 20).flatMap(([key, item]) => typeof item === "number" && Number.isFinite(item) ? [[key.slice(0, 40), bounded(item)]] : []));
+  };
+  const samples = Array.isArray(value.imageResponseSamples) ? value.imageResponseSamples.slice(0, 20).flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const type = nullableString(item.type, 40);
+    if (!type) return [];
+    return [{ type, host: nullableString(item.host, 120), path: nullableString(item.path, 300), tabId: Number.isSafeInteger(item.tabId) ? Number(item.tabId) : null, bytes: bounded(item.bytes, 10_000_000_000) }];
+  }) : [];
+  return {
+    imageMode: imageMode(value.imageMode ?? mode),
+    imageRequestsBlocked: bounded(value.imageRequestsBlocked),
+    imageRequestsAllowed: bounded(value.imageRequestsAllowed),
+    imageResponsesReceived: bounded(value.imageResponsesReceived),
+    imageBytesReceived: bounded(value.imageBytesReceived, 10_000_000_000),
+    listingImageRequestsStarted: bounded(value.listingImageRequestsStarted),
+    listingImageResponsesReceived: bounded(value.listingImageResponsesReceived),
+    listingImageBytesReceived: bounded(value.listingImageBytesReceived, 10_000_000_000),
+    thumbnailsDownloaded: bounded(value.thumbnailsDownloaded),
+    fullImagesDownloaded: bounded(value.fullImagesDownloaded),
+    fullGalleriesDownloaded: bounded(value.fullGalleriesDownloaded),
+    photoViewerNavigations: bounded(value.photoViewerNavigations),
+    photoViewerNavigationsWithImageBytes: bounded(value.photoViewerNavigationsWithImageBytes),
+    imageRequestTypeCounts: typeCounts(value.imageRequestTypeCounts),
+    imageResponseTypeCounts: typeCounts(value.imageResponseTypeCounts),
+    imageResponseSamples: samples,
+  };
+}
+
+function normalizeSearchTelemetry(value: unknown): CollectorSearchTelemetry | null {
+  if (value === null || value === undefined) return null;
+  if (!isRecord(value)) throw new Error("COLLECTOR_SEARCH_TELEMETRY_INVALID");
+  const queries = Array.isArray(value.queries) ? value.queries.slice(0, 20).map(normalizeSearchQueryTelemetry) : [];
+  return {
+    hardTimeBudgetMs: boundedInteger(value.hardTimeBudgetMs, 1_000, 300_000),
+    durationMs: boundedInteger(value.durationMs, 0, 360_000),
+    queriesPlanned: boundedInteger(value.queriesPlanned, 0, 20),
+    queriesExecuted: boundedInteger(value.queriesExecuted, 0, queries.length),
+    budgetExhausted: value.budgetExhausted === true,
+    queries,
+  };
+}
+
+function normalizeSearchQueryTelemetry(value: unknown): CollectorSearchQueryTelemetry {
+  if (!isRecord(value)) throw new Error("COLLECTOR_SEARCH_QUERY_TELEMETRY_INVALID");
+  return {
+    query: requiredString(value.query, "COLLECTOR_SEARCH_QUERY_REQUIRED").slice(0, 120),
+    executed: value.executed === true,
+    status: enumValue(value.status, ["HEALTHY", "DEGRADED", "FAILED"] as const, "COLLECTOR_SEARCH_QUERY_STATUS_INVALID"),
+    scrolls: boundedInteger(value.scrolls, 0, 30),
+    ...(Number.isFinite(value.scrollCount) ? { scrollCount: boundedInteger(value.scrollCount, 0, 30) } : {}),
+    visibleCards: boundedInteger(value.visibleCards, 0, 10_000),
+    captured: boundedInteger(value.captured, 0, 100),
+    unique: boundedInteger(value.unique, 0, 100),
+    duplicatesVsMainFeed: boundedInteger(value.duplicatesVsMainFeed, 0, 100),
+    uniqueContribution: boundedInteger(value.uniqueContribution, 0, 100),
+    sellContribution: boundedInteger(value.sellContribution, 0, 100),
+    tilesSeen: boundedInteger(value.tilesSeen, 0, 10_000),
+    ...(Number.isFinite(value.rawTilesSeen) ? { rawTilesSeen: boundedInteger(value.rawTilesSeen, 0, 50_000) } : {}),
+    ...(Number.isFinite(value.uniqueTilesFound) ? { uniqueTilesFound: boundedInteger(value.uniqueTilesFound, 0, 50_000) } : {}),
+    ...(Number.isFinite(value.candidateBufferSize) ? { candidateBufferSize: boundedInteger(value.candidateBufferSize, 0, 100) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "candidateCapReached") ? { candidateCapReached: value.candidateCapReached === true } : {}),
+    ...(Number.isFinite(value.resolutionCandidates) ? { resolutionCandidates: boundedInteger(value.resolutionCandidates, 0, 10) } : {}),
+    ...(Number.isFinite(value.inPageTilesInspected) ? { inPageTilesInspected: boundedInteger(value.inPageTilesInspected, 0, 100) } : {}),
+    ...(Number.isFinite(value.inPageParentResolved) ? { inPageParentResolved: boundedInteger(value.inPageParentResolved, 0, 100) } : {}),
+    ...(Number.isFinite(value.structuredParentResolved) ? { structuredParentResolved: boundedInteger(value.structuredParentResolved, 0, 100) } : {}),
+    ...(Number.isFinite(value.unverifiedWithoutNavigation) ? { unverifiedWithoutNavigation: boundedInteger(value.unverifiedWithoutNavigation, 0, 100) } : {}),
+    ...(Number.isFinite(value.payloadObserved) ? { payloadObserved: boundedInteger(value.payloadObserved, 0, 10) } : {}),
+    tilesOpened: boundedInteger(value.tilesOpened, 0, 10),
+    tilesResolved: boundedInteger(value.tilesResolved, 0, 10),
+    tilesUnverified: boundedInteger(value.tilesUnverified, 0, 10_000),
+    uniqueParentPosts: boundedInteger(value.uniqueParentPosts, 0, 10),
+    verifiedParentPosts: boundedInteger(value.verifiedParentPosts, 0, 10),
+    duplicatesByMedia: boundedInteger(value.duplicatesByMedia, 0, 10),
+    ...(Number.isFinite(value.discoveryDurationMs) ? { discoveryDurationMs: boundedInteger(value.discoveryDurationMs, 0, 300_000) } : {}),
+    ...(Number.isFinite(value.resolutionDurationMs) ? { resolutionDurationMs: boundedInteger(value.resolutionDurationMs, 0, 120_000) } : {}),
+    ...(Number.isFinite(value.discoveryDuration) ? { discoveryDuration: boundedInteger(value.discoveryDuration, 0, 300_000) } : {}),
+    ...(Number.isFinite(value.resolutionDuration) ? { resolutionDuration: boundedInteger(value.resolutionDuration, 0, 120_000) } : {}),
+    ...(typeof value.discoveryStopReason === "string" ? { discoveryStopReason: value.discoveryStopReason.slice(0, 120) } : {}),
+    ...(typeof value.resolutionStopReason === "string" ? { resolutionStopReason: value.resolutionStopReason.slice(0, 120) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "discoveryEvidence") ? { discoveryEvidence: normalizeDiscoveryEvidence(value.discoveryEvidence) } : {}),
+    ...(Number.isFinite(value.tabLoadAttempts) ? { tabLoadAttempts: boundedInteger(value.tabLoadAttempts, 0, 3) } : {}),
+    ...(typeof value.tabLoadRecovery === "string" ? { tabLoadRecovery: value.tabLoadRecovery.slice(0, 40) } : {}),
+    ...(typeof value.tabLoadError === "string" ? { tabLoadError: value.tabLoadError.replace(/token|secret|cookie|hmac/gi, "redacted").slice(0, 160) } : {}),
+    durationMs: boundedInteger(value.durationMs, 0, 120_000),
+    stopReason: requiredString(value.stopReason, "COLLECTOR_SEARCH_QUERY_STOP_REASON_REQUIRED").slice(0, 120),
+    ...(Array.isArray(value.tileDiagnostics) ? { tileDiagnostics: value.tileDiagnostics.slice(0, 10).map(normalizeSearchTileDiagnostic) } : {}),
+    ...(Number.isFinite(value.sellIntentCandidates) ? { sellIntentCandidates: boundedInteger(value.sellIntentCandidates, 0, 200) } : {}),
+    ...(Number.isFinite(value.exactSell) ? { exactSell: boundedInteger(value.exactSell, 0, 100) } : {}),
+    ...(Number.isFinite(value.persistableSell) ? { persistableSell: boundedInteger(value.persistableSell, 0, 100) } : {}),
+    ...(Number.isFinite(value.resultCardsInspected) ? { resultCardsInspected: boundedInteger(value.resultCardsInspected, 0, 200) } : {}),
+    ...(isRecord(value.unresolvedByReason) ? { unresolvedByReason: normalizeSearchReasonCounts(value.unresolvedByReason) } : {}),
+    ...(Array.isArray(value.searchResultDiagnostics) ? { searchResultDiagnostics: value.searchResultDiagnostics.slice(0, 200).flatMap(normalizeSearchResultDiagnostic) } : {}),
+  };
+}
+
+function normalizeSearchReasonCounts(value: Record<string, unknown>): Record<string, number> {
+  return Object.fromEntries(Object.entries(value).slice(0, 20).flatMap(([key, count]) => Number.isFinite(count) ? [[key.replace(/[^A-Z0-9_:-]/gi, "_").slice(0, 80), boundedInteger(count, 0, 200)]] : []));
+}
+
+function normalizeSearchResultDiagnostic(value: unknown): CollectorSearchResultDiagnostic[] {
+  if (!isRecord(value)) return [];
+  const postIdCandidate = nullableString(value.postIdCandidate, 30);
+  const permalinkCandidate = safeHttpsUrl(value.permalinkCandidate);
+  const anchorHref = safeHttpsUrl(value.anchorHref);
+  let anchorFacebookHref: string | null = null;
+  if (anchorHref) {
+    try { anchorFacebookHref = /(^|\.)facebook\.com$/i.test(new URL(anchorHref).hostname) ? anchorHref : null; } catch { anchorFacebookHref = null; }
+  }
+  return [{
+    query: nullableString(value.query, 120),
+    candidateIndex: boundedInteger(value.candidateIndex, 0, 200),
+    hasResultContainer: value.hasResultContainer === true,
+    hasAnchor: value.hasAnchor === true,
+    anchorHref: anchorFacebookHref,
+    hasPostIdInHref: value.hasPostIdInHref === true,
+    hasStoryFbid: value.hasStoryFbid === true,
+    hasFtEntIdentifier: value.hasFtEntIdentifier === true,
+    hasTrackingData: value.hasTrackingData === true,
+    hasAuthor: value.hasAuthor === true,
+    hasRootText: value.hasRootText === true,
+    hasTimestamp: value.hasTimestamp === true,
+    hasStructuredPayload: value.hasStructuredPayload === true,
+    hasCanonicalPostCandidate: value.hasCanonicalPostCandidate === true,
+    postIdCandidate: postIdCandidate && /^\d{5,30}$/.test(postIdCandidate) ? postIdCandidate : null,
+    permalinkCandidate,
+    sellIntentCandidate: value.sellIntentCandidate === true,
+    firstFailedHop: nullableString(value.firstFailedHop, 120),
+  }];
+}
+
+function normalizeDiscoveryEvidence(value: unknown): CollectorSearchDiscoveryEvidence | null {
+  if (!isRecord(value)) return null;
+  const progression = Array.isArray(value.uniqueTileProgression)
+    ? value.uniqueTileProgression.filter((item): item is number => Number.isFinite(item)).slice(-10).map((item) => boundedInteger(item, 0, 50_000))
+    : [];
+  return {
+    scrollAttempts: boundedInteger(value.scrollAttempts, 0, 30),
+    reachedBottom: value.reachedBottom === true,
+    consecutiveBottomChecks: boundedInteger(value.consecutiveBottomChecks, 0, 30),
+    stableScrollPosition: value.stableScrollPosition === true,
+    urlStable: value.urlStable === true,
+    pageErrorFree: value.pageErrorFree === true,
+    consecutiveNoGrowthChecks: boundedInteger(value.consecutiveNoGrowthChecks, 0, 30),
+    consecutiveNoVisibleGrowthChecks: boundedInteger(value.consecutiveNoVisibleGrowthChecks, 0, 30),
+    networkQuietChecks: boundedInteger(value.networkQuietChecks, 0, 30),
+    noPendingContent: value.noPendingContent === true,
+    finalScrollTop: boundedInteger(value.finalScrollTop, 0, 10_000_000),
+    finalScrollHeight: boundedInteger(value.finalScrollHeight, 0, 10_000_000),
+    viewportHeight: boundedInteger(value.viewportHeight, 0, 10_000),
+    uniqueTileProgression: progression,
+  };
+}
+
+function normalizeSearchTileDiagnostic(value: unknown): CollectorSearchTileDiagnostic {
+  if (!isRecord(value)) throw new Error("COLLECTOR_SEARCH_TILE_DIAGNOSTIC_INVALID");
+  const id = nullableString(value.mediaId, 30);
+  return {
+    query: requiredString(value.query, "COLLECTOR_SEARCH_TILE_QUERY_REQUIRED").slice(0, 120),
+    ...(Number.isInteger(value.tileIndex) && Number(value.tileIndex) >= 0 ? { tileIndex: Math.min(100, Number(value.tileIndex)) } : {}),
+    ...(safeHttpsUrl(value.mediaUrl) ? { mediaUrl: safeHttpsUrl(value.mediaUrl) } : {}),
+    mediaId: id && /^\d{5,30}$/.test(id) ? id : "0",
+    ...(safeHttpsUrl(value.initialUrl) ? { initialUrl: safeHttpsUrl(value.initialUrl) } : {}),
+    ...(safeHttpsUrl(value.finalUrl) ? { finalUrl: safeHttpsUrl(value.finalUrl) } : {}),
+    ...(typeof value.tabStatus === "string" ? { tabStatus: value.tabStatus.slice(0, 30) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "injectAttempted") ? { injectAttempted: value.injectAttempted === true } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "injectSuccess") ? { injectSuccess: value.injectSuccess === true } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "injectError") ? { injectError: nullableString(value.injectError, 240) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "sendMessageError") ? { sendMessageError: nullableString(value.sendMessageError, 240) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "photoOpenedAt") ? { photoOpenedAt: nullableIsoTimestamp(value.photoOpenedAt) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "contentScriptReadyAt") ? { contentScriptReadyAt: nullableIsoTimestamp(value.contentScriptReadyAt) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "sendMessageAttemptCount") ? { sendMessageAttemptCount: boundedInteger(value.sendMessageAttemptCount, 0, 10) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "sendMessageFirstAt") ? { sendMessageFirstAt: nullableIsoTimestamp(value.sendMessageFirstAt) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "sendMessageSuccessAt") ? { sendMessageSuccessAt: nullableIsoTimestamp(value.sendMessageSuccessAt) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "payloadObservedAt") ? { payloadObservedAt: nullableIsoTimestamp(value.payloadObservedAt) } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "responseAt") ? { responseAt: nullableIsoTimestamp(value.responseAt) } : {}),
+    photoOpened: value.photoOpened === true,
+    structuredPayloadFound: value.structuredPayloadFound === true,
+    currMediaId: nullableString(value.currMediaId, 30),
+    containerStoryPostId: nullableString(value.containerStoryPostId, 30),
+    topLevelPostId: nullableString(value.topLevelPostId, 30),
+    mediaAttachmentCrosscheck: value.mediaAttachmentCrosscheck === true,
+    parentPostId: nullableString(value.parentPostId, 30),
+    parentPermalink: safeHttpsUrl(value.parentPermalink),
+    rootAuthorFound: value.rootAuthorFound === true,
+    rootTextFound: value.rootTextFound === true,
+    identityResult: value.identityResult === "EXACT" ? "EXACT" : "UNVERIFIED",
+    failSubstep: nullableString(value.failSubstep, 120),
+    elapsedMs: boundedInteger(value.elapsedMs, 0, 120_000),
+  };
+}
+
+function nullableIsoTimestamp(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+}
+
+function normalizeMainFeedTelemetry(value: unknown): CollectorMainFeedDiagnostic[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 100).flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const postId = nullableString(item.postId, 30);
+    if (!postId || !/^\d{5,30}$/.test(postId)) return [];
+    return [{ postId, sourceLayer: item.sourceLayer === "DOM" || item.sourceLayer === "BOTH" ? item.sourceLayer : "NETWORK", structuredAuthorPresent: item.structuredAuthorPresent === true, structuredTextPresent: item.structuredTextPresent === true, structuredTextPath: nullableString(item.structuredTextPath, 120), rootCardFound: item.rootCardFound === true, rootCardPostIdBound: item.rootCardPostIdBound === true, rootCardPermalink: safeHttpsUrl(item.rootCardPermalink), rootAuthorFound: item.rootAuthorFound === true, rootTextFound: item.rootTextFound === true, seeMorePresent: item.seeMorePresent === true, seeMoreClicked: item.seeMoreClicked === true, rootTextAfterExpand: item.rootTextAfterExpand === true, authorMatch: item.authorMatch === true, postIdMatch: item.postIdMatch === true, finalIdentity: item.finalIdentity === "EXACT" ? "EXACT" : "UNVERIFIED", failSubstep: nullableString(item.failSubstep, 120) }];
+  });
+}
+
+function facebookSourceUrl(value: string, type: CollectorSourceType): string {
+  const url = new URL(value);
+  if (url.protocol !== "https:" || url.hostname !== "www.facebook.com") throw new Error("COLLECTOR_SOURCE_URL_INVALID");
+  if (type === "GROUP") {
+    if (!/^\/groups\/[^/]+\/?$/i.test(url.pathname)) throw new Error("COLLECTOR_GROUP_URL_INVALID");
+    url.search = ""; url.hash = ""; url.pathname = `${url.pathname.replace(/\/+$/, "")}/`;
+    return url.toString();
+  }
+
+  // Facebook emits profile sources in both `/123.../` and
+  // `/profile.php?id=123...` forms.  Keep the numeric identity when
+  // canonicalizing the latter; clearing the query first changed the source
+  // id to the literal `profile.php` and made every such batch fail with a
+  // 422 before it could reach persistence.
+  const profileId = url.searchParams.get("id") ?? url.pathname.match(/^\/(\d{5,30})\/?$/i)?.[1] ?? null;
+  if (!profileId || !/^\d{5,30}$/.test(profileId)) throw new Error("COLLECTOR_PROFILE_URL_INVALID");
+  return `https://www.facebook.com/profile.php?id=${profileId}`;
+}
+
+function facebookPostUrl(value: string, postId: string, sourceId: string, sourceType: CollectorSourceType): string {
+  const url = new URL(value);
+  if (url.protocol !== "https:" || url.hostname !== "www.facebook.com" || !url.pathname.includes(postId)) throw new Error("COLLECTOR_POST_URL_INVALID");
+  if (sourceType === "GROUP" && !url.pathname.startsWith(`/groups/${sourceId}/`)) throw new Error("COLLECTOR_POST_SOURCE_URL_MISMATCH");
+  if (sourceType === "PROFILE" && !url.pathname.startsWith(`/${sourceId}/`)) throw new Error("COLLECTOR_POST_SOURCE_URL_MISMATCH");
+  url.search = ""; url.hash = "";
+  return url.toString();
+}
+
+function facebookSourceId(value: string, type: CollectorSourceType): string | null {
+  const url = new URL(value);
+  if (type === "GROUP") return url.pathname.match(/^\/groups\/([^/]+)/i)?.[1] ?? null;
+  return url.searchParams.get("id") ?? url.pathname.match(/^\/([^/]+)/)?.[1] ?? null;
+}
+
+function layers(value: unknown): CollectorDiscoveryLayer[] {
+  return Array.isArray(value) ? [...new Set(value.filter((item): item is CollectorDiscoveryLayer => typeof item === "string" && (COLLECTOR_DISCOVERY_LAYERS as readonly string[]).includes(item)))].slice(0, COLLECTOR_DISCOVERY_LAYERS.length) : [];
+}
+
+function uuid(value: unknown, code: string): string { const text = requiredString(value, code); if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)) throw new Error(code); return text; }
+function isoDate(value: unknown, code: string): string { const text = requiredString(value, code); if (Number.isNaN(Date.parse(text))) throw new Error(code); return new Date(text).toISOString(); }
+function nullableIsoDate(value: unknown): string | null { return value === null || value === undefined || value === "" ? null : isoDate(value, "COLLECTOR_POST_DATE_INVALID"); }
+function requiredString(value: unknown, code: string): string { if (typeof value !== "string" || !value.trim()) throw new Error(code); return value.trim(); }
+function nullableString(value: unknown, max: number): string | null { return typeof value === "string" && value.trim() ? value.trim().slice(0, max) : null; }
+function nonnegativeInteger(value: unknown): number { return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0; }
+function boundedInteger(value: unknown, min: number, max: number): number { return Math.min(max, Math.max(min, nonnegativeInteger(value))); }
+function safeHttpsUrl(value: unknown): string | null { if (typeof value !== "string") return null; try { const url = new URL(value); return url.protocol === "https:" && !url.username && !url.password ? url.toString() : null; } catch { return null; } }
+function enumValue<const T extends readonly string[]>(value: unknown, options: T, code: string): T[number] { if (typeof value !== "string" || !options.includes(value)) throw new Error(code); return value as T[number]; }
+function isRecord(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === "object" && !Array.isArray(value); }

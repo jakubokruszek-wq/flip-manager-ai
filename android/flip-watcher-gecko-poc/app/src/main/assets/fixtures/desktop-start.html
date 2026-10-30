@@ -1,0 +1,16 @@
+<!doctype html><html><head><title>Local desktop feed</title><meta name="viewport" content="width=device-width">
+<script>fetch('/api/graphql/').then(r=>r.text()).then(t=>{document.documentElement.dataset.forwarded=t.includes('550000000000091')?'yes':'no'});</script>
+<script type="application/json">{"post_id":"550000000000092","url":"https://www.facebook.com/groups/1234567890123/posts/550000000000092/","message":{"text":""},"author":{"name":"PRIVATE_AUTHOR"}}</script>
+</head><body style="margin:0;height:100vh;overflow:hidden"><main style="height:100vh;overflow-y:auto"><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><article role="article"><a href="https://www.facebook.com/groups/1234567890123/posts/550000000000091/">Post</a>
+<div data-ad-preview="message"><div data-ad-comet-preview="message">Sprzedam mieszkanie na Retkini. 42,42 m2. 2 pokoje. Czynsz 560 zł. Cena 319 000 zł.</div></div>
+<a href="https://www.facebook.com/photo.php?fbid=880000000000001"><img style="width:300px;height:180px" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></a>
+<a href="https://www.facebook.com/photo.php?fbid=880000000000002"><img style="width:90px;height:90px" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></a>
+<a href="https://www.facebook.com/photo.php?fbid=880000000000003"><svg width="90" height="90"><image width="90" height="90" href="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></image></svg></a>
+<a href="https://www.facebook.com/photo.php?fbid=880000000000002"><img style="width:90px;height:90px" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></a>
+<div role="comment"><a href="https://www.facebook.com/photo.php?fbid=880000000000004"><img style="width:300px;height:180px" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></a></div>
+</article><article role="article"><a href="https://www.facebook.com/groups/1234567890123/posts/550000000000092/">Post</a><div data-ad-rendering-role="message">Sprzedam mieszkanie 53m2, 3 pokoje. Widzew. Cena 425000 zł.</div></article><div style="height:1800px">Local scroll fixture</div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></main><script>
+// Finite initial extent, then asynchronous growth after a genuine bottom scroll.
+// No network or identity changes: acceptance must move past the initial extent.
+const feed=document.querySelector('main');let pending=false,grown=false;
+feed.addEventListener('scroll',()=>{if(!pending&&!grown&&feed.scrollTop+feed.clientHeight>=feed.scrollHeight-5){pending=true;setTimeout(()=>{const spacer=document.createElement('div');spacer.style.height='20000px';feed.append(spacer);grown=true;},1800);}});
+</script></body></html>

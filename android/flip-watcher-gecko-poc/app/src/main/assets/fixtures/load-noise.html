@@ -1,0 +1,4 @@
+<!doctype html><meta charset="utf-8"><title>Local other-tab data traffic</title><p>Local fixture only</p><script>
+// Ordinary data requests, NOT /flip-control (control markers are excluded by design).
+setInterval(function () { fetch("/data?fixture=mobile-net-data&t=" + Date.now()).catch(function () {}); }, 300);
+</script>

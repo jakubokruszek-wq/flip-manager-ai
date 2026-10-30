@@ -1,0 +1,26 @@
+<!doctype html><html style="overflow:clip"><head><title>Local native viewport</title><meta name="viewport" content="width=device-width"></head>
+<body style="margin:0;overflow:clip">
+<main role="feed" style="height:100vh;overflow-y:auto">
+<article role="article" style="height:500px">
+<a href="https://www.facebook.com/photo/?fbid=880000000000010"><img style="position:absolute;left:0;top:-9000px" width="300" height="160" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='160'%3E%3Crect width='300' height='160' fill='blue'/%3E%3C/svg%3E"></a><a href="https://www.facebook.com/photo/?fbid=880000000000011"><img style="position:absolute;left:0;top:-9000px" width="300" height="160" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='160'%3E%3Crect width='300' height='160' fill='blue'/%3E%3C/svg%3E"></a><a href="https://www.facebook.com/photo/?fbid=880000000000012"><img style="position:absolute;left:0;top:-9000px" width="300" height="160" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='160'%3E%3Crect width='300' height='160' fill='blue'/%3E%3C/svg%3E"></a>
+<a href="https://www.facebook.com/groups/1234567890123/posts/550000000000091/">Post</a><div data-ad-preview="message">Sprzedam mieszkanie 42m2. Cena 319000 zł.</div>
+<a href="https://www.facebook.com/photo/?fbid=880000000000001"><img width="300" height="160" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='160'%3E%3Crect width='300' height='160' fill='red'/%3E%3C/svg%3E"></a>
+<a href="https://www.facebook.com/photo/?fbid=880000000000002"><img width="300" height="160" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='160'%3E%3Crect width='300' height='160' fill='lime'/%3E%3C/svg%3E"></a>
+</article>
+<div style="height:calc(100vh + 800px)"></div>
+<article role="article" style="height:300px"><a href="https://www.facebook.com/groups/1234567890123/posts/550000000000092/">Post</a><div data-ad-preview="message">Sprzedam mieszkanie 53m2. Cena 425000 zł.</div></article>
+<div role="article" style="height:20px">Unbound loading placeholder</div>
+</main><script>
+let seen=false;
+addEventListener('wheel',()=>{if(seen)return;seen=true;
+const more=document.createElement('article');more.setAttribute('role','article');more.style.height='500px';
+more.innerHTML='<a href="https://www.facebook.com/groups/1234567890123/posts/550000000000096/">Post</a><div data-ad-preview="message">Sprzedam mieszkanie 68m2. Cena 680000 zł.</div>';
+const feed=document.querySelector('main');feed.append(more);const spacer=document.createElement('div');spacer.style.height='10000px';feed.append(spacer);
+},{passive:true});
+</script><script>
+for(const img of Array.from(document.querySelectorAll('a img'))){
+ if(img.style.position==='absolute')continue;
+ const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('width','300');svg.setAttribute('height','160');svg.setAttribute('viewBox','0 0 300 160');
+ const raster=document.createElementNS('http://www.w3.org/2000/svg','image');raster.setAttribute('width','300');raster.setAttribute('height','160');raster.setAttribute('href',img.src);svg.append(raster);img.replaceWith(svg);
+}
+</script></body></html>

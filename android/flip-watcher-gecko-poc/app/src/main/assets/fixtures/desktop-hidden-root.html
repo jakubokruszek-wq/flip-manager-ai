@@ -1,0 +1,17 @@
+<!doctype html><html style="overflow-y:hidden"><head><title>Local visible tail hidden root</title><meta name="viewport" content="width=device-width"></head>
+<body style="margin:0;min-height:12000px">
+<main style="height:500px;overflow-y:auto">
+<article role="article" style="height:200px"><a href="https://www.facebook.com/groups/1234567890123/posts/550000000000091/">Post</a><div data-ad-preview="message">Sprzedam mieszkanie 42m2. Cena 319000 zł.</div></article>
+<div style="height:1100px"></div>
+<article role="article" style="height:200px"><a href="https://www.facebook.com/groups/1234567890123/posts/550000000000092/">Post</a><div data-ad-preview="message">Sprzedam mieszkanie 53m2. Cena 425000 zł.</div></article>
+</main><div style="height:11000px"></div>
+<script>
+// The inner feed ends with its bound tail already visible. No scrollIntoView
+// recovery applies. Ordinary hidden-root movement is required to unlock data.
+let queued=false;
+addEventListener('scroll',()=>{if(queued||scrollY<100)return;queued=true;
+const more=document.createElement('article');more.setAttribute('role','article');
+more.innerHTML='<a href="https://www.facebook.com/groups/1234567890123/posts/550000000000095/">Post</a><div data-ad-preview="message">Sprzedam mieszkanie 65m2. Cena 650000 zł.</div>';
+document.querySelector('main').append(more);
+},true);
+</script></body></html>

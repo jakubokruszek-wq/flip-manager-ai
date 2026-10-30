@@ -1,0 +1,580 @@
+/* Node tests of the POC decision layer over the unchanged collector-core.js.
+ * Run: node --test android/flip-watcher-gecko-poc/app/src/test/js/ */
+const assert = require("node:assert/strict");
+const test = require("node:test");
+const path = require("node:path");
+require(path.resolve(__dirname, "../../../../../../extensions/facebook-collector/collector-core.js"));
+require(path.resolve(__dirname, "../../main/extension/poc-adapter.js"));
+
+const core = globalThis.FlipFacebookCollectorCore;
+const adapter = globalThis.FlipGeckoPocAdapter;
+const GROUP = "lodzsprzedazzakupwynajem";
+const OLD_NUMERIC_GROUP = "402796264871862";
+const input = { groupId: GROUP, maxPosts: 20 };
+const groupHref = `https://m.facebook.com/groups/${GROUP}/`;
+const postLink = id => `https://www.facebook.com/groups/${GROUP}/posts/${id}/`;
+const id = n => String(1_000_000_000_000 + n);
+
+function page(extra = {}) {
+  return { href: groupHref, bodyTextSample: "", hasPasswordInput: false, hasLoginForm: false, hasCaptcha: false, cards: [], structured: [], ...extra };
+}
+
+test("keeps only cards with exactly one post id of the approved group", () => {
+  const result = adapter.evaluate(page({
+    cards: [
+      { hrefs: [postLink(id(1)), `https://www.facebook.com/profile.php?id=42`] },
+      { hrefs: [postLink(id(2)), postLink(id(2)) + "?comment_id=9"] },
+      { hrefs: [postLink(id(3)), postLink(id(4))] },
+      { hrefs: ["https://www.facebook.com/photo/?fbid=1234567890123&set=g.1"] },
+      { hrefs: ["https://www.facebook.com/groups/999999999999/posts/1234567890123/"] },
+      { hrefs: [] },
+    ],
+  }), input, core);
+  assert.equal(result.status, "OK");
+  assert.deepEqual(result.posts.map(post => post.postId), [id(1), id(2)]);
+  assert.equal(result.posts[0].permalink, postLink(id(1)));
+  assert.equal(result.diagnostics.ambiguousCards, 1);
+  assert.equal(result.diagnostics.foreignCards, 1);
+  assert.equal(result.diagnostics.cardsWithoutId, 2);
+});
+
+test("photo fbid is never taken as a post id", () => {
+  const result = adapter.evaluate(page({ cards: [{ hrefs: [`https://www.facebook.com/photo.php?fbid=${id(7)}`] }] }), input, core);
+  assert.equal(result.status, "NO_POSTS");
+  assert.equal(result.posts.length, 0);
+});
+
+test("duplicates across cards and structured payloads collapse to one id", () => {
+  const story = JSON.stringify({ __typename: "Story", post_id: id(1), permalink_url: postLink(id(1)), message: { text: "Sprzedam 2 pokoje" }, actor: { name: "A" } });
+  const result = adapter.evaluate(page({ cards: [{ hrefs: [postLink(id(1))] }, { hrefs: [postLink(id(1))] }], structured: [story] }), input, core);
+  assert.deepEqual(result.posts.map(post => post.postId), [id(1)]);
+  assert.equal(result.posts[0].idSource, "STRUCTURED");
+  assert.equal(result.diagnostics.duplicatesDropped, 2);
+});
+
+test("caps the result at 20 posts even when more are asked", () => {
+  const cards = Array.from({ length: 30 }, (_, i) => ({ hrefs: [postLink(id(i))] }));
+  const result = adapter.evaluate(page({ cards }), { groupId: GROUP, maxPosts: 50 }, core);
+  assert.equal(result.posts.length, 20);
+  assert.equal(new Set(result.posts.map(post => post.postId)).size, 20);
+  assert.equal(result.diagnostics.overLimitDropped, 10);
+});
+
+test("stops with a clear state on checkpoint, captcha, login and lost access", () => {
+  const cards = [{ hrefs: [postLink(id(1))] }];
+  assert.equal(adapter.evaluate(page({ href: "https://m.facebook.com/checkpoint/1501092823525282/", cards }), input, core).status, "CHECKPOINT");
+  assert.equal(adapter.evaluate(page({ href: "https://www.facebook.com/two_step_verification/two_factor/", cards }), input, core).status, "CHECKPOINT");
+  assert.equal(adapter.evaluate(page({ hasCaptcha: true, cards }), input, core).status, "CAPTCHA");
+  assert.equal(adapter.evaluate(page({ href: "https://m.facebook.com/login/?next=x", cards }), input, core).status, "LOGIN_REQUIRED");
+  assert.equal(adapter.evaluate(page({ hasPasswordInput: true, cards }), input, core).status, "LOGIN_REQUIRED");
+  const unavailable = adapter.evaluate(page({ bodyTextSample: "Ta zawartość jest niedostępna", cards }), input, core);
+  assert.equal(unavailable.status, "GROUP_UNAVAILABLE");
+  // A stop never returns posts.
+  assert.deepEqual(unavailable.posts, []);
+});
+
+test("another group, another host or a lookalike host is WRONG_GROUP", () => {
+  const cards = [{ hrefs: [postLink(id(1))] }];
+  assert.equal(adapter.evaluate(page({ href: "https://m.facebook.com/groups/123456789/", cards }), input, core).status, "WRONG_GROUP");
+  assert.equal(adapter.evaluate(page({ href: `https://m.facebook.com.evil.example/groups/${GROUP}/`, cards }), input, core).status, "WRONG_GROUP");
+  assert.equal(adapter.evaluate(page({ href: `http://m.facebook.com/groups/${GROUP}/`, cards }), input, core).status, "WRONG_GROUP");
+  assert.equal(adapter.evaluate(page({ href: `https://m.facebook.com/groups/${GROUP}/members/`, cards }), input, core).status, "WRONG_GROUP");
+  assert.equal(adapter.evaluate(page({ href: `https://www.facebook.com/groups/${OLD_NUMERIC_GROUP}/`, cards }), input, core).status, "WRONG_GROUP");
+  assert.equal(adapter.evaluate(page({ href: "https://www.facebook.com/groups/1350200629551011/", cards }), input, core).status, "WRONG_GROUP");
+});
+
+test("loopback pages are accepted only when the app asks for fixture mode", () => {
+  const cards = [{ hrefs: [postLink(id(1))] }];
+  const href = `http://127.0.0.1:41234/groups/${GROUP}/?fixture=feed-basic`;
+  assert.equal(adapter.evaluate(page({ href, cards }), input, core).status, "WRONG_GROUP");
+  assert.equal(adapter.evaluate(page({ href, cards }), { ...input, allowLoopback: true }, core).status, "OK");
+});
+
+test("fails loudly without the collector core", () => {
+  assert.throws(() => adapter.evaluate(page(), input, undefined), /COLLECTOR_CORE_MISSING/);
+});
+
+// ---- hypothetical verified aliases (the approved source remains the standalone slug)
+const SLUG = "verifiedslugtest";
+const slugHref = `https://www.facebook.com/groups/${SLUG}/`;
+const slugLink = n => `https://www.facebook.com/groups/${SLUG}/posts/${n}/`;
+const withAlias = { groupId: GROUP, maxPosts: 20, aliases: [SLUG] };
+
+test("a slug page is WRONG_GROUP unless the app sends it as a verified alias", () => {
+  const cards = [{ hrefs: [slugLink(id(1))] }];
+  assert.equal(adapter.evaluate(page({ href: slugHref, cards }), input, core).status, "WRONG_GROUP");
+  const result = adapter.evaluate(page({ href: slugHref, cards }), withAlias, core);
+  assert.equal(result.status, "OK");
+  // Identity stays the canonical independently approved group source.
+  assert.deepEqual(result.posts, [{ postId: id(1), permalink: postLink(id(1)), idSource: "DOM_LINK" }]);
+});
+
+test("an alias never opens other groups: foreign slug, foreign numeric, unverified alias", () => {
+  const cards = [
+    { hrefs: [slugLink(id(1))] },
+    { hrefs: ["https://www.facebook.com/groups/innagrupa/posts/1000000000099/"] },
+    { hrefs: ["https://www.facebook.com/groups/999999999999/posts/1000000000098/"] },
+    { hrefs: [slugLink(id(2)), "https://www.facebook.com/groups/innagrupa/posts/1000000000097/"] },
+  ];
+  const result = adapter.evaluate(page({ href: slugHref, cards }), withAlias, core);
+  assert.deepEqual(result.posts.map(post => post.postId), [id(1)]);
+  assert.equal(result.diagnostics.foreignCards, 2);
+  assert.equal(result.diagnostics.ambiguousCards, 1);
+  assert.equal(adapter.evaluate(page({ href: "https://www.facebook.com/groups/innagrupa/", cards }), withAlias, core).status, "WRONG_GROUP");
+  assert.equal(adapter.evaluate(page({ href: slugHref, cards }), { ...withAlias, aliases: ["../x", 5, null] }, core).status, "WRONG_GROUP");
+});
+
+test("slug and numeric forms of the same post are one post; invalid permalinks are dropped", () => {
+  const story = JSON.stringify({ __typename: "Story", post_id: id(3), permalink_url: slugLink(id(3)), message: { text: "Sprzedam" }, actor: { name: "A" } });
+  const result = adapter.evaluate(page({
+    href: slugHref,
+    cards: [{ hrefs: [slugLink(id(1))] }, { hrefs: [postLink(id(1))] }, { hrefs: [`https://www.facebook.com/groups/${SLUG}/posts/abc/`] }, { hrefs: [`https://www.facebook.com/groups/${SLUG}/posts/123/`] }],
+    structured: [story],
+  }), withAlias, core);
+  assert.deepEqual(result.posts.map(post => post.postId).sort(), [id(1), id(3)]);
+  result.posts.forEach(post => assert.equal(post.permalink, postLink(post.postId)));
+  assert.equal(result.diagnostics.duplicatesDropped, 1);
+  assert.equal(result.diagnostics.cardsWithoutId, 2);
+});
+
+test("the 20-post limit holds with aliases", () => {
+  const cards = Array.from({ length: 30 }, (_, i) => ({ hrefs: [i % 2 ? slugLink(id(i)) : postLink(id(i))] }));
+  const result = adapter.evaluate(page({ href: slugHref, cards }), { ...withAlias, maxPosts: 99 }, core);
+  assert.equal(result.posts.length, 20);
+  assert.equal(new Set(result.posts.map(post => post.postId)).size, 20);
+});
+
+test("group identity reads only Facebook's app-link metadata as strong evidence", () => {
+  const hits = adapter.groupIdentity({
+    metaTags: [{ property: "al:android:url", content: `fb://group/${OLD_NUMERIC_GROUP}` }, { property: "al:ios:url", content: `fb://group/?id=${OLD_NUMERIC_GROUP}` }, { property: "og:title", content: "fb://group/1111111111" }],
+    alternateLinks: ["android-app://com.facebook.katana/fb/group/2222222222"],
+    scriptTexts: ['{"groupID":"3333333333","x":{"group_id":"3333333333"}}', '{"groupID":"4444444444"}'],
+  });
+  assert.deepEqual(hits.filter(hit => hit.source.startsWith("al:")).map(hit => hit.id), [OLD_NUMERIC_GROUP, OLD_NUMERIC_GROUP]);
+  assert.ok(!hits.some(hit => hit.id === "1111111111"));
+  assert.ok(hits.some(hit => hit.id === "3333333333" && hit.source === "json×2"));
+});
+
+
+test("count-only mobile DOM diagnosis finds group links even without article wrappers", () => {
+  const result = adapter.inspectDomLinks({
+    href: groupHref,
+    roleArticles: 0, nativeArticles: 0, roleFeeds: 1,
+    candidateWrappers: 2, structuredScripts: 3,
+    iframeCount: 2, iframeReadable: 1, iframeInaccessible: 1,
+    iframeAnchors: 17, iframeArticles: 5,
+    openShadowRoots: 1, openShadowAnchors: 8, openShadowArticles: 3,
+    anchors: [
+      postLink(id(1)), postLink(id(1)), postLink(id(2)),
+      "https://www.facebook.com/groups/402796264871862/posts/1000000000004/",
+      "https://www.facebook.com/photo/?fbid=1000000000005",
+      "https://www.facebook.com/",
+    ],
+  }, input, core);
+  assert.equal(result.status, "GROUP_OK");
+  assert.equal(result.counters.roleArticles, 0);
+  assert.equal(result.counters.exactGroupLinks, 3);
+  assert.equal(result.counters.exactGroupIds, 2);
+  assert.equal(result.counters.foreignGroupLinks, 1);
+  assert.equal(result.counters.photoLinks, 1);
+  assert.equal(result.counters.anchorsSeen, 6);
+  assert.equal(result.counters.roleFeeds, 1);
+  assert.equal(result.counters.iframeCount, 2);
+  assert.equal(result.counters.iframeReadable, 1);
+  assert.equal(result.counters.iframeInaccessible, 1);
+  assert.equal(result.counters.iframeAnchors, 17);
+  assert.equal(result.counters.openShadowRoots, 1);
+  assert.equal(result.counters.openShadowAnchors, 8);
+  assert.ok(!JSON.stringify(result).includes(id(1)));
+  assert.ok(!JSON.stringify(result).includes("https://"));
+});
+
+test("count-only diagnostics fail closed on another group or login", () => {
+  const sample = { href: "https://m.facebook.com/groups/402796264871862/",
+    anchors: [postLink(id(1))], roleArticles: 10 };
+  const other = adapter.inspectDomLinks(sample, input, core);
+  assert.equal(other.status, "WRONG_GROUP");
+  assert.equal(other.counters.exactGroupLinks, 0);
+  const login = adapter.inspectDomLinks({ ...sample, href: "https://m.facebook.com/login/" }, input, core);
+  assert.equal(login.status, "LOGIN_REQUIRED");
+  assert.equal(login.counters.anchorsSeen, 0);
+});
+
+// ---- mobile Facebook: div-only posts, ids only in page data / network bodies
+const fs = require("node:fs");
+const fixtures = path.resolve(__dirname, "../../main/assets/fixtures");
+const FIX = "1234567890123";
+const inlineScripts = name => [...fs.readFileSync(path.join(fixtures, name), "utf8").matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+
+test("page scripts of a div-only feed give exact ids; comment, share, photo and unbound story are rejected", () => {
+  const records = adapter.exactStructuredIds(inlineScripts("mobile-div-feed.html"), [FIX], core, "HYDRATION");
+  assert.deepEqual(records.map(r => r.postId).sort(), ["550000000000001", "550000000000002"]);
+  records.forEach(r => assert.equal(r.permalink, `https://www.facebook.com/groups/${FIX}/posts/${r.postId}/`));
+});
+
+test("network bodies give exact ids only for the accepted group, any FB host or permalink form", () => {
+  const body = fs.readFileSync(path.join(fixtures, "mobile-net-data.html"), "utf8");
+  assert.deepEqual(adapter.exactStructuredIds([body], [FIX], core, "NETWORK").map(r => r.postId).sort(), ["550000000000003", "550000000000004"]);
+  assert.deepEqual(adapter.exactStructuredIds([body], ["innagrupa"], core, "NETWORK").map(r => r.postId), ["560000000000002"]);
+  assert.deepEqual(adapter.exactStructuredIds([body], ["someothergroup"], core, "NETWORK"), []);
+});
+
+test("a story id without its own permalink is never accepted (no invented permalinks)", () => {
+  assert.deepEqual(adapter.exactStructuredIds(inlineScripts("mobile-div-unbound.html"), [FIX], core, "HYDRATION"), []);
+  assert.deepEqual(adapter.exactStructuredIds(['{"__typename":"Story","post_id":"1000000000001","url":"https://www.facebook.com/photo/?fbid=1000000000001"}'], [GROUP], core, "HYDRATION"), []);
+});
+
+test("evaluate merges DOM, page-data and network layers, dedups and caps at 20", () => {
+  const net = Array.from({ length: 25 }, (_, i) => ({ postId: id(i), permalink: postLink(id(i)) }));
+  const story = JSON.stringify({ __typename: "Story", post_id: id(0), url: postLink(id(0)) });
+  const result = adapter.evaluate(page({ cards: [{ hrefs: [postLink(id(1))] }], structured: [story], networkRecords: net }), input, core);
+  assert.equal(result.posts.length, 20);
+  assert.equal(new Set(result.posts.map(p => p.postId)).size, 20);
+  assert.equal(result.posts.find(p => p.postId === id(0)).idSource, "STRUCTURED");
+  assert.equal(result.posts.find(p => p.postId === id(1)).idSource, "NETWORK");
+});
+
+test("network records are re-validated: foreign group, bad id, mismatched or photo permalink are dropped", () => {
+  const result = adapter.evaluate(page({ networkRecords: [
+    { postId: id(1), permalink: postLink(id(1)) },
+    { postId: id(2), permalink: `https://www.facebook.com/groups/999999999999/posts/${id(2)}/` },
+    { postId: "abc", permalink: postLink("abc") },
+    { postId: id(3), permalink: postLink(id(4)) },
+    { postId: id(5), permalink: `https://www.facebook.com/photo/?fbid=${id(5)}` },
+    "garbage", null,
+  ] }), input, core);
+  assert.deepEqual(result.posts.map(p => p.postId), [id(1)]);
+  assert.equal(result.diagnostics.networkRecords, 1);
+});
+
+test("id keys are counted escaped and unescaped, never their values", () => {
+  const counts = adapter.countIdKeys(['{"post_id":"1"}', 'x\\"post_id\\":2 groups\\/' + GROUP + '\\/posts\\/123456789 story_fbid top_level_post_id'], [GROUP]);
+  assert.deepEqual(counts, { postId: 2, topLevel: 1, storyFbid: 1, groupPermalinks: 1 });
+});
+
+test("structure verdict separates context, ids, unbound keys, missing data and markup", () => {
+  const v = c => adapter.structureVerdict(c).code;
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 1, scriptExactIds: 3 }), "WRONG_DOCUMENT_OR_CONTEXT");
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, scriptExactIds: 3 }), "EXACT_IDS_AVAILABLE");
+  // Network ids no longer count: response bodies are not read.
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netExactIds: 3, netKeyPostId: 9, mComponents: 4 }), "NO_POST_IDS_IN_PAGE_DATA");
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, scriptKeyPostId: 4 }), "ID_KEYS_WITHOUT_EXACT_BINDING");
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netCountingActive: 1, netWindowSec: 20, netReqTotal: 0, mComponents: 9 }), "NETWORK_NOT_OBSERVED_YET");
+  // A zero-length window observed nothing by design; it is not "network not observed".
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netCountingActive: 1, netWindowSec: 0, netReqTotal: 0, mComponents: 9 }), "NO_POST_IDS_IN_PAGE_DATA");
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netCountingActive: 1, netReqTotal: 3 }), "NO_POST_MARKUP");
+  assert.equal(v({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netCountingActive: 1, netReqTotal: 3, mComponents: 40, images: 12 }), "NO_POST_IDS_IN_PAGE_DATA");
+  assert.equal(adapter.structureVerdict({ mutAdded10s: 200, mutRemoved10s: 150 }).virtualized, 1);
+  assert.equal(adapter.structureVerdict({ mutAdded10s: 200, mutRemoved10s: 10 }).virtualized, 0);
+});
+
+test("content arriving over the network with no id in DOM or scripts is FEED_DATA_NOT_CAPTURED", () => {
+  const v = c => adapter.structureVerdict({ ctxPointsSampled: 5, ctxPointsInDocument: 5, netCountingActive: 1, mComponents: 3996, images: 400, ...c }).code;
+  assert.equal(v({ netReqTotal: 30, mutAddedTotal: 5000 }), "FEED_DATA_NOT_CAPTURED");
+  assert.equal(v({ netReqTotal: 30, mutAddedTotal: 20 }), "NO_POST_IDS_IN_PAGE_DATA");
+  assert.equal(v({ netReqTotal: 0, netWindowSec: 20, mutAddedTotal: 5000 }), "NETWORK_NOT_OBSERVED_YET");
+  assert.equal(v({ netCountingActive: 0, netReqTotal: 0, mutAddedTotal: 5000 }), "NO_POST_IDS_IN_PAGE_DATA");
+});
+
+// ---- 0.2.2 count-only traffic counter: scope, isolation, no content
+const ARMED_TAB = 7;
+const req = (type, tabId = ARMED_TAB, url = "https://www.facebook.com/api/graphql/?doc_id=1&token=SECRET") => ({ type, tabId, url, requestId: "r", requestBody: { formData: { password: ["x"] } } });
+
+test("nothing is counted before the window is armed", () => {
+  const counter = adapter.createTrafficCounter();
+  assert.equal(counter.record(req("xmlhttprequest")), false);
+  assert.equal(counter.read(ARMED_TAB), null);
+});
+
+test("armed tab requests are split by type; other tabs are never counted", () => {
+  const counter = adapter.createTrafficCounter();
+  assert.equal(counter.arm(ARMED_TAB, 20_000), true);
+  counter.record(req("xmlhttprequest"));
+  counter.record(req("xmlhttprequest"));
+  counter.record(req("script", ARMED_TAB, "https://www.facebook.com/rsrc.php/x.js"));
+  counter.record(req("xmlhttprequest", 99));
+  counter.record(req("image", 3));
+  const { counts, requestPaths } = counter.read(ARMED_TAB);
+  assert.equal(counts.netReqWithTab, 3);
+  assert.equal(counts.netTabXhr, 2);
+  assert.equal(counts.netTabScript, 1);
+  assert.equal(counts.netReqTotal, 3);
+  assert.equal(counts.netBodyCapture, 0);
+  assert.deepEqual(requestPaths, [{ name: "/api", count: 2 }, { name: "/rsrc.php", count: 1 }]);
+});
+
+test("service-worker requests (no tab) are counted apart and never as the group's", () => {
+  const counter = adapter.createTrafficCounter();
+  counter.arm(ARMED_TAB, 20_000);
+  counter.record(req("xmlhttprequest", -1));
+  counter.record(req("other", -1));
+  const { counts, requestPaths } = counter.read(ARMED_TAB);
+  assert.equal(counts.netReqNoTab, 2);
+  assert.equal(counts.netNoTabXhr, 1);
+  assert.equal(counts.netNoTabOther, 1);
+  assert.equal(counts.netReqWithTab, 0);
+  assert.equal(counts.netTabXhr, 0);
+  assert.deepEqual(requestPaths, []);
+});
+
+test("only the armed tab can read, reading clears, and a new document ends the scope", () => {
+  const counter = adapter.createTrafficCounter();
+  counter.arm(ARMED_TAB, 20_000);
+  counter.record(req("xmlhttprequest"));
+  assert.equal(counter.read(99), null);
+  assert.equal(counter.read(ARMED_TAB).counts.netReqWithTab, 1);
+  assert.equal(counter.read(ARMED_TAB), null);
+  assert.equal(counter.isArmed(), false);
+  counter.arm(ARMED_TAB, 20_000);
+  counter.record(req("main_frame"));
+  assert.equal(counter.isArmed(), false);
+  assert.equal(counter.record(req("xmlhttprequest")), false);
+});
+
+test("the window expires and cannot be armed for a tab-less sender or longer than 30 s", () => {
+  let now = 0;
+  const counter = adapter.createTrafficCounter(() => now);
+  assert.equal(counter.arm(-1, 5_000), false);
+  assert.equal(counter.arm(undefined, 5_000), false);
+  counter.arm(ARMED_TAB, 999_999);
+  // Clamped to 30 s (+2 s grace for late events): armed until 32 000 ms.
+  now = 32_000;
+  assert.equal(counter.isArmed(), true);
+  now = 32_001;
+  assert.equal(counter.isArmed(), false);
+  assert.equal(counter.record(req("xmlhttprequest")), false);
+});
+
+test("counter output holds only fixed numeric keys and allowlisted path segments, never URL, query or body", () => {
+  const counter = adapter.createTrafficCounter();
+  counter.arm(ARMED_TAB, 20_000);
+  counter.record(req("xmlhttprequest", ARMED_TAB, "https://www.facebook.com/messages/t/123456789?token=SECRET"));
+  counter.record(req("xmlhttprequest", ARMED_TAB, "https://www.facebook.com/groups/other/posts/1/"));
+  const out = counter.read(ARMED_TAB);
+  const text = JSON.stringify(out);
+  for (const leak of ["SECRET", "token", "messages", "123456789", "password", "doc_id", "other/posts"]) assert.ok(!text.includes(leak), leak);
+  Object.values(out.counts).forEach(value => assert.equal(typeof value, "number"));
+  assert.deepEqual(out.requestPaths.map(p => p.name).sort(), ["(inne)", "/groups"]);
+});
+
+test("legacy measurements stay count-only; response API confined to explicit opt-in module", () => {
+  const extension = path.resolve(__dirname, "../../main/extension");
+  const background = fs.readFileSync(path.join(extension, "poc-background.js"), "utf8").replace(/\/\/.*$/gm, "");
+  const manifest = JSON.parse(fs.readFileSync(path.join(extension, "manifest.json"), "utf8"));
+  assert.ok(!background.includes("filterResponseData("));
+  assert.ok(!/\["blocking"\]/.test(background));
+  assert.ok(manifest.permissions.includes("webRequestBlocking"));
+  assert.ok(manifest.background.scripts.includes("response-diagnosis.js"));
+  const response = fs.readFileSync(path.join(extension, "response-diagnosis.js"), "utf8");
+  assert.ok(response.includes("m?.consent===true"));
+  assert.ok(response.includes("filter.write(e.data)"));
+  assert.ok(!/requestBody|requestHeaders|responseHeaders|browser\.cookies|browser\.storage|fetch\(|XMLHttpRequest/.test(response));
+  assert.ok(!/networkEvidence|remember\(|TextDecoder/.test(background));
+});
+
+// ---- 0.2.3 listener control test and channel analysis (counts only)
+test("host classes: Facebook, its media CDN, the POC control endpoint, loopback; everything else ignored", () => {
+  assert.equal(adapter.trafficHostClass("https://www.facebook.com/api/graphql/"), "facebook");
+  assert.equal(adapter.trafficHostClass("https://scontent-waw2-1.xx.fbcdn.net/v/t39/1.jpg?token=x"), "fbcdn");
+  assert.equal(adapter.trafficHostClass("http://127.0.0.1:4321/flip-control?fixture=network-control-ping"), "control");
+  assert.equal(adapter.trafficHostClass("http://127.0.0.1:4321/groups/1/"), "loopback");
+  assert.equal(adapter.trafficHostClass("https://www.facebook.com.evil.example/"), null);
+  assert.equal(adapter.trafficHostClass("http://www.facebook.com/"), null);
+  assert.equal(adapter.trafficHostClass("https://example.com/flip-control"), null);
+  const counter = adapter.createTrafficCounter();
+  counter.arm(ARMED_TAB, 5_000);
+  assert.equal(counter.record(req("xmlhttprequest", ARMED_TAB, "https://example.com/api")), false);
+  assert.equal(counter.read(ARMED_TAB).counts.netReqTotal, 0);
+});
+
+test("unknown resource types are counted as other instead of being dropped", () => {
+  const counter = adapter.createTrafficCounter();
+  counter.arm(ARMED_TAB, 5_000);
+  counter.record(req("imageset"));
+  counter.record(req("speculative"));
+  counter.record(req("font", -1));
+  const { counts } = counter.read(ARMED_TAB);
+  assert.equal(counts.netTabOther, 2);
+  assert.equal(counts.netNoTabOther, 1);
+});
+
+test("fbcdn media of the armed tab is counted apart from data requests; other tabs only as one total", () => {
+  const counter = adapter.createTrafficCounter();
+  counter.arm(ARMED_TAB, 5_000);
+  counter.record(req("image", ARMED_TAB, "https://scontent.xx.fbcdn.net/a.jpg"));
+  counter.record(req("image", -1, "https://scontent.xx.fbcdn.net/b.jpg"));
+  counter.record(req("xmlhttprequest", 42));
+  counter.record(req("image", 42, "https://scontent.xx.fbcdn.net/c.jpg"));
+  const { counts, requestPaths } = counter.read(ARMED_TAB);
+  assert.equal(counts.netFbcdnTab, 1);
+  assert.equal(counts.netFbcdnNoTab, 1);
+  assert.equal(counts.netOtherTabTotal, 2);
+  assert.equal(counts.netReqWithTab, 0);
+  assert.deepEqual(requestPaths, []);
+});
+
+test("onCompleted counts completed and cache-served responses of the armed tab only", () => {
+  const counter = adapter.createTrafficCounter();
+  counter.arm(ARMED_TAB, 5_000);
+  assert.equal(counter.complete({ tabId: ARMED_TAB, url: "https://scontent.xx.fbcdn.net/a.jpg", fromCache: true }), true);
+  assert.equal(counter.complete({ tabId: ARMED_TAB, url: "https://www.facebook.com/api/", fromCache: false }), true);
+  assert.equal(counter.complete({ tabId: 3, url: "https://www.facebook.com/api/", fromCache: true }), false);
+  const { counts } = counter.read(ARMED_TAB, { webRequest: true, listener: true, onCompleted: true });
+  assert.equal(counts.netCompletedTab, 2);
+  assert.equal(counts.netFromCacheTab, 1);
+  assert.equal(counts.apiListener, 1);
+});
+
+test("control requests are classified by tab and yield LISTENER_OK / WRONG_TAB / LISTENER_NOT_OBSERVED / TIMEOUT", () => {
+  const run = records => {
+    const counter = adapter.createTrafficCounter();
+    counter.arm(ARMED_TAB, 3_000);
+    records.forEach(r => counter.record(r));
+    return counter.read(ARMED_TAB).counts;
+  };
+  const control = tabId => req("xmlhttprequest", tabId, "http://127.0.0.1:5555/flip-control?fixture=network-control-ping&t=1");
+  const ok = run([control(ARMED_TAB), control(ARMED_TAB), control(ARMED_TAB)]);
+  assert.equal(ok.controlTab, 3);
+  assert.equal(adapter.controlVerdict(ok), "LISTENER_OK");
+  assert.equal(adapter.controlVerdict(run([control(9), control(9)])), "WRONG_TAB");
+  assert.equal(adapter.controlVerdict(run([control(-1)])), "WRONG_TAB");
+  assert.equal(adapter.controlVerdict(run([])), "LISTENER_NOT_OBSERVED");
+  assert.equal(adapter.controlVerdict(null), "TIMEOUT");
+  // Control hits never pollute the Facebook counters.
+  assert.equal(ok.netReqWithTab, 0);
+});
+
+// ---- 0.2.4 measurement of one approved group page load
+const LOAD_GROUP = "lodzsprzedazzakupwynajem";
+const LOAD_TAB = 11;
+const groupUrl = `https://www.facebook.com/groups/${LOAD_GROUP}/`;
+const ev = (type, url = "https://www.facebook.com/api/graphql/?doc_id=9&fb_dtsg=SECRET", tabId = LOAD_TAB) => ({ type, url, tabId });
+const armedLoad = (clock = { t: 0 }) => {
+  const counter = adapter.createLoadCounter(() => clock.t);
+  assert.equal(counter.arm("nonce-aaaa-1111", [LOAD_GROUP], 25_000), true);
+  return counter;
+};
+
+test("load: nothing is counted before arming; arming happens before the first main_frame", () => {
+  const counter = adapter.createLoadCounter();
+  assert.equal(counter.record(ev("main_frame", groupUrl)), false);
+  assert.equal(counter.read("nonce-aaaa-1111"), null);
+  const armed = armedLoad();
+  assert.equal(armed.record(ev("main_frame", groupUrl)), true);
+  assert.equal(armed.boundTab(), LOAD_TAB);
+});
+
+test("load: the approved group load counts document, XHR/fetch, scripts and images; API vs all separated", () => {
+  const counter = armedLoad();
+  counter.record(ev("main_frame", groupUrl));
+  counter.record(ev("xmlhttprequest"));
+  counter.record(ev("xmlhttprequest", "https://www.facebook.com/ajax/bz"));
+  counter.record(ev("script", "https://www.facebook.com/rsrc.php/v3/x.js"));
+  counter.record(ev("image", "https://scontent.xx.fbcdn.net/a.jpg"));
+  counter.record(ev("image", "https://scontent.xx.fbcdn.net/b.jpg"));
+  counter.complete({ type: "main_frame", url: groupUrl, tabId: LOAD_TAB, fromCache: false });
+  counter.complete({ type: "image", url: "https://scontent.xx.fbcdn.net/a.jpg", tabId: LOAD_TAB, fromCache: true });
+  const { counts, stopReason, requestPaths } = counter.read("nonce-aaaa-1111");
+  assert.equal(stopReason, null);
+  assert.equal(counts.loadBound, 1);
+  assert.equal(counts.loadMainFrames, 1);
+  assert.equal(counts.loadDocCompleted, 1);
+  assert.equal(counts.loadPageTotal, 4);
+  assert.equal(counts.loadPageXhr, 2);
+  assert.equal(counts.loadPageScript, 1);
+  assert.equal(counts.loadFbcdnTotal, 2);
+  assert.equal(counts.loadFbcdnImage, 2);
+  assert.equal(counts.loadCompleted, 2);
+  assert.equal(counts.loadFromCache, 1);
+  assert.equal(counts.loadBodyCapture, 0);
+  assert.deepEqual(requestPaths.map(p => p.name).sort(), ["/ajax", "/api", "/groups", "/rsrc.php"]);
+  assert.ok(!JSON.stringify(counts).includes("SECRET") && !JSON.stringify(requestPaths).includes("SECRET"));
+});
+
+test("load: redirects to login, checkpoint or CAPTCHA freeze the measurement with that reason", () => {
+  for (const [url, reason] of [
+    ["https://www.facebook.com/login/?next=x", "LOGIN"],
+    ["https://m.facebook.com/checkpoint/1501092823525282/", "CHECKPOINT"],
+    ["https://www.facebook.com/two_step_verification/two_factor/", "CHECKPOINT"],
+    ["https://www.facebook.com/captcha/", "CAPTCHA"],
+  ]) {
+    const counter = armedLoad();
+    counter.record(ev("main_frame", groupUrl));
+    counter.record(ev("main_frame", url));
+    assert.equal(counter.record(ev("xmlhttprequest")), false, reason);
+    const out = counter.read("nonce-aaaa-1111");
+    assert.equal(out.stopReason, reason);
+    assert.equal(out.counts.loadPageXhr, 0);
+  }
+});
+
+test("load: navigation to another group, another host or another Facebook page freezes; it never binds there", () => {
+  for (const [url, reason] of [
+    ["https://www.facebook.com/groups/innagrupa/", "OTHER_GROUP"],
+    ["https://example.com/", "OTHER_HOST"],
+    ["https://www.facebook.com/messages/", "OTHER_PAGE"],
+  ]) {
+    const counter = armedLoad();
+    counter.record(ev("main_frame", groupUrl));
+    counter.record(ev("main_frame", url));
+    assert.equal(counter.read("nonce-aaaa-1111").stopReason, reason);
+  }
+  const unbound = armedLoad();
+  assert.equal(unbound.record(ev("main_frame", "https://www.facebook.com/groups/innagrupa/")), false);
+  assert.equal(unbound.record(ev("xmlhttprequest")), false);
+  assert.equal(unbound.read("nonce-aaaa-1111").counts.loadBound, 0);
+});
+
+test("load: other tabs give one total only and can never bind or add to the group's counts", () => {
+  const counter = armedLoad();
+  counter.record(ev("main_frame", groupUrl));
+  counter.record(ev("xmlhttprequest", undefined, 99));
+  counter.record(ev("main_frame", groupUrl, 99));
+  const { counts } = counter.read("nonce-aaaa-1111");
+  assert.equal(counts.loadOtherTab, 2);
+  assert.equal(counts.loadPageXhr, 0);
+  assert.equal(counts.loadMainFrames, 1);
+});
+
+test("load: requests without a tab are counted apart and never attributed", () => {
+  const counter = armedLoad();
+  assert.equal(counter.record(ev("main_frame", groupUrl, -1)), false); // cannot bind
+  counter.record(ev("main_frame", groupUrl));
+  counter.record(ev("xmlhttprequest", undefined, -1));
+  counter.record(ev("image", "https://scontent.xx.fbcdn.net/a.jpg", -1));
+  const { counts } = counter.read("nonce-aaaa-1111");
+  assert.equal(counts.loadNoTab, 1);
+  assert.equal(counts.loadNoTabFbcdn, 1);
+  assert.equal(counts.loadPageXhr, 0);
+  assert.equal(counts.loadFbcdnTotal, 0);
+});
+
+test("load: binding is only possible shortly after arming and counting stops when the window ends", () => {
+  const clock = { t: 0 };
+  const late = armedLoad(clock);
+  clock.t = 10_001;
+  assert.equal(late.record(ev("main_frame", groupUrl)), false);
+  const clock2 = { t: 0 };
+  const counter = armedLoad(clock2);
+  counter.record(ev("main_frame", groupUrl));
+  clock2.t = 27_001; // 25 s + 2 s grace
+  assert.equal(counter.isArmed(), false);
+  assert.equal(counter.record(ev("xmlhttprequest")), false);
+});
+
+test("load: no mixing between measurements, read once, abort clears, invalid arming refused", () => {
+  const counter = armedLoad();
+  counter.record(ev("main_frame", groupUrl));
+  counter.record(ev("xmlhttprequest"));
+  assert.equal(counter.arm("nonce-bbbb-2222", [LOAD_GROUP], 25_000), true);
+  assert.equal(counter.read("nonce-aaaa-1111"), null);
+  const second = counter.read("nonce-bbbb-2222");
+  assert.equal(second.counts.loadPageXhr, 0);
+  assert.equal(second.counts.loadBound, 0);
+  assert.equal(counter.read("nonce-bbbb-2222"), null);
+  counter.arm("nonce-cccc-3333", [LOAD_GROUP], 25_000);
+  assert.equal(counter.abort("nonce-cccc-3333"), true);
+  assert.equal(counter.read("nonce-cccc-3333"), null);
+  assert.equal(counter.arm("x", [LOAD_GROUP], 25_000), false);
+  assert.equal(counter.arm("nonce-dddd-4444", ["../evil"], 25_000), false);
+});

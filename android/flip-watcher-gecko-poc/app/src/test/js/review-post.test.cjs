@@ -1,0 +1,329 @@
+const test=require('node:test'),assert=require('node:assert/strict');
+require('../../../../../../extensions/facebook-collector/collector-core.js');const core=globalThis.FlipFacebookCollectorCore,p=require('../../main/extension/desktop-preview.js'),f=require('../../main/extension/desktop-fields.js'),reader=require('../../main/extension/review-post.js');
+const group='lodzsprzedazzakupwynajem',id='550000000000091',link=`https://www.facebook.com/groups/${group}/posts/${id}/`,nonce='12345678-1234-1234-1234-123456789012';
+function env(){const doc={title:'Own post',readyState:'complete',visibilityState:'visible',hidden:false,hasFocus:()=>true},w={document:doc,location:{href:link},innerWidth:980,getComputedStyle:()=>({display:'block',visibility:'visible'})};
+ const previous=p.createModel(core,f,group);previous.add({postId:id,permalink:link,text:'',media:[]},'DOM');
+ const m={consent:true,reviewConsent:true,nonce,groupId:group,postId:id,expectedUrl:link,previousRow:previous.rows()[0]};
+ const card={ownerDocument:doc,isConnected:true,parentElement:null,closest:()=>null};const anchor={href:link,closest:s=>s==='[role="article"],article'?card:null};
+ const marker={ownerDocument:doc,closest:s=>s==='[role="article"],article'?card:null,contains:()=>false,checkVisibility:()=>true};
+ const text={nodeType:3,textContent:'Sprzedam mieszkanie 42m2. Cena 319000 zł. 2 pokoje. ul. Testowa 12.'};
+ card.querySelectorAll=s=>s==='a[href]'?[anchor]:[marker];doc.querySelector=()=>null;doc.querySelectorAll=s=>s==='[role="article"],article'?[card]:[];
+ doc.createTreeWalker=()=>{let done=false;return{nextNode(){if(done)return null;done=true;return text}}};
+ return{w,doc,m,card,anchor,marker,text,run:(r=reader.create())=>r.read(w,m,core,f,p)};
+}
+test('own exact permalink reads full fields and merges the existing RAM row',()=>{const h=env(),r=h.run();assert.equal(r.status,'OK');assert.equal(r.bound,1);assert.equal(r.textRead,1);assert.equal(r.rows[0].price,319000);assert.equal(r.rows[0].area,42);assert.equal(r.rows[0].rooms,2);assert.equal(r.rows[0].street,'Testowa 12');assert(!('text'in r.rows[0]));assert(!JSON.stringify(r).includes('Sprzedam'));});
+test('new consent exact context visibility and security gates precede DOM reads',()=>{for(const kind of ['consent','grant','location','id','hidden','focus','title','form']){const h=env();if(kind==='consent')h.m.consent=false;if(kind==='grant')h.m.reviewConsent=false;if(kind==='location')h.w.location.href=link.replace(group,'foreign');if(kind==='id')h.m.postId='550000000000092';if(kind==='hidden')h.doc.hidden=true;if(kind==='focus')h.doc.hasFocus=()=>false;if(kind==='title')h.doc.title='Logowanie';if(kind==='form')h.doc.querySelector=()=>({});h.doc.querySelectorAll=()=>{throw Error('must not inspect')};assert.equal(h.run().status,'STOP',kind);}});
+test('URL identity alone never promotes arbitrary suggested article text',()=>{const h=env();h.anchor.href=link.replace(id,'550000000000092');let reads=0;h.doc.createTreeWalker=()=>{reads++;throw Error('wrong target')};const r=h.run();assert.equal(r.status,'OK');assert.equal(r.bound,0);assert.equal(r.textRead,0);assert.equal(r.rows[0].price,null);assert.equal(reads,0);});
+test('new grants are single-use and changed contexts erase all fields',()=>{const h=env(),r=reader.create();assert.equal(h.run(r).status,'OK');assert.equal(h.run(r).status,'STOP');const b=env();b.doc.createTreeWalker=()=>{b.w.location.href=link.replace(id,'550000000000092');return{nextNode:()=>null}};assert.equal(b.run().status,'STOP');});
+test('exact host path group and post are required without guessing aliases',()=>{for(const raw of [link.replace('https:','http:'),link.replace(group,'402796264871862'),link+'?x=1',link+'#x',link.replace('www.facebook.com','www.facebook.com:444'),link.replace('www.facebook.com','user@www.facebook.com')])assert.equal(reader.exact(raw,group,id),false,raw);assert(reader.exact(link,group,id));});
+test('missing text remains an unconfirmed read, not evidence of an empty listing',()=>{const h=env();h.doc.createTreeWalker=()=>({nextNode:()=>null});const r=h.run();assert.equal(r.bound,1);assert.equal(r.textRead,0);assert.equal(r.rows[0].qualification,'NO_TEXT');});
+
+test('a comment permalink cannot bind an unmarked comment as the main post',()=>{const h=env();h.anchor.href=link+'?comment_id=777777777';const r=h.run();assert.equal(r.bound,0);assert.equal(r.textRead,0);assert.equal(r.rows[0].price,null);});
+
+test('interactive own DOM is readable without waiting for media completion; loading DOM is rejected',()=>{const h=env();h.doc.readyState='interactive';assert.equal(h.run().status,'OK');const b=env();b.doc.readyState='loading';b.doc.querySelectorAll=()=>{throw Error('loading DOM must not be read')};assert.equal(b.run().status,'STOP');});
+
+test('an exact nested article is readable inside an unlabelled wrapper without borrowing parent fields',()=>{const h=env();const wrapper={ownerDocument:h.doc,parentElement:null,closest:()=>null,querySelectorAll:()=>[]};h.card.parentElement={closest:()=>wrapper};const r=h.run();assert.equal(r.bound,1);assert.equal(r.textRead,1);assert.equal(r.evidence.nestedCards,1);assert.equal(r.rows[0].price,319000);});
+test('a foreign parent article rejects an otherwise exact nested card',()=>{const h=env();const wrapper={ownerDocument:h.doc,parentElement:null,closest:()=>null};const a={href:link.replace(id,'550000000000092'),closest:()=>wrapper};wrapper.querySelectorAll=()=>[a];h.card.parentElement={closest:()=>wrapper};const r=h.run();assert.equal(r.bound,0);assert.equal(r.evidence.foreignParents,1);assert.equal(r.rows[0].price,null);});
+test('unrelated bootstrap scripts never enter the expensive structured parser',()=>{const h=env();const prior=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='script:not([src])'?[{textContent:'{"bootstrap":"no own permalink"}'}]:prior(s);let calls=0;const stub={...core,extractStructuredRecordsFromText(){calls++;throw Error('must not parse unrelated script')}};const r=reader.create().read(h.w,h.m,stub,f,p);assert.equal(r.status,'OK');assert.equal(calls,0);assert.equal(r.evidence.scriptSkipped,1);assert.equal(r.evidence.scriptParsed,0);});
+test('parser exception becomes a bounded ERROR reply without exception text or post content',()=>{const h=env();const prior=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='script:not([src])'?[{textContent:'window.payload='+JSON.stringify({url:link})+';'}]:prior(s);const stub={...core,extractStructuredRecordsFromText(){throw Error('PRIVATE_EXCEPTION_AND_TOKEN')}};const r=reader.create().read(h.w,h.m,stub,f,p);assert.equal(r.status,'STOP');assert.equal(r.reason,'ERROR');assert.equal(r.evidence.readerStage,5);assert.equal(r.evidence.readerErrors,1);assert.equal(r.rows.length,0);assert(!JSON.stringify(r).includes('PRIVATE_EXCEPTION'));assert(!JSON.stringify(r).includes('Sprzedam'));});
+test('a bounded script work budget returns an honest incomplete result instead of blocking the port',()=>{const h=env();let tick=0;h.w.performance={now:()=>tick+=501};const prior=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='script:not([src])'?[{textContent:'window.payload='+JSON.stringify({url:link})+';'}]:prior(s);const r=h.run();assert.equal(r.status,'OK');assert.equal(r.evidence.budgetLimited,1);assert.equal(r.evidence.scriptParsed,0);});
+
+test('a nested article under an identified same-post parent is not mistaken for the main post comment',()=>{const h=env();const wrapper={ownerDocument:h.doc,parentElement:null,closest:()=>null};const a={href:link,closest:()=>wrapper};wrapper.querySelectorAll=()=>[a];h.card.parentElement={closest:()=>wrapper};const r=h.run();assert.equal(r.bound,0);assert.equal(r.rows[0].price,null);});
+
+test('an interactive anchor with exact data-href can bind without fabricating a post ID',()=>{const h=env();delete h.anchor.href;h.anchor.getAttribute=k=>k==='data-href'?link:null;const prior=h.card.querySelectorAll;h.card.querySelectorAll=s=>s==='a[href]'?[]:s.startsWith('a[data-href]')?[h.anchor]:prior(s);const r=h.run();assert.equal(r.bound,1);assert.equal(r.rows[0].price,319000);assert.equal(r.evidence.attrExact,1);assert.equal(r.evidence.hrefExact,0);});
+test('interactive identity rejects other groups, other posts and comment targets with numeric diagnostics only',()=>{for(const kind of ['group','post','comment']){const h=env();delete h.anchor.href;h.anchor.getAttribute=k=>k==='data-href'?(kind==='group'?link.replace(group,'foreign'):kind==='post'?link.replace(id,'550000000000092'):link+'?comment_id=999999'):null;const prior=h.card.querySelectorAll;h.card.querySelectorAll=s=>s==='a[href]'?[]:s.startsWith('a[data-href]')?[h.anchor]:prior(s);const r=h.run();assert.equal(r.bound,0);assert.equal(r.rows[0].price,null);assert.equal(r.evidence[kind==='group'?'foreignGroup':kind==='post'?'foreignPost':'identityMissing'],1);assert(!JSON.stringify(r.evidence).includes('http'));}});
+test('an article metadata attribute alone is not promoted to an interactive permalink',()=>{const h=env();h.card.getAttribute=()=>link;h.card.querySelectorAll=()=>[];const r=h.run();assert.equal(r.bound,0);assert.equal(r.evidence.identityMissing,1);});
+
+function canonicalEnv(){const h=env(),prior=h.doc.querySelectorAll;const meta={tagName:'LINK',getAttribute:()=>meta.url,url:link};h.doc.head={querySelectorAll:()=>[meta]};const main={ownerDocument:h.doc,isConnected:true,closest:()=>null,checkVisibility:()=>true,querySelectorAll:()=>[h.card]};h.doc.querySelectorAll=s=>s==='main,[role="main"]'?[main]:prior(s);h.anchor.href=link+'?comment_id=999999';return{...h,meta,main};}
+test('canonical exact document plus one own primary card binds without using comment links as identity',()=>{const h=canonicalEnv(),r=h.run();assert.equal(r.bound,1);assert.equal(r.textRead,1);assert.equal(r.rows[0].price,319000);assert.equal(r.evidence.hrefExact,0);assert.equal(r.evidence.rejectQuery,1);assert.equal(r.evidence.canonicalBound,1);assert.equal(r.evidence.primaryCandidates,1);});
+test('canonical fallback refuses conflicting metadata, foreign own links or ambiguous main cards',()=>{for(const kind of ['metadata','group','post','ambiguous']){const h=canonicalEnv();if(kind==='metadata')h.meta.url=link.replace(id,'550000000000092');if(kind==='group')h.anchor.href=link.replace(group,'foreign');if(kind==='post')h.anchor.href=link.replace(id,'550000000000092');if(kind==='ambiguous')h.main.querySelectorAll=()=>[h.card,{ownerDocument:h.doc,isConnected:true,parentElement:null,closest:()=>null}];const r=h.run();assert.equal(r.bound,0,kind);assert.equal(r.rows[0].price,null,kind);assert.equal(r.evidence.canonicalBound,0,kind);}});
+test('URL and a sole card without head canonical metadata never establish this alternative proof',()=>{const h=canonicalEnv();delete h.doc.head;assert.equal(h.run().bound,0);});
+test('an explicitly labelled comment cannot become a canonical primary post',()=>{const h=canonicalEnv();h.card.getAttribute=()=> 'Comment by someone';assert.equal(h.run().bound,0);});
+
+function hydrationEnv(scripts){const h=env();h.w.performance={now:()=>0};h.anchor.href='https://www.facebook.com/';const prior=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='script:not([src])'?scripts:prior(s);return h;}
+const ownHydration=()=>JSON.stringify({__typename:'Story',post_id:id,permalink_url:link,message:{text:'Sprzedam mieszkanie 42 m2. Cena 319000 zł. 2 pokoje.'}});
+test('exact own JSON after 64 bootstrap scripts is read with the real structured parser',()=>{
+ const scripts=Array.from({length:150},()=>({textContent:'{"bootstrap":true}'}));scripts.push({textContent:ownHydration()});
+ const r=hydrationEnv(scripts).run();assert.equal(r.bound,1);assert.equal(r.textRead,1);assert.equal(r.rows[0].price,319000);assert.equal(r.rows[0].area,42);assert.equal(r.evidence.scriptParsed,1);assert.equal(r.evidence.scriptSkipped,150);
+});
+test('typed JSON is inspected before bootstrap scripts exhaust the existing byte budget',()=>{
+ const scripts=Array.from({length:10},()=>({textContent:'x'.repeat(250000)}));scripts.push({getAttribute:k=>k==='type'?'application/json':null,textContent:ownHydration()});
+ const r=hydrationEnv(scripts).run();assert.equal(r.bound,1);assert.equal(r.textRead,1);assert.equal(r.evidence.scriptParsed,1);assert.equal(r.evidence.budgetLimited,1);
+});
+test('inspection never reads past 256 script nodes and reports incomplete coverage',()=>{
+ let outside=0;const scripts=Array.from({length:256},()=>({textContent:'{"bootstrap":true}'}));scripts.push({get textContent(){outside++;return ownHydration()}});
+ const r=hydrationEnv(scripts).run();assert.equal(outside,0);assert.equal(r.bound,0);assert.equal(r.evidence.budgetLimited,1);assert.equal(r.evidence.scriptParsed,0);
+});
+test('more inspection never exceeds 64 expensive parses or accepts a neighboring post',()=>{
+ const scripts=Array.from({length:100},()=>({textContent:'window.payload='+JSON.stringify({url:link})+';'}));let calls=0;
+ const stub={...core,extractStructuredRecordsFromText(){calls++;return[{postId:'550000000000092',permalink:link.replace(id,'550000000000092'),text:'Sprzedam mieszkanie 999 m2',media:[]}]}};
+ const h=hydrationEnv(scripts),r=reader.create().read(h.w,h.m,stub,f,p);assert.equal(calls,64);assert.equal(r.bound,0);assert.equal(r.rows[0].area,null);assert.equal(r.evidence.budgetLimited,1);
+});
+
+test('matched block with zero parser records is distinguished from rejected records',()=>{
+ const h=hydrationEnv([{getAttribute:()=> 'application/json',textContent:ownHydration()}]);
+ const r=reader.create().read(h.w,h.m,{...core,extractStructuredRecordsFromText:()=>[]},f,p);
+ assert.equal(r.evidence.parsedDataBlocks,1);assert.equal(r.evidence.recordReturned,0);assert.equal(r.evidence.recordAccepted,0);assert.equal(r.bound,0);
+});
+test('record diagnostics distinguish format, other ID, permalink, quoted text and accepted empty text',()=>{
+ const h=hydrationEnv([{textContent:'window.payload='+JSON.stringify({url:link})+';'}]);
+ const records=[null,'PRIVATE_RECORD', {postId:'550000000000092',permalink:link.replace(id,'550000000000092')}, {postId:id,permalink:link.replace(group,'foreign')}, {postId:id,permalink:link,text:'PRIVATE_QUOTED',__structuredDiagnostics:{structuredTextPath:'shared_story.message'}}, {postId:id,permalink:link,text:'',media:[]}];
+ const r=reader.create().read(h.w,h.m,{...core,extractStructuredRecordsFromText:()=>records},f,p),e=r.evidence;
+ assert.equal(e.recordReturned,6);assert.equal(e.recordInvalid,2);assert.equal(e.recordOtherId,1);assert.equal(e.recordLinkRejected,1);assert.equal(e.recordShared,1);assert.equal(e.recordAccepted,1);assert.equal(e.recordNoText,1);assert.equal(e.parsedOtherBlocks,1);
+ assert.equal(r.bound,1);assert.equal(r.textRead,0);assert.equal(r.rows[0].price,null);assert(Object.values(e).every(Number.isInteger));assert(!JSON.stringify(e).includes('PRIVATE'));assert(!JSON.stringify(e).includes(id));
+});
+test('record truncation is explicit and never inspects a later record as the requested post',()=>{
+ const h=hydrationEnv([{textContent:'window.payload='+JSON.stringify({url:link})+';'}]);
+ const records=Array.from({length:100},()=>({postId:'550000000000092',permalink:link.replace(id,'550000000000092')}));records.push({postId:id,permalink:link,text:'Sprzedam mieszkanie 42m2',media:[]});
+ const r=reader.create().read(h.w,h.m,{...core,extractStructuredRecordsFromText:()=>records},f,p);
+ assert.equal(r.evidence.recordReturned,101);assert.equal(r.evidence.recordOtherId,100);assert.equal(r.evidence.recordLimit,1);assert.equal(r.evidence.budgetLimited,1);assert.equal(r.bound,0);
+});
+
+function wrapRelay(story,n=15){let value=story;for(let i=0;i<n;i++)value={__bbox:{result:{data:value}}};return value;}
+const selectedStory=()=>({__typename:'Story',post_id:id,permalink_url:link,message:{text:'Sprzedam mieszkanie 42 m2. Cena 319000 zł. 2 pokoje. Retkinia. ul. Testowa 12.'}});
+const selectData=body=>reader.selectOwnStoryData(body,group,id,()=>0,500);
+test('large deeply nested Relay data recovers fields without sending the large payload to the parser',()=>{
+ const body=JSON.stringify({padding:'x'.repeat(900000),require:[['RelayPrefetchedStreamCache','next',[],[wrapRelay(selectedStory())]]]});
+ assert.equal(core.extractStructuredRecordsFromText(body,'HYDRATION',{sourceType:'GROUP',sourceId:group,sourceUrl:`https://www.facebook.com/groups/${group}/`,allowGroupRedirect:false}).length,0);
+ let max=0;const stub={...core,extractStructuredRecordsFromText(payload,...args){max=Math.max(max,payload.length);assert(payload.length<=131072);return core.extractStructuredRecordsFromText(payload,...args)}};
+ const h=hydrationEnv([{getAttribute:()=> 'application/json',textContent:body}]),r=reader.create().read(h.w,h.m,stub,f,p);
+ assert.equal(r.bound,1);assert.equal(r.textRead,1);assert.equal(r.rows[0].price,319000);assert.equal(r.rows[0].area,42);assert.equal(r.rows[0].rooms,2);assert.equal(r.rows[0].street,'Testowa 12');assert(max<1000);assert.equal(r.evidence.scriptOversize,1);assert.equal(r.evidence.selectedStories,1);assert(r.evidence.selectedCoreRecords>0);
+});
+test('two large data blocks and exhausted legacy inspection do not discard a selected own story',()=>{
+ const scripts=[{getAttribute:()=> 'application/json',textContent:JSON.stringify({padding:'x'.repeat(1500000)})},{getAttribute:()=> 'application/json',textContent:JSON.stringify({padding:'y'.repeat(1500000),data:wrapRelay(selectedStory())})}];
+ const r=hydrationEnv(scripts).run();assert.equal(r.bound,1);assert.equal(r.rows[0].price,319000);assert.equal(r.evidence.scriptOversize,2);assert.equal(r.evidence.selectedStories,1);
+});
+test('a small story beyond the legacy depth cap is also selected',()=>{const r=hydrationEnv([{textContent:JSON.stringify(wrapRelay(selectedStory()))}]).run();assert.equal(r.bound,1);assert.equal(r.rows[0].area,42);});
+test('same-owner content and timestamp sections may establish one root story without taking foreign text',()=>{
+ const story={__typename:'Story',id,comet_sections:{content:{story:{__typename:'Story',id,message:{text:'Sprzedam mieszkanie 42 m2 za 319000 zł'}}},timestamp:{story:{__typename:'Story',id,url:link}}}};
+ const r=hydrationEnv([{textContent:JSON.stringify(wrapRelay(story))}]).run();assert.equal(r.bound,1);assert.equal(r.rows[0].price,319000);assert.equal(r.rows[0].area,42);
+});
+test('comment, feedback, quote, shared and attachment ancestors cannot become an own post after projection',()=>{
+ for(const key of ['comments','feedback','quoted_story','shared_story','attachments','media','caption']){
+  const body=JSON.stringify({data:{[key]:selectedStory()}}),r=hydrationEnv([{textContent:body}]).run();assert.equal(r.bound,0,key);assert.equal(r.rows[0].price,null,key);assert(r.evidence.selectorRejected>0,key);
+ }
+});
+test('an enclosing foreign story or comment discovered after the target subtree still rejects it',()=>{
+ for(const parent of [{child:selectedStory(),post_id:'550000000000092',__typename:'Story'},{child:selectedStory(),__typename:'Comment'}]){
+  const r=hydrationEnv([{textContent:JSON.stringify(parent)}]).run();assert.equal(r.bound,0);assert.equal(r.rows[0].price,null);assert(r.evidence.selectorRejected>0);
+ }
+});
+test('serialized story text, duplicate keys and malformed JSON never create projected identity',()=>{
+ const cases=[JSON.stringify({caption:JSON.stringify(selectedStory())}),'{"data":'+JSON.stringify(selectedStory())+',"data":{}}','{"data":'+JSON.stringify(selectedStory())+',}',JSON.stringify({data:selectedStory()}).slice(0,-1)];
+ for(const body of cases){const r=hydrationEnv([{getAttribute:()=> 'application/json',textContent:body}]).run();assert.equal(r.bound,0);assert.equal(r.rows[0].price,null);}
+});
+test('projection respects exact group, conflicting IDs, structural depth and deadline caps',()=>{
+ for(const story of [{...selectedStory(),permalink_url:link.replace(group,'foreign')},{...selectedStory(),id:'550000000000092'}])assert.equal(selectData(JSON.stringify(story)).bodies.length,0);
+ const deep=selectData(JSON.stringify(wrapRelay(selectedStory(),50)));assert.equal(deep.valid,false);assert.equal(deep.limited,true);
+ const timed=reader.selectOwnStoryData(JSON.stringify(selectedStory()),group,id,()=>501,500);assert.equal(timed.valid,false);assert.equal(timed.bodies.length,0);
+ assert.equal(selectData('x'.repeat(4194305)).limited,true);
+});
+test('escaped delimiters and unicode ID strings keep JSON boundaries exact',()=>{
+ const story=selectedStory();story.message.text+=' { escaped "quote" and \\ slash }';const body=JSON.stringify({padding:'{"fake":"}"}',data:story}).replace('"post_id":"'+id+'"','"post_id":"\\u0035'+id.slice(1)+'"');
+ const selected=selectData(body);assert.equal(selected.valid,true);assert.equal(selected.bodies.length,1);assert.equal(JSON.parse(selected.bodies[0]).post_id,id);
+});
+
+test('a neighboring story message cannot fill a target story with no own text',()=>{
+ const story={__typename:'Story',post_id:id,permalink_url:link,neighbor:{...selectedStory(),post_id:'550000000000092',permalink_url:link.replace(id,'550000000000092')}};
+ const r=hydrationEnv([{textContent:JSON.stringify(wrapRelay(story))}]).run();assert.equal(r.bound,1);assert.equal(r.textRead,0);assert.equal(r.rows[0].price,null);
+});
+test('bounded projections retain a text-bearing own root after textless duplicate scopes',()=>{
+ const story={...selectedStory(),sections:Array.from({length:12},()=>({__typename:'Story',post_id:id,url:link}))};
+ const r=hydrationEnv([{textContent:JSON.stringify(wrapRelay(story))}]).run();assert.equal(r.bound,1);assert.equal(r.rows[0].price,319000);assert.equal(r.evidence.selectorIncomplete,1);assert(r.evidence.selectedStories<=8);
+});
+
+test('a huge navigation block containing only the target URL cannot spend the structural story budget',()=>{
+ const scripts=[{getAttribute:()=> 'application/json',textContent:JSON.stringify({url:link,padding:'x'.repeat(3000000)})},{getAttribute:()=> 'application/json',textContent:JSON.stringify({padding:'y'.repeat(3000000),data:wrapRelay(selectedStory())})}];
+ const r=hydrationEnv(scripts).run();assert.equal(r.bound,1);assert.equal(r.rows[0].price,319000);assert.equal(r.evidence.selectedBlocks,1);assert(r.evidence.sourceKiB<4096);
+});
+
+test('a foreign parent permalink rejects a nested target even when the parent GraphQL ID is opaque',()=>{
+ const parent={child:selectedStory(),__typename:'Story',id:'opaque-graphql-id',url:link.replace(id,'550000000000092')};
+ const r=hydrationEnv([{textContent:JSON.stringify(parent)}]).run();assert.equal(r.bound,0);assert.equal(r.rows[0].price,null);assert(r.evidence.selectorRejected>0);
+});
+
+test('tracking on an actual structured permalink is canonicalized but comment/reply/hash targets remain rejected',()=>{
+ const tracked={...selectedStory(),permalink_url:link+'?__cft__[0]=PRIVATE_TRACKING&__tn__=X'};
+ const r=hydrationEnv([{textContent:JSON.stringify(wrapRelay(tracked))}]).run();assert.equal(r.bound,1);assert.equal(r.rows[0].price,319000);assert.equal(r.rows[0].permalink,link);assert(!JSON.stringify(r).includes('PRIVATE_TRACKING'));
+ for(const suffix of ['?comment_id=999999','?reply_comment_id=999999','#comment']){
+  const bad=hydrationEnv([{textContent:JSON.stringify(wrapRelay({...selectedStory(),permalink_url:link+suffix}))}]).run();assert.equal(bad.bound,0);assert.equal(bad.rows[0].price,null);
+ }
+});
+
+test('malformed long type hints and whitespace prefixes do not enter an unbounded regex path',()=>{
+ const malformed='{"id":"'+id+'","__typename":"'+'Story'.repeat(120000);
+ const whitespace=' '.repeat(600000)+'window.route="'+link+'";';
+ for(const body of [malformed,whitespace]){const r=hydrationEnv([{textContent:body}]).run();assert.equal(r.bound,0);assert.equal(r.rows[0].price,null);}
+});
+
+const photoUrl='https://scontent.xx.fbcdn.net/v/photo.jpg?signature=exact';
+const photo=()=>({__typename:'Photo',id:'880000000000001',image:{uri:photoUrl,width:800,height:400}});
+const photoStory=()=>({...selectedStory(),attachments:[{media:photo()}]});
+const photoSelect=value=>reader.selectOwnStoryData(JSON.stringify(value),group,id,()=>0,500,true);
+test('photo proof crosses attachment arrays but never enters text projection or native rows',()=>{
+ for(const key of ['large_share_image','thumbnail_image']){const ph=photo();ph[key]=ph.image;delete ph.image;assert.deepEqual(photoSelect({...selectedStory(),attachments:[{media:ph}]}).photos,[photoUrl]);}
+ const selected=photoSelect(wrapRelay(photoStory()));assert.deepEqual(selected.photos,[photoUrl]);assert(!selected.bodies.join('').includes(photoUrl));
+ const h=hydrationEnv([{textContent:JSON.stringify(wrapRelay(photoStory()))}]),r=h.run();assert.equal(r.bound,1);assert.deepEqual(reader.ownPhotoSources(h.w,h.m),[photoUrl]);assert(!JSON.stringify(r).includes(photoUrl));
+ assert.deepEqual(reader.ownPhotoSources({...h.w,document:{}},h.m),[]);assert.deepEqual(reader.ownPhotoSources(h.w,{...h.m,postId:'550000000000092'}),[]);
+});
+test('comment shared profile video and foreign-story photo sources never establish own-photo proof',()=>{
+ for(const key of ['comments','feedback','shared_story','quoted_story','original_story','attached_story','actor','profile_picture','video','caption']){
+  const story={...selectedStory(),[key]:{media:photo()}};assert.deepEqual(photoSelect(story).photos,[],key);
+ }
+ const foreign={...photoStory(),post_id:'550000000000092',permalink_url:link.replace(id,'550000000000092')};
+ assert.deepEqual(photoSelect({...selectedStory(),related:foreign}).photos,[]);
+ assert.deepEqual(photoSelect({...selectedStory(),related:{__typename:'Story',id:'opaque-foreign',attachments:[{media:photo()}]}}).photos,[]);
+ assert.deepEqual(photoSelect({child:photoStory(),__typename:'Story',post_id:'550000000000092'}).photos,[]);
+ assert.deepEqual(photoSelect({child:photoStory(),__typename:'Comment'}).photos,[]);
+});
+test('photo URI requires typed Photo, dimensions and exact safe CDN URL',()=>{
+ for(const kind of ['untyped','small','url','http','host','credentials','fragment','free']){
+  const ph=photo();if(kind==='untyped')delete ph.__typename;if(kind==='small')ph.image.width=40;if(kind==='url'){ph.image.url=ph.image.uri;delete ph.image.uri;}if(kind==='http')ph.image.uri=photoUrl.replace('https:','http:');if(kind==='host')ph.image.uri=photoUrl.replace('scontent.xx.fbcdn.net','fbcdn.net.evil.test');if(kind==='credentials')ph.image.uri=photoUrl.replace('https://','https://user@');if(kind==='fragment')ph.image.uri+='#x';
+  const story={...selectedStory(),attachments:[{media:kind==='free'?ph.image:ph}]};assert.deepEqual(photoSelect(story).photos,[],kind);
+ }
+});
+test('invalid or truncated JSON cannot leave a partial photo proof',()=>{
+ const body=JSON.stringify(photoStory());for(const raw of [body+'x',body.slice(0,-1),'{"story":'+body+',"story":null}']){const r=reader.selectOwnStoryData(raw,group,id,()=>0,500,true);assert.equal(r.valid,false);assert(!r.photos?.length);}
+});
+test('structured identity without a DOM permalink captures only its exact rendered photo end to end',async()=>{
+ const imageApi=require('../../main/extension/review-images.js');
+ for(const kind of ['own','foreign','comment','remap','loading','signedquery','ambiguous','noarticle','lateunload','foreignparent']){
+  const h=hydrationEnv([{textContent:JSON.stringify(wrapRelay(photoStory()))}]);h.w.innerHeight=1600;let waits=0;h.w.setTimeout=fn=>{waits++;if(kind==='loading'&&waits===2)image.complete=true;fn();};
+  const image={ownerDocument:h.doc,isConnected:true,src:kind==='signedquery'?photoUrl+'x':photoUrl,complete:kind!=='loading',naturalWidth:800,naturalHeight:400,closest:s=>s==='[role="article"],article'?h.card:kind==='comment'?{}:null,checkVisibility:()=>true,scrollIntoView(){},getBoundingClientRect:()=>({left:100,top:100,right:900,bottom:500,width:800,height:400}),contains:()=>false};
+  h.card.querySelectorAll=s=>s==='a[href]'?[h.anchor]:s==='img'?[image]:[];const prior=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='img'?[image]:prior(s);h.doc.elementFromPoint=()=>image;
+  const r=h.run();assert.equal(r.bound,1);assert.equal(r.evidence.boundCards,0);if(kind==='foreign')h.anchor.href=link.replace(id,'550000000000092');
+  if(kind==='noarticle')image.closest=()=>null;
+  if(kind==='ambiguous'){const other={...h.card};const second={...image,closest:s=>s==='[role="article"],article'?other:null};const q=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='img'?[image,second]:q(s);}
+  if(kind==='foreignparent'){const outer={querySelectorAll:()=>[{href:link.replace(id,'550000000000092')}],parentElement:null,closest:()=>null};h.card.parentElement={closest:()=>outer};}
+  const calls=[];const result=await imageApi.create().read(h.w,{...h.m,ocrConsent:true},core,p,reader.exact,async q=>{calls.push(q.action);if(q.action==='photos'&&kind==='remap')image.src=photoUrl+'other';if(q.action==='photos'&&kind==='lateunload')image.complete=false;return{accepted:true,count:1,requestId:nonce};});
+  assert.equal(result.count,kind==='own'||kind==='loading'?1:0,kind);if(kind==='remap'||kind==='lateunload')assert.deepEqual(calls,['photos','drop']);
+ }
+});
+
+test('photo proof is capped and a new validated read revokes old sources',()=>{
+ const story={...selectedStory(),attachments:Array.from({length:30},(_,i)=>({media:{...photo(),image:{uri:photoUrl+'&n='+i,width:800,height:400}}}))};
+ assert.equal(photoSelect(story).photos.length,20);
+ const script={textContent:JSON.stringify(photoStory())},h=hydrationEnv([script]);assert.equal(h.run().bound,1);assert.deepEqual(reader.ownPhotoSources(h.w,h.m),[photoUrl]);
+ script.textContent=JSON.stringify(selectedStory());assert.equal(h.run().bound,1);assert.deepEqual(reader.ownPhotoSources(h.w,h.m),[]);
+});
+
+test('opaque same-Story media sections require a literal mapping from a numeric own owner',()=>{
+ const opaque='Uzpf-actual-source-id';
+ const section=(key=opaque)=>({__typename:'Story',id:key,attachments:[{media:photo()}]});
+ const own={...selectedStory(),id:opaque,comet_sections:{content:{story:section()}}};
+ assert.deepEqual(photoSelect(own).photos,[photoUrl]);
+ assert.deepEqual(photoSelect({...own,comet_sections:{content:{story:section('Uzpf-foreign')}}}).photos,[]);
+ assert.deepEqual(photoSelect({...selectedStory(),comet_sections:own.comet_sections}).photos,[]);
+ const noNumeric={...own};delete noNumeric.post_id;assert.deepEqual(photoSelect(noNumeric).photos,[]);
+ const bad={...own,post_id:'550000000000092',permalink_url:link.replace(id,'550000000000092')};assert.deepEqual(photoSelect({child:own,...bad}).photos,[]);
+ assert.deepEqual(photoSelect({...own,url:'https://example.invalid/'}).photos,[]);
+ const repeated={...own};delete repeated.permalink_url;repeated.timestamp={story:{__typename:'Story',id,permalink_url:link}};assert.deepEqual(photoSelect(repeated).photos,[photoUrl]);
+});
+test('a typed own Photo may omit rendition dimensions but explicit undersized dimensions remain rejected',()=>{
+ for(const key of ['width','height','both']){const ph=photo();if(key==='both'){delete ph.image.width;delete ph.image.height;}else delete ph.image[key];assert.deepEqual(photoSelect({...selectedStory(),attachments:[{media:ph}]}).photos,[photoUrl]);}
+ const ph=photo();ph.image.height=50;assert.deepEqual(photoSelect({...selectedStory(),attachments:[{media:ph}]}).photos,[]);
+});
+test('section-owned photo without metadata dimensions reaches two-phase pixels only after actual loaded-image proof',async()=>{
+ const imageApi=require('../../main/extension/review-images.js'),opaque='Uzpf-same-post';
+ for(const kind of ['own','foreign','small','missing','sibling','directImage','renderer','entityAttachment']){
+  const ph=kind==='directImage'?{__typename:'Image',uri:photoUrl}:photo();if(ph.image){delete ph.image.width;delete ph.image.height;}
+  const story=kind==='entityAttachment'?{...selectedStory(),attachments:[{__typename:'StoryAttachment',id:'990000000000001',styles:{media:ph}}]}:kind==='renderer'?{...selectedStory(),attachments:[{__typename:'CometFeedStoryDefaultAttachmentStrategy',media:ph}]}:kind==='sibling'?{__typename:'Story',id:opaque,comet_sections:{identity:{story:{...selectedStory(),id:opaque}},content:{story:{__typename:'Story',id:opaque,attachments:[{media:ph}]}}}}:{...selectedStory(),id:opaque,comet_sections:{content:{story:{__typename:'Story',id:kind==='foreign'?'Uzpf-other-post':opaque,attachments:[{media:ph}]}}}};
+  const body=JSON.stringify(kind==='entityAttachment'?{padding:'x'.repeat(700000),data:wrapRelay(story)}:wrapRelay(story));const h=hydrationEnv([{textContent:body}]);h.w.innerHeight=1600;h.w.setTimeout=fn=>fn();
+  const image={ownerDocument:h.doc,isConnected:true,src:photoUrl,complete:true,naturalWidth:kind==='small'?50:800,naturalHeight:400,closest:s=>s==='[role="article"],article'?h.card:null,checkVisibility:()=>true,scrollIntoView(){},getBoundingClientRect:()=>({left:100,top:100,right:900,bottom:500,width:800,height:400}),contains:()=>false};
+  h.card.querySelectorAll=s=>s==='a[href]'?[h.anchor]:[];const q=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='img'?(kind==='missing'?[]:[image]):q(s);h.doc.elementFromPoint=()=>image;
+  const read=h.run();assert.equal(read.bound,1);assert.equal(read.evidence.boundCards,0);
+  const calls=[];const r=await imageApi.create().read(h.w,{...h.m,ocrConsent:true},core,p,reader.exact,async m=>{calls.push(m.action);return{accepted:true,count:1,requestId:nonce}});
+  const capture=['own','sibling','directImage','renderer','entityAttachment'].includes(kind);assert.equal(r.count,capture?1:0,kind);assert.equal(r.reason,capture?'CAPTURED':kind==='foreign'?'OWNER_FILTER':kind==='small'?'UNLOADED':'NO_IMAGE');
+  assert.deepEqual(calls,capture?['photos','commit']:[]);assert(!JSON.stringify(read).includes(opaque));assert(!JSON.stringify(r).includes(photoUrl));
+ }
+});
+
+test('same-Story sibling media can use a numeric section owner only inside its matching opaque ancestor',()=>{
+ const opaque='Uzpf-owner';const numeric={...selectedStory(),id:opaque};
+ const section={__typename:'Story',id:opaque,comet_sections:{identity:{story:numeric},attachment:{story:{__typename:'Story',id:opaque,attachments:[{media:photo()}]}}}};
+ assert.deepEqual(photoSelect(section).photos,[photoUrl]);
+ assert.deepEqual(photoSelect({...section,id:'Uzpf-other'}).photos,[]);
+ const other=JSON.parse(JSON.stringify(section));other.comet_sections.identity.story.id='Uzpf-unrelated';assert.deepEqual(photoSelect(other).photos,[]);
+ assert.deepEqual(photoSelect({numeric,unrelated:{__typename:'Story',id:opaque,attachments:[{media:photo()}]}}).photos,[]);
+ const foreign=JSON.parse(JSON.stringify(section));foreign.comet_sections.attachment.story.post_id='550000000000092';foreign.comet_sections.attachment.story.permalink_url=link.replace(id,'550000000000092');assert.deepEqual(photoSelect(foreign).photos,[]);
+});
+
+
+test('typed attachment Image and direct Photo URIs use the same exact own-Story proof',()=>{
+ for(const type of ['Photo','Image']){
+  const media={__typename:type,uri:photoUrl};const story={...selectedStory(),attachments:[{media}]};
+  assert.deepEqual(photoSelect(story).photos,[photoUrl]);
+  for(const key of ['author','owner','actor','profile','comments','feedback','shared_story'])assert.deepEqual(photoSelect({...selectedStory(),[key]:{attachments:[{media}]}}).photos,[],key);
+ }
+ assert.deepEqual(photoSelect({...selectedStory(),outside:{__typename:'Image',uri:photoUrl}}).photos,[]);
+});
+test('attachment UI strategies do not masquerade as unknown Story entities',()=>{
+ for(const type of ['CometFeedStoryDefaultAttachmentStrategy','CometStoryAttachmentStyleRenderer','StoryAttachmentStyleRenderer']){
+  const story={...selectedStory(),attachments:[{__typename:type,id:'strategy-instance',media:photo()}]};assert.deepEqual(photoSelect(story).photos,[photoUrl],type);
+  story.attachments[0].post_id='550000000000092';assert.deepEqual(photoSelect(story).photos,[]);
+ }
+ assert.deepEqual(photoSelect({...selectedStory(),attachments:[{__typename:'UnknownStory',media:photo()}]}).photos,[]);
+});
+test('missing media data, missing rendition and rejected ownership have distinct document-scoped outcomes',()=>{
+ const cases=[['NO_MEDIA_DATA',selectedStory()],['NO_RENDITION',{...selectedStory(),attachments:[{media:{__typename:'Photo'}}]}],['OWNER_FILTER',{...selectedStory(),comments:[{media:photo()}]}],['CAPTURED',photoStory()]];
+ for(const [expected,story] of cases){const h=hydrationEnv([{textContent:JSON.stringify(story)}]);assert.equal(h.run().bound,1);assert.equal(reader.ownPhotoStatus(h.w,h.m),expected);assert.equal(reader.ownPhotoStatus({...h.w,document:{}},h.m),'NO_PROOF');}
+});
+
+test('photo rule flags identify exclusions and never export paths or identities',()=>{
+ const opaque='opaque-target';const cases=[
+  ['RULE_PATH',{...selectedStory(),comments:[{media:photo()}]}],
+  ['RULE_FOREIGN',{...selectedStory(),related:{...photoStory(),post_id:'550000000000092',permalink_url:link.replace(id,'550000000000092')}}],
+  ['RULE_STORY',{...selectedStory(),attachments:[{__typename:'UnknownStory',media:photo()}]}],
+  ['RULE_OPAQUE',{...selectedStory(),id:opaque,related:{__typename:'Story',id:'opaque-foreign',attachments:[{media:photo()}]}}],
+  ['RULE_SIZE',{...selectedStory(),attachments:[{media:{...photo(),image:{uri:photoUrl,width:40,height:40}}}]}],
+  ['RULE_SCOPE',{numeric:selectedStory(),unrelated:{__typename:'Photo',image:{uri:photoUrl}}}]
+ ];
+ for(const [key,story] of cases){const h=hydrationEnv([{textContent:JSON.stringify(story)}]);assert.equal(h.run().bound,1);const flags=reader.ownPhotoFilters(h.w,h.m);assert.equal(flags[key],1,key);assert.deepEqual(Object.keys(flags).sort(),reader.photoRuleKeys.slice().sort());assert(Object.values(flags).every(n=>n===0||n===1));assert(!JSON.stringify(flags).includes(photoUrl));assert(!JSON.stringify(flags).includes(id));}
+});
+
+test('real attachment entities are containers, not independent posts, even with their own numeric id',()=>{
+ for(const type of ['StoryAttachment','CometFeedStoryAttachmentSection','CometStoryAttachment','StoryAttachmentStyleRenderer'])for(const attachmentId of [undefined,'990000000000001','opaque-attachment']){
+  const attachment={__typename:type,...(attachmentId?{id:attachmentId}:{}),media:photo()};const story={...selectedStory(),attachments:[attachment]};
+  const body=JSON.stringify(story),source={sourceType:'GROUP',sourceId:group,sourceUrl:`https://www.facebook.com/groups/${group}/`,allowGroupRedirect:false};
+  const records=core.extractStructuredRecordsFromText(body,'HYDRATION',source);assert(p.networkMedia(records,body,source,core).some(r=>r.media?.length));
+  assert.deepEqual(photoSelect(story).photos,[photoUrl],type+' '+attachmentId);
+ }
+});
+
+
+test('attachment ownership never comes from an attachment id or the expected page URL',()=>{
+ const att=()=>({__typename:'StoryAttachment',id:'990000000000001',media:photo()});
+ const own=()=>({...selectedStory(),attachments:[att()]});
+ for(const change of [n=>delete n.permalink_url,n=>n.permalink_url=link.replace(group,'foreign'),n=>n.post_id='550000000000092',n=>n.attachments[0].post_id='550000000000092',n=>n.attachments[0].url=link.replace(id,'550000000000092'),n=>{n.attachments[0].post_id=id;n.attachments[0].story_id='550000000000092';}]){const n=own();change(n);assert.deepEqual(photoSelect(n).photos,[]);}
+ for(const key of ['comments','feedback','shared_story','quoted_story','author','owner','actor','video'])assert.deepEqual(photoSelect({...selectedStory(),[key]:{attachments:[att()]}}).photos,[],key);
+ assert.deepEqual(photoSelect({own:selectedStory(),unrelated:{attachments:[att()]}}).photos,[]);
+ const noOwner=own();delete noOwner.post_id;noOwner.attachments[0].id=id;noOwner.attachments[0].media.id=id;assert.deepEqual(photoSelect(noOwner).photos,[]);
+});
+test('explicit post metadata constrains a media owner without mistaking its Photo id for the post',()=>{
+ for(const type of ['Photo','Image']){
+  const media={...photo(),__typename:type,post_id:id};const story={...selectedStory(),attachments:[{__typename:'StoryAttachment',id:'990000000000001',post_id:id,media}]};
+  assert.deepEqual(photoSelect(story).photos,[photoUrl]);media.post_id='550000000000092';assert.deepEqual(photoSelect(story).photos,[]);
+ }
+});
+
+test('own structured photo rendered as SVG or leaf CSS reaches crop commit without IMG or new requests',async()=>{
+ const imageApi=require('../../main/extension/review-images.js');
+ for(const mode of ['svg','css','svg-unloaded','css-unloaded','svg-overlay','css-text','svg-foreign','css-foreign','svg-swap','css-swap','svg-multiple','css-pseudo','svg-comment','css-comment','svg-occluded','css-occluded']){
+  const h=hydrationEnv([{textContent:JSON.stringify(wrapRelay({...selectedStory(),attachments:[{media:photo()}]}))}]);
+  const css=mode.startsWith('css');let raw=mode.endsWith('foreign')?photoUrl+'&foreign=1':photoUrl;
+  h.w.innerHeight=1600;h.w.setTimeout=fn=>fn();h.doc.defaultView=h.w;h.w.fetch=()=>{throw Error('no media fetch permitted')};h.w.Image=function(){throw Error('no image load permitted')};
+  h.w.performance={getEntriesByName:url=>!mode.endsWith('unloaded')&&url===raw?[{entryType:'resource',initiatorType:css?'css':'img',responseEnd:10}]:[]};
+  h.w.getComputedStyle=(n,pseudo)=>pseudo?{content:mode==='css-pseudo'?'"other"':'none'}:{pointerEvents:'auto',backgroundImage:`url("${raw}")`};
+  const rect={left:100,top:100,right:900,bottom:500,width:800,height:400};
+  const node={ownerDocument:h.doc,isConnected:true,childElementCount:0,textContent:mode==='css-text'?'other text':'',tagName:css?'DIV':'svg',closest:s=>s==='[role="article"],article'?h.card:mode.endsWith('comment')?{}:null,checkVisibility:()=>true,scrollIntoView(){},getBoundingClientRect:()=>rect,contains:n=>n===inner};
+  const inner={ownerDocument:h.doc,isConnected:true,tagName:'image',href:{get animVal(){return raw;}},closest:s=>s==='svg'?node:s==='[role="article"],article'?h.card:null,getAttribute:k=>k==='href'?raw:null};
+  node.querySelectorAll=s=>s==='image'?(mode==='svg-multiple'?[inner,{}]:[inner]):[];node.querySelector=()=>mode==='svg-overlay'?{}:null;
+  h.card.querySelectorAll=s=>s==='a[href]'?[h.anchor]:[];
+  const old=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='img'?[]:s==='svg image'?(css?[]:[inner]):s==='[style*="background"],[role="img"]'?(css?[node]:[]):old(s);
+  h.doc.elementFromPoint=()=>mode.endsWith('occluded')?{}:node;
+  const read=h.run();assert.equal(read.bound,1);assert.equal(read.evidence.boundCards,0);
+  const calls=[];const r=await imageApi.create().read(h.w,{...h.m,ocrConsent:true},core,p,reader.exact,async m=>{calls.push(m.action);if(mode.endsWith('swap')&&m.action==='photos')raw+='&changed=1';return{accepted:true,count:1,requestId:nonce};});
+  const good=['svg','css'].includes(mode);assert.equal(r.count,good?1:0,mode);assert.deepEqual(calls,good?['photos','commit']:mode.endsWith('swap')?['photos','drop']:[],mode);
+  assert(!JSON.stringify(r).includes(photoUrl));assert(!JSON.stringify(calls).includes(photoUrl));
+ }
+});

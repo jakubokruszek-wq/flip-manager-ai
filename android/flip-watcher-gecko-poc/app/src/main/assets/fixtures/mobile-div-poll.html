@@ -1,0 +1,12 @@
+<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>Fixture: mobile-div-poll</title></head><body>
+<div id="root"><div data-mcomponent="MContainer" data-tracking-duration-id="71">Post</div></div>
+<script>
+// Keeps loading more content over XHR, like a scrolled feed: one request every 500 ms.
+setInterval(function () {
+  fetch("/data?fixture=mobile-net-data").then(function (r) { return r.text(); }).then(function () {
+    var d = document.createElement("div");
+    d.setAttribute("data-mcomponent", "MContainer");
+    document.getElementById("root").appendChild(d);
+  });
+}, 500);
+</script></body></html>

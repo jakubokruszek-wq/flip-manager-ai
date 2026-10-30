@@ -1,0 +1,9 @@
+<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>Fixture: load-group</title>
+<script src="/data?fixture=mobile-script-data"></script></head><body>
+<div data-mcomponent="MContainer">Grupa testowa</div>
+<img src="/data?fixture=load-image" width="10" height="10" alt="">
+<script>
+// Loading-time requests like a real group page: two XHR/fetch calls right after load.
+fetch("/data?fixture=mobile-net-data").catch(function () {});
+setTimeout(function () { fetch("/data?fixture=mobile-net-data").catch(function () {}); }, 300);
+</script></body></html>

@@ -1,0 +1,468 @@
+name: Android Flip Watcher Gecko POC
+
+# GeckoView proof of concept (android/flip-watcher-gecko-poc). Free GitHub-hosted
+# runners, no secrets. Every test uses LOCAL fixture pages on 127.0.0.1; no job
+# opens Facebook or logs into any account.
+
+on:
+  push:
+    paths:
+      - "android/flip-watcher-gecko-poc/**"
+      - "extensions/facebook-collector/collector-core.js"
+      - ".github/workflows/android-gecko-poc.yml"
+  pull_request:
+    paths:
+      - "android/flip-watcher-gecko-poc/**"
+      - "extensions/facebook-collector/collector-core.js"
+      - ".github/workflows/android-gecko-poc.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-gecko-poc-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Isolation, collector-core and adapter tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Isolation guard (only POC files changed, no backend, core unchanged)
+        run: |
+          git fetch --no-tags origin main
+          bash android/flip-watcher-gecko-poc/scripts/isolation-check.sh origin/main
+      - name: Verify reused desktop property rules
+        run: node android/flip-watcher-gecko-poc/scripts/desktop-fields.cjs --check
+      - name: Existing collector-core tests (the parser the POC reuses)
+        run: node --test extensions/facebook-collector/collector-core.test.cjs
+      - name: POC adapter tests over collector-core.js
+        run: node --test android/flip-watcher-gecko-poc/app/src/test/js/*.test.cjs
+
+  build:
+    name: Compile, unit tests, APK
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: android/flip-watcher-gecko-poc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Resolved GeckoView version
+        run: ./gradlew --no-daemon -q :app:dependencies --configuration debugRuntimeClasspath | grep -m1 "org.mozilla.geckoview:geckoview" | tee geckoview-version.txt
+
+      - name: Compile (Kotlin, app and instrumented tests)
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon compileDebugKotlin compileDebugAndroidTestKotlin -PGECKO_POC_VERSION_CODE=$((2700 + ${{ github.run_number }})) 2>&1 | tee compile.log || {
+            echo "::group::Compiler errors"; grep -E "^e: |What went wrong|^> " -A3 compile.log | head -80; echo "::endgroup::"; exit 1; }
+
+      - name: JVM unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest -PGECKO_POC_VERSION_CODE=$((2700 + ${{ github.run_number }}))
+
+      - name: Pilot snapshot against unchanged pinned backend contract (synthetic, no HTTP)
+        run: node pilot/verify-batch.cjs app/build/pilot-fixture.json
+
+      - name: Assemble debug APKs
+        run: ./gradlew --no-daemon assembleDebug -PGECKO_POC_VERSION_CODE=$((2700 + ${{ github.run_number }}))
+
+      - name: Verify APK identity, signature and bundled extension
+        run: |
+          set -euo pipefail
+          tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          for apk in app/build/outputs/apk/debug/*.apk; do
+            echo "== $apk ($(du -h "$apk" | cut -f1))"
+            "$tools/aapt2" dump badging "$apk" > badging.txt
+            head -3 badging.txt
+            grep -q "package: name='pl.jakubokruszek.flipwatcher.geckopoc'" badging.txt
+            "$tools/apksigner" verify --print-certs "$apk" > certs.txt
+            head -3 certs.txt
+            # Same key on every build, so the APK installs as an update of the previous one.
+            grep -q "certificate SHA-256 digest: 878b11e677eb4a62883b0b8709fa19c969926708053a01d47f01b0548fb370a2" certs.txt
+            unzip -l "$apk" | grep -E "assets/ext/flip_poc/(manifest.json|collector-core.js|poc-adapter.js|poc-content.js)" | wc -l | grep -qx 4
+            unzip -p "$apk" assets/ext/flip_poc/collector-core.js | sha256sum | grep -q "^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b "
+            python3 pilot/assert-not-in-apk.py "$apk"
+            sha256sum "$apk"
+          done
+
+      - name: Upload unit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gecko-poc-unit-reports-${{ github.run_number }}
+          path: android/flip-watcher-gecko-poc/app/build/reports/tests/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload Samsung APK (arm64-v8a)
+        uses: actions/upload-artifact@v4
+        with:
+          name: flip-watcher-gecko-poc-arm64-${{ github.run_number }}
+          path: |
+            android/flip-watcher-gecko-poc/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
+            android/flip-watcher-gecko-poc/geckoview-version.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  instrumented:
+    name: GeckoView instrumented tests (Android 16 emulator, local HTML)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Offline OCR and consent on API 36 (dedicated device)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          working-directory: android/flip-watcher-gecko-poc
+          avd-name: gecko-ocr-offline
+          force-avd-creation: true
+          script: |
+            adb logcat -c || true
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.PhotoBindingInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.GroupArchiveInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherLinkInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherPairingUiInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.DesktopConsentInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ArchiveProcessInstrumentedTest#a_seed || (adb logcat -d -s AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            adb -e shell am force-stop pl.jakubokruszek.flipwatcher.geckopoc
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ArchiveProcessInstrumentedTest#b_restore || (adb logcat -d -s AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            adb -e shell svc wifi disable
+            adb -e shell svc data disable
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.OcrInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SavedOcrInstrumentedTest -Pandroid.testInstrumentationRunnerArguments.offlineOcr=1 || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            adb logcat -d -s GeckoPocTest:I > logcat-offline-tests.txt || true
+
+      - name: Upload offline OCR reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gecko-poc-offline-ocr-reports-${{ github.run_number }}
+          path: |
+            android/flip-watcher-gecko-poc/app/build/reports/androidTests/
+            android/flip-watcher-gecko-poc/logcat-offline-tests.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Online Gecko flow and full regression on API 36 (fresh device)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          working-directory: android/flip-watcher-gecko-poc
+          avd-name: gecko-flow-online
+          force-avd-creation: true
+          script: |
+            adb logcat -c || true
+            for network_attempt in $(seq 1 30); do if adb -e shell dumpsys connectivity | grep -Eq 'Active default network: [0-9]+'; then break; fi; sleep 1; done
+            adb -e shell dumpsys connectivity | grep -Eq 'Active default network: [0-9]+'
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.FeedMessageInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ReviewDataInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ReviewReportInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SinglePhotoInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.PhotoBindingInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#loadMeasurementCountsTheWholeApprovedGroupLoad || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            # Test persistence across pause/recreate inside each case, with a clean
+            # disposable profile between independent instrumentation invocations.
+            adb -e shell am force-stop pl.jakubokruszek.flipwatcher.geckopoc
+            adb -e shell pm clear pl.jakubokruszek.flipwatcher.geckopoc | grep -q Success
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            adb logcat -d -s GeckoPocTest:I > logcat-tests.txt || true
+            adb exec-out run-as pl.jakubokruszek.flipwatcher.geckopoc cat files/consent-ui-compact-large.png > app/build/reports/androidTests/consent-ui-compact-large.png || true
+            adb exec-out run-as pl.jakubokruszek.flipwatcher.geckopoc cat files/consent-ui-compact-expanded.png > app/build/reports/androidTests/consent-ui-compact-expanded.png || true
+            adb exec-out run-as pl.jakubokruszek.flipwatcher.geckopoc cat files/notice-before.png > app/build/reports/androidTests/notice-before.png || true
+            adb exec-out run-as pl.jakubokruszek.flipwatcher.geckopoc cat files/notice-after.png > app/build/reports/androidTests/notice-after.png || true
+
+      - name: Measurements from the run
+        if: always()
+        run: cat android/flip-watcher-gecko-poc/logcat-tests.txt 2>/dev/null | tail -40 || true
+
+      - name: Upload instrumented test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gecko-poc-instrumented-reports-${{ github.run_number }}
+          path: |
+            android/flip-watcher-gecko-poc/app/build/reports/androidTests/
+            android/flip-watcher-gecko-poc/logcat-tests.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+  publish-tested-0562:
+    name: Direct download of tested 0.5.62 APK
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/claude/facebook-watcher-mobile-gq36l8' && github.event.head_commit.message == 'delivery: publish tested Gecko POC 0.5.62 download'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Require the exact tested source and both successful full runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/40947464720 --jq '.head_sha + " " + .conclusion' > verified-pr.txt
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/40947456260 --jq '.head_sha + " " + .conclusion' > verified-push.txt
+          grep -Fxq '8ad1bf156e53352c32e09d48ac2d7ea8474e6fd7 success' verified-pr.txt
+          grep -Fxq '8ad1bf156e53352c32e09d48ac2d7ea8474e6fd7 success' verified-push.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: flip-watcher-gecko-poc-arm64-476
+          repository: jakubokruszek-wq/flip-manager-ai
+          run-id: 40947464720
+          github-token: ${{ github.token }}
+          path: tested-apk
+      - name: Verify and publish the existing APK without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mv tested-apk/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk flip-watcher-0.5.62-arm64.apk
+          echo '25be1bef02ce6952ff82f064298de55112c973fec0c0802d81d39efce8b997d6  flip-watcher-0.5.62-arm64.apk' | sha256sum -c -
+          cat > release-notes.md <<'NOTES'
+          Tested Gecko POC 0.5.62, ARM64. This is the unchanged APK from successful run 40947464720, source 8ad1bf156e53352c32e09d48ac2d7ea8474e6fd7.
+          Validation: 567 JavaScript tests, 286 JVM tests, 114 Android tests in both full runs; 10 offline OCR tests. Android tests use local emulator fixtures, not a real Facebook account.
+          Install as an update to preserve the local database and login.
+          SHA256: 25be1bef02ce6952ff82f064298de55112c973fec0c0802d81d39efce8b997d6
+          NOTES
+          gh release create gecko-poc-0.5.62 flip-watcher-0.5.62-arm64.apk --repo jakubokruszek-wq/flip-manager-ai --target "${{ github.sha }}" --title 'Gecko POC 0.5.62 — tested Android APK' --prerelease --notes-file release-notes.md
+
+  publish-tested-0563:
+    name: Direct download of tested 0.5.63 APK
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/claude/facebook-watcher-mobile-gq36l8' && github.event.head_commit.message == 'delivery: publish tested Gecko POC 0.5.63 download'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Require the exact tested source and both successful full runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41019099265 --jq '.head_sha + " " + .conclusion' > verified-pr.txt
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41019093878 --jq '.head_sha + " " + .conclusion' > verified-push.txt
+          grep -Fxq '2a772c48f3ef8068e31ebe2807fe2d88ffd2c9a0 success' verified-pr.txt
+          grep -Fxq '2a772c48f3ef8068e31ebe2807fe2d88ffd2c9a0 success' verified-push.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: flip-watcher-gecko-poc-arm64-488
+          repository: jakubokruszek-wq/flip-manager-ai
+          run-id: 41019099265
+          github-token: ${{ github.token }}
+          path: tested-apk
+      - name: Verify and publish the existing APK without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mv tested-apk/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk flip-watcher-0.5.63-arm64.apk
+          echo 'd13621563ece6af513f2412abdd15df35bfd0ed1b37825627f137cd9d10b02c4  flip-watcher-0.5.63-arm64.apk' | sha256sum -c -
+          cat > release-notes.md <<'NOTES'
+          Tested Gecko POC 0.5.63, ARM64. This is the unchanged APK from successful run 41019099265, source 2a772c48f3ef8068e31ebe2807fe2d88ffd2c9a0.
+          Validation: 572 JavaScript tests, 288 JVM tests, 120 Android tests in both full runs; 10 offline OCR tests. Android tests use local emulator fixtures, not a real Facebook account.
+          Install as an update to preserve the local database and login.
+          SHA256: d13621563ece6af513f2412abdd15df35bfd0ed1b37825627f137cd9d10b02c4
+          NOTES
+          gh release create gecko-poc-0.5.63 flip-watcher-0.5.63-arm64.apk --repo jakubokruszek-wq/flip-manager-ai --target "${{ github.sha }}" --title 'Gecko POC 0.5.63 — own photos without article or href' --prerelease --notes-file release-notes.md
+
+  publish-tested-0564:
+    name: Direct download of tested 0.5.64 APK
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/claude/facebook-watcher-mobile-gq36l8' && github.event.head_commit.message == 'delivery: publish tested Gecko POC 0.5.64 download'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Require the exact tested source and both successful full runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41054098629 --jq '.head_sha + " " + .conclusion' > verified-pr.txt
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41054093159 --jq '.head_sha + " " + .conclusion' > verified-push.txt
+          grep -Fxq 'c38a36d894e821bc7107e2d0477fa90729d81f6f success' verified-pr.txt
+          grep -Fxq 'c38a36d894e821bc7107e2d0477fa90729d81f6f success' verified-push.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: flip-watcher-gecko-poc-arm64-498
+          repository: jakubokruszek-wq/flip-manager-ai
+          run-id: 41054098629
+          github-token: ${{ github.token }}
+          path: tested-apk
+      - name: Verify and publish the existing APK without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mv tested-apk/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk flip-watcher-0.5.64-arm64.apk
+          echo '3e753b53bac04825a3534a5b48badd3be3888c3f0bc3553f890244b030b829f6  flip-watcher-0.5.64-arm64.apk' | sha256sum -c -
+          cat > release-notes.md <<'NOTES'
+          Tested Gecko POC 0.5.64, ARM64. This is the unchanged APK from successful run 41054098629, source c38a36d894e821bc7107e2d0477fa90729d81f6f.
+          Validation: 575 JavaScript tests, 290 JVM tests, 123 Android tests in both full runs; 10 offline OCR tests. Android tests use local emulator fixtures, not a real Facebook account.
+          Install as an update to preserve the local database and login.
+          SHA256: 3e753b53bac04825a3534a5b48badd3be3888c3f0bc3553f890244b030b829f6
+          NOTES
+          gh release create gecko-poc-0.5.64 flip-watcher-0.5.64-arm64.apk --repo jakubokruszek-wq/flip-manager-ai --target "${{ github.sha }}" --title 'Gecko POC 0.5.64 — visible photos in boxless and nested regions' --prerelease --notes-file release-notes.md
+
+
+  publish-tested-0565:
+    name: Direct download of tested 0.5.65 APK
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/claude/facebook-watcher-mobile-gq36l8' && github.event.head_commit.message == 'delivery: publish tested Gecko POC 0.5.65 download'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Require the exact tested source and both successful full runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41062550599 --jq '.head_sha + " " + .conclusion' > verified-pr.txt
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41062539885 --jq '.head_sha + " " + .conclusion' > verified-push.txt
+          grep -Fxq 'ed45753255e8b216f1e4268240d9a9899919a385 success' verified-pr.txt
+          grep -Fxq 'ed45753255e8b216f1e4268240d9a9899919a385 success' verified-push.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: flip-watcher-gecko-poc-arm64-502
+          repository: jakubokruszek-wq/flip-manager-ai
+          run-id: 41062550599
+          github-token: ${{ github.token }}
+          path: tested-apk
+      - name: Verify and publish the existing APK without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mv tested-apk/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk flip-watcher-0.5.65-arm64.apk
+          echo 'ca25fa5ac53bdbbdfd478582a445917fd0d0c01dbd9af70862284cab9faea8b0  flip-watcher-0.5.65-arm64.apk' | sha256sum -c -
+          cat > release-notes.md <<'NOTES'
+          Tested Gecko POC 0.5.65, ARM64. This is the unchanged APK from successful run 41062550599, source ed45753255e8b216f1e4268240d9a9899919a385.
+          Validation: 577 JavaScript tests, 292 JVM tests, 128 Android tests in both full runs; 10 offline OCR tests. Android tests use local emulator fixtures, not a real Facebook account.
+          Install as an update to preserve the local database and login.
+          SHA256: ca25fa5ac53bdbbdfd478582a445917fd0d0c01dbd9af70862284cab9faea8b0
+          NOTES
+          gh release create gecko-poc-0.5.65 flip-watcher-0.5.65-arm64.apk --repo jakubokruszek-wq/flip-manager-ai --target "${{ github.sha }}" --title 'Gecko POC 0.5.65 — own photos beyond premature DOM work limits' --prerelease --notes-file release-notes.md
+
+
+
+  publish-tested-0566:
+    name: Direct download of tested 0.5.66 APK
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/claude/facebook-watcher-mobile-gq36l8' && github.event.head_commit.message == 'delivery: publish tested Gecko POC 0.5.66 download'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Require the exact tested source and both successful full runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41075130689 --jq '.head_sha + " " + .conclusion' > verified-pr.txt
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41075121101 --jq '.head_sha + " " + .conclusion' > verified-push.txt
+          grep -Fxq '95c9946159aa24914bebe9d60f317b14f7c27147 success' verified-pr.txt
+          grep -Fxq '95c9946159aa24914bebe9d60f317b14f7c27147 success' verified-push.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: flip-watcher-gecko-poc-arm64-510
+          repository: jakubokruszek-wq/flip-manager-ai
+          run-id: 41075130689
+          github-token: ${{ github.token }}
+          path: tested-apk
+      - name: Verify and publish the existing APK without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mv tested-apk/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk flip-watcher-0.5.66-arm64.apk
+          echo '67dcfe096267ba265bd96b81cea7eee64465dab94ca8a26807049e81fe6d9fd5  flip-watcher-0.5.66-arm64.apk' | sha256sum -c -
+          cat > release-notes.md <<'NOTES'
+          Tested Gecko POC 0.5.66, ARM64. This is the unchanged APK from successful run 41075130689, source 95c9946159aa24914bebe9d60f317b14f7c27147.
+          Validation: 577 JavaScript tests, 298 JVM tests, 133 Android tests in both full runs; 10 offline OCR tests. Android tests use local emulator fixtures, not a real Facebook account.
+          Install as an update to preserve the local database and login.
+          SHA256: 67dcfe096267ba265bd96b81cea7eee64465dab94ca8a26807049e81fe6d9fd5
+          NOTES
+          gh release create gecko-poc-0.5.66 flip-watcher-0.5.66-arm64.apk --repo jakubokruszek-wq/flip-manager-ai --target "${{ github.sha }}" --title 'Gecko POC 0.5.66 — offer photos before OCR' --prerelease --notes-file release-notes.md
+
+
+
+
+  publish-tested-0567:
+    name: Direct download of tested 0.5.67 APK
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/claude/facebook-watcher-mobile-gq36l8' && github.event.head_commit.message == 'delivery: publish tested Gecko POC 0.5.67 download'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Require the exact tested source and both successful full runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41120851017 --jq '.head_sha + " " + .conclusion' > verified-pr.txt
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41120843646 --jq '.head_sha + " " + .conclusion' > verified-push.txt
+          grep -Fxq '0aba32a24b918363c965879264b1332a3218a511 success' verified-pr.txt
+          grep -Fxq '0aba32a24b918363c965879264b1332a3218a511 success' verified-push.txt
+      - name: Require the deployed Manager group endpoint
+        run: |
+          manager_status=$(curl --silent --show-error --max-time 20 --output manager-route.json --write-out '%{http_code}' https://flip-manager-ai.vercel.app/api/collector/facebook/groups)
+          test "$manager_status" = 401
+          jq -e '.code == "UNAUTHORIZED"' manager-route.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: flip-watcher-gecko-poc-arm64-520
+          repository: jakubokruszek-wq/flip-manager-ai
+          run-id: 41120851017
+          github-token: ${{ github.token }}
+          path: tested-apk
+      - name: Verify and publish the existing APK without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mv tested-apk/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk flip-watcher-0.5.67-arm64.apk
+          echo '192b380127d0e865dde2916b8d89428a1e7d69a44bb6f72df1964dd46e682398  flip-watcher-0.5.67-arm64.apk' | sha256sum -c -
+          cat > release-notes.md <<'NOTES'
+          Tested Gecko POC 0.5.67, ARM64. This is the unchanged APK from successful run 41120851017, source 0aba32a24b918363c965879264b1332a3218a511.
+          Validation: 579 JavaScript tests, 307 JVM tests, 138 Android tests in both full runs; 10 offline OCR tests. Android tests use local emulator fixtures, not a real Facebook account.
+          Eleven enabled Watcher groups, independent encrypted archives and device pairing for read-only group configuration. Offers, images and OCR remain local. Sources outside the reviewed eleven are rejected.
+          Manager backend 8014ba5868e27bb8bdfb6609bb6b6be4485cf970 is live. Real pairing, the exact group feed and token revocation passed using a temporary device revoked after testing.
+          VersionCode 3220. In Manager open /flip-finder/collector/setup and generate the Android code. In the app choose Tools > Connect/synchronize Watcher and paste the code.
+          Install as an update to preserve the local database and login.
+          SHA256: 192b380127d0e865dde2916b8d89428a1e7d69a44bb6f72df1964dd46e682398
+          NOTES
+          gh release create gecko-poc-0.5.67 flip-watcher-0.5.67-arm64.apk --repo jakubokruszek-wq/flip-manager-ai --target "${{ github.sha }}" --title 'Gecko POC 0.5.67 — Watcher groups and pairing' --prerelease --notes-file release-notes.md
+
+
+

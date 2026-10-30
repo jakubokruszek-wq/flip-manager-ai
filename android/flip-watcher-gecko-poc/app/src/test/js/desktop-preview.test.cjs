@@ -1,0 +1,159 @@
+const test=require('node:test'),assert=require('node:assert/strict');
+require('../../../../../../extensions/facebook-collector/collector-core.js');
+const core=globalThis.FlipFacebookCollectorCore,fields=require('../../main/extension/desktop-fields.js'),preview=require('../../main/extension/desktop-preview.js');
+const group='lodzsprzedazzakupwynajem';
+const record=(id='550000000000001',text='Sprzedam mieszkanie na Retkini. 42,42 m2. 2 pokoje. Czynsz 560 zł. Cena 319 000 zł.')=>({postId:id,permalink:`https://www.facebook.com/groups/${group}/posts/${id}/`,text,media:[{url:"https://scontent.fbcdn.net/photo-a.jpg?private=discard",mediaId:"880000000000001",exactPostId:id,exactAssociation:true}]});
+const model=()=>preview.createModel(core,fields,group);
+test('existing deterministic fields keep rent apart from sale price and potential rooms apart from actual',()=>{
+ const a=fields.previewFields({postText:record().text});assert.equal(a.price,319000);assert.equal(a.area,42.42);assert.equal(a.rooms,2);assert.equal(a.district,'Polesie');assert.equal(a.neighborhood,'Retkinia');
+ const b=fields.previewFields({postText:'Sprzedam 2 pokoje z możliwością przerobienia na 3 pokoje. Cena 399k. Metraż 53m.'});assert.equal(b.rooms,2);assert.equal(b.price,399000);assert.equal(b.area,53);
+ assert.equal(fields.previewFields({postText:'Kupię mieszkanie 50m2 za 350000 zł.'}).price,null);
+ assert.equal(fields.previewFields({postText:'Wynajmę mieszkanie 42m2 cena 2000 zł miesięcznie.'}).price,null);
+ assert.equal(fields.previewFields({postText:'Sprzedam mieszkanie. Górna granica ceny 400000 zł.'}).district,null);
+});
+test('only selected bounded fields leave projection; no text author media URL or token',()=>{const m=model();m.add({...record(),author:'PRIVATE',cookie:'SECRET',token:'PRIVATE'},'NETWORK');const r=m.rows()[0];assert.equal(r.price,319000);assert(!JSON.stringify(r).includes('PRIVATE'));assert(!('text'in r));assert.equal(r.photos,1);});
+test('ids are exact, foreign groups and media and share tokens never become posts',()=>{const m=model();for(const r of [{...record(),postId:'TOKEN'},{...record(),permalink:'https://www.facebook.com/photo/?fbid=550000000000001'},{...record(),permalink:record().permalink.replace(group,'other')},{...record(),permalink:'https://evil.test/groups/'+group+'/posts/550000000000001/'}])m.add(r,'DOM');assert.equal(m.rows().length,0);});
+test('same id merges across layers and conflicting price is cleared instead of guessed',()=>{const m=model();m.add(record(),'DOM');m.add(record(),'HYDRATION');assert.equal(m.rows().length,1);assert.equal(m.rows()[0].layer,'MIXED');m.add(record(undefined,record().text.replace('319 000','329 000')),'NETWORK');assert.equal(m.rows()[0].price,null);assert.equal(m.rows()[0].priceSource,'NONE');assert.equal(m.rows()[0].area,42.42);assert(m.stats.ambiguous>0);});
+test('twenty unique records is a hard cap while duplicate enrichment still works',()=>{const m=model();for(let i=0;i<35;i++)m.add(record(String(550000000000000+i)),'DOM');assert.equal(m.rows().length,20);m.add(record('550000000000001'),'NETWORK');assert.equal(m.rows().length,20);assert(m.stats.duplicates>0);});
+test('hydration reuses exact core bindings and ignores bare ids and foreign posts',()=>{const m=model();m.hydration([JSON.stringify({post_id:'550000000000001',url:record().permalink,message:{text:record().text}}),JSON.stringify({post_id:'550000000000002',message:{text:'PRIVATE'}}),JSON.stringify({post_id:'550000000000003',url:record('550000000000003').permalink.replace(group,'other'),message:{text:'PRIVATE'}})]);assert.equal(m.rows().length,1);assert.equal(m.rows()[0].price,319000);});
+test('projected rows cannot smuggle extra properties and clearing drops all data',()=>{const m=model();m.add(record(),'DOM');const r=m.rows()[0];m.merge({...r,text:'SECRET'});assert.equal(m.stats.rejected,1);m.clear();assert.deepEqual(m.rows(),[]);assert.equal(m.stats.candidates,0);});
+test('approved source URL grammar refuses other group, credentials and external origin',()=>{assert(preview.groupURL('https://www.facebook.com/groups/'+group+'/',group,false));for(const u of ['https://www.facebook.com/groups/other/','https://evil.test/groups/'+group+'/','https://www.facebook.com/groups/'+group+'/?private=1','https://user@www.facebook.com/groups/'+group+'/'])assert.equal(preview.groupURL(u,group,false),false);});
+
+test('existing explicit city guard prevents attributing another city to Łódź districts',()=>{const f=fields.previewFields({postText:'Sprzedam mieszkanie w Warszawie. Polesie. 42m2 cena 319000 zł.'});assert.equal(f.usable,false);assert.equal(f.district,null);assert.equal(f.neighborhood,null)});
+test('identity-only observations do not erase the concrete sale intent during enrichment',()=>{for(const reverse of [false,true]){const m=model(),items=[record(),record(undefined,'')];if(reverse)items.reverse();for(const r of items)m.add(r,'DOM');assert.equal(m.rows()[0].intent,'SELL_PROPERTY');assert.equal(m.rows()[0].usable,true);assert.equal(m.rows()[0].price,319000);}});
+test('conflicting concrete buy and sale intents remain unusable after later empty or sale records',()=>{const m=model();m.add(record(),'DOM');m.add(record(undefined,'Kupię mieszkanie 50m2 do 300000 zł.'),'NETWORK');m.add(record(undefined,''),'NETWORK');m.add(record(),'DOM');assert.equal(m.rows()[0].intent,'UNKNOWN');assert.equal(m.rows()[0].usable,false);});
+test('fixed qualification distinguishes no text, other city, non-property, intent and missing fields',()=>{for(const [text,reason] of [['','NO_TEXT'],['Sprzedam mieszkanie w Warszawie 42m2 cena 319000 zł.','FOREIGN_CITY'],['Dzień dobry wszystkim.','NOT_PROPERTY'],['Kupię mieszkanie 50m2 za 300000 zł.','INTENT'],['Sprzedam mieszkanie.','MISSING_FIELDS'],[record().text,'CANDIDATE']]){const m=model();m.add(record(undefined,text),'NETWORK');assert.equal(m.rows()[0].qualification,reason,text);}});
+test('empty observations preserve an established qualification and concrete conflict stays explicit',()=>{const m=model();m.add(record(undefined,''),'NETWORK');m.add(record(),'DOM');m.add(record(undefined,''),'NETWORK');assert.equal(m.rows()[0].qualification,'CANDIDATE');m.add(record(undefined,'Kupię mieszkanie 50m2 za 300000 zł.'),'NETWORK');assert.equal(m.rows()[0].qualification,'CONFLICT');m.add(record(undefined,''),'NETWORK');assert.equal(m.rows()[0].qualification,'CONFLICT');});
+test('qualification cannot carry arbitrary text through the private projection',()=>{const m=model();m.add(record(),'DOM');m.merge({...m.rows()[0],qualification:'PRIVATE_TEXT'});assert.equal(m.stats.rejected,1);});
+test('a fuller other-city observation cannot inherit usable=true from an earlier incomplete message',()=>{for(const reverse of [false,true]){const m=model(),texts=['Sprzedam mieszkanie.','Sprzedam mieszkanie w Warszawie 42m2 cena 319000 zł.'];if(reverse)texts.reverse();for(const t of texts)m.add(record(undefined,t),'NETWORK');m.add(record(undefined,''),'DOM');m.add(record(),'DOM');assert.equal(m.rows()[0].usable,false);assert.equal(m.rows()[0].qualification,'FOREIGN_CITY');}});
+
+const media=(id,url=`https://scontent.fbcdn.net/${id}.jpg?private=hidden`)=>({mediaId:id,url,exactPostId:'550000000000001',exactAssociation:true});
+test('photo identities accumulate across partial records and do not inflate repeated sizes or DOM layers',()=>{const m=model();m.add({...record(),media:[media('880000000000001')]},'NETWORK');m.add({...record(),media:[media('880000000000002')]},'NETWORK');m.add({...record(),media:[media('880000000000001','https://scontent.fbcdn.net/crop-a.jpg?token=x')]},'DOM');assert.equal(m.rows()[0].photos,2);const out=JSON.stringify(m.rows());assert(!out.includes('880000000000'));assert(!out.includes('fbcdn'));assert(!out.includes('hidden'));});
+test('unkeyed image URLs ignore query variants and later exact IDs reconcile URL aliases',()=>{const m=model();const unknown=u=>({...media(null,u)});m.add({...record(),media:[unknown('https://scontent.fbcdn.net/a.jpg?x=1'),unknown('https://scontent.fbcdn.net/b.jpg?x=2')]},'NETWORK');assert.equal(m.rows()[0].photos,2);m.add({...record(),media:[media('880000000000001','https://scontent.fbcdn.net/a.jpg?x=3'),media('880000000000001','https://scontent.fbcdn.net/b.jpg?x=4')]},'NETWORK');assert.equal(m.rows()[0].photos,1);});
+test('foreign and unverified media, video URLs and deceptive hosts cannot increase photo count',()=>{const m=model();m.add({...record(),media:[{...media('880000000000001'),exactPostId:'550000000000002'},{...media('880000000000002'),exactAssociation:false},media('880000000000003','https://scontent.fbcdn.net/movie.mp4'),media('880000000000004','https://fbcdn.net.evil.test/a.jpg')]},'NETWORK');assert.equal(m.rows()[0].photos,0);});
+test('private photo evidence is capped and cleared with the model',()=>{const m=model();m.add({...record(),media:Array.from({length:40},(_,i)=>media(String(880000000000000+i)))},'NETWORK');assert.equal(m.rows()[0].photos,20);m.clear();m.add({...record(),media:[media('880000000000099')]},'NETWORK');assert.equal(m.rows()[0].photos,1);});
+function photoDOM(){const card={querySelector:()=>null,querySelectorAll:()=>nodes};let nodes=[];
+ function img(id,{width=90,height=90,comment=false,owner=card,profile=false,src='data:image/gif;base64,AA'}={}){const anchor={href:profile?'https://www.facebook.com/profile.php?id=777777':`https://www.facebook.com/photo.php?fbid=${id}`};return{getBoundingClientRect:()=>({width,height}),getAttribute:k=>k==='href'?src:null,closest:s=>s==='[role="article"],article'?owner:s==='a[href]'?anchor:comment?{}:null};}
+ return{card,img,set(v){nodes=v}};
+}
+test('small grid and SVG image sources count unique bound photo IDs without avatar or comment images',()=>{const h=photoDOM();h.set([h.img('880000000000001'),h.img('880000000000002'),h.img('880000000000002'),h.img('880000000000003'),h.img('880000000000004',{comment:true}),h.img('880000000000005',{owner:{}}),h.img('880000000000006',{profile:true,width:300,height:300}),h.img('880000000000007',{width:20,height:20})]);const m=model();m.add({...record(),media:preview.domPhotos(h.card,record().postId,group,core)},'DOM');assert.equal(m.rows()[0].photos,3);});
+test('photo media links never become post IDs and unknown overlays are not guessed totals',()=>{assert.equal(preview.exact('https://www.facebook.com/photo.php?fbid=880000000000001',group),null);assert.equal(preview.photoLinkId('https://www.facebook.com/photo.php?fbid=880000000000001'),'880000000000001');assert.equal(preview.photoLinkId('https://evil.test/photo.php?fbid=880000000000001'),null);assert.equal(preview.photoLinkId('https://www.facebook.com/photo.php?fbid=not-id'),null);});
+test('network media discovery accepts exact group permalink wrappers without a fabricated post ID',()=>{const h=photoDOM();const n=h.img('880000000000001',{src:'https://scontent.fbcdn.net/tile.jpg',width:90,height:90});const old=n.closest;n.closest=s=>s==='a[href]'?{href:`https://www.facebook.com/groups/${group}/posts/550000000000001/`}:old(s);h.set([n]);const found=preview.photoNodes(h.card,null,group,core);assert.equal(found.length,1);assert.equal(found[0].item.linkedPostId,'550000000000001');assert.equal(found[0].item.exactAssociation,false);assert.equal(preview.photoNodes(h.card,'550000000000002',group,core).length,0);assert.equal(preview.photoNodes(h.card,'550000000000001',group,core).length,1);});
+test('small unlinked collage tiles remain excluded from DOM-only media evidence',()=>{const h=photoDOM();const n=h.img('880000000000001',{src:'https://scontent.fbcdn.net/tile.jpg'});const old=n.closest;n.closest=s=>s==='a[href]'?null:old(s);h.set([n]);assert.equal(preview.photoNodes(h.card,'550000000000001',group,core)[0].item.networkRequired,true);assert.equal(preview.domPhotos(h.card,'550000000000001',group,core).length,0);});
+function cssDOM(){const doc={images:[]};let background='url("https://scontent.fbcdn.net/existing.jpg?private=1")',pseudo='none';doc.defaultView={getComputedStyle:(_n,p)=>p?{content:pseudo}:{backgroundImage:background},performance:{getEntriesByName:()=>[]}};const card={ownerDocument:doc,querySelector:()=>null,querySelectorAll:s=>s==='img,svg image'?[]:[node]};const anchor={href:'https://www.facebook.com/photo/?fbid=880000000000001'};const node={tagName:'DIV',ownerDocument:doc,childElementCount:0,textContent:'',getBoundingClientRect:()=>({width:300,height:180}),closest:s=>s==='[role="article"],article'?card:s==='a[href]'?anchor:null};return{doc,card,node,setBackground:v=>background=v,setPseudo:v=>pseudo=v};}
+test('an existing decoded CSS photo is selected without issuing a media request',()=>{const h=cssDOM(),audit={};h.doc.images=[{src:'https://scontent.fbcdn.net/existing.jpg?private=1',complete:true,naturalWidth:300}];const rows=preview.photoNodes(h.card,'550000000000001',group,core,audit);assert.equal(rows.length,1);assert.equal(rows[0].item.mediaId,'880000000000001');assert.equal(rows[0].item.url,'https://scontent.fbcdn.net/existing.jpg');assert.equal(audit.photoRawCss,1);assert(rows[0].ready());h.doc.images=[];assert.equal(rows[0].ready(),false);assert.equal(preview.photoNodes(h.card,'550000000000001',group,core).length,0);});
+test('CSS photos refuse text, children, pseudo content, multiple backgrounds and unknown load status',()=>{for(const variant of ['text','children','pseudo','multiple','unready']){const h=cssDOM();h.doc.images=[{src:'https://scontent.fbcdn.net/existing.jpg?private=1',complete:true,naturalWidth:300}];if(variant==='text')h.node.textContent='PRIVATE POST';if(variant==='children')h.node.childElementCount=1;if(variant==='pseudo')h.setPseudo('"PRIVATE"');if(variant==='multiple')h.setBackground('url("https://scontent.fbcdn.net/a.jpg"),url("https://scontent.fbcdn.net/b.jpg")');if(variant==='unready')h.doc.images=[];assert.equal(preview.photoNodes(h.card,'550000000000001',group,core).length,0,variant);}});
+test('image extraction counts owner, link, size and source rejections without copying content',()=>{const h=photoDOM(),audit={};const owner=h.img('880000000000001',{owner:{}}),profile=h.img('880000000000002',{profile:true}),small=h.img('880000000000003',{width:20}),source=h.img('880000000000004');const old=source.closest;source.closest=s=>s==='a[href]'?null:old(s);h.set([owner,profile,small,source]);assert.equal(preview.photoNodes(h.card,'550000000000001',group,core,audit).length,0);for(const k of ['photoOwnerRejected','photoAnchorRejected','photoSizeRejected','photoSourceRejected'])assert.equal(audit[k],1);assert(Object.values(audit).every(Number.isInteger));assert(!JSON.stringify(audit).includes('http'));});
+
+test('photo scope excludes real comments but not the exact commentable feed story container',()=>{const h=photoDOM(),n=h.img('880000000000001');const old=n.closest;let realComment=false;n.closest=s=>s.includes('data-ad-rendering-role')?(realComment?{}:s.includes(':not([data-testid="commentable_feed_story"])')?null:{}):old(s);h.set([n]);assert.equal(preview.photoNodes(h.card,'550000000000001',group,core).length,1);realComment=true;assert.equal(preview.photoNodes(h.card,'550000000000001',group,core).length,0);});
+test('opaque Facebook photo wrappers never supply IDs and require independent network media evidence',()=>{const h=photoDOM(),n=h.img('880000000000001',{src:'https://scontent.fbcdn.net/tile.jpg',width:300,height:180});const a={href:'https://www.facebook.com/photo/?fbid=pfbidOPAQUE&set=pcb.550000000000001'};const old=n.closest;n.closest=s=>s==='a[href]'?a:old(s);h.set([n]);const got=preview.photoNodes(h.card,'550000000000001',group,core);assert.equal(got.length,1);assert.equal(got[0].item.mediaId,null);assert.equal(got[0].item.networkRequired,true);assert.equal(preview.domPhotos(h.card,'550000000000001',group,core).length,0);assert(got[0].ready());a.href='https://www.facebook.com/profile.php?id=777777';assert.equal(got[0].ready(),false);assert.equal(preview.photoNodes(h.card,'550000000000001',group,core).length,0);assert.equal(preview.opaquePhotoLink('https://evil.test/photo/?fbid=pfbid'),false);});
+test('60 to79px tiles need exact network ownership even with a numeric photo link; smaller cannot be cropped',()=>{const h=photoDOM(),n=h.img('880000000000001',{src:'https://scontent.fbcdn.net/tile.jpg',width:64,height:64});h.set([n]);assert.equal(preview.photoNodes(h.card,'550000000000001',group,core)[0].item.networkRequired,true);assert.equal(preview.domPhotos(h.card,'550000000000001',group,core).length,0);h.set([h.img('880000000000001',{width:59,height:64})]);assert.equal(preview.photoNodes(h.card,'550000000000001',group,core).length,0);});
+test('single raster SVG uses its visible root bounds and refuses multi-image or textual graphics',()=>{const h=photoDOM(),n=h.img('880000000000001',{width:0,height:0});let extra=false,multiple=false;const svg={ownerDocument:{},contains:v=>v===n,querySelectorAll:()=>multiple?[n,{}]:[n],querySelector:()=>extra?{}:null,getBoundingClientRect:()=>({width:300,height:180})};n.tagName='image';n.ownerDocument=svg.ownerDocument;const old=n.closest;n.closest=s=>s==='svg'?svg:old(s);h.set([n]);const audit={};const got=preview.photoNodes(h.card,'550000000000001',group,core,audit);assert.equal(got.length,1);assert.equal(got[0].node,svg);assert.equal(audit.photoSvgBounds,1);extra=true;assert.equal(got[0].ready(),false);assert.equal(preview.photoNodes(h.card,'550000000000001',group,core).length,0);extra=false;multiple=true;assert.equal(preview.photoNodes(h.card,'550000000000001',group,core).length,0);});
+
+const colloquialListing='5800 zł/m2·do negocjacji\n63 metry ·2 pokoje·\nmożna zrobić 3\n·3 piętro ·do remontu·zadbany budynek·Zawiszy Czarnego';
+test('colored post text supports colloquial area and derived total without inventing rooms or location',()=>{
+ const r=fields.previewFields({postText:colloquialListing});assert.equal(r.area,63);assert.equal(r.price,365400);assert.equal(r.priceSource,'DERIVED_FROM_PRICE_PER_M2');assert.equal(r.rooms,2);assert.equal(r.street,null);assert.equal(r.district,null);
+ const m=model();m.add(record('550000000000091',colloquialListing),'DOM');const row=m.rows()[0];assert.equal(row.area,63);assert.equal(row.price,365400);assert.equal(row.rooms,2);assert.equal(row.qualification,'CANDIDATE');assert.equal(JSON.stringify(row).includes('Zawiszy Czarnego'),false);
+});
+test('colloquial area rejects distance, ambiguity and missing apartment context',()=>{
+ for(const text of ['5800 zł/m2 · 63 metry do przystanku ·2 pokoje','5800 zł/m2 · odległość 63 metry ·2 pokoje','5800 zł/m2 · 63 metry · 65 metrów ·2 pokoje','63 metry ·2 pokoje','5800 zł/m2 ·63 metry','5800 zł/m2 ·9 metry ·2 pokoje','5800 zł/m2 ·301 metrów ·2 pokoje'])assert.equal(fields.previewFields({postText:text}).area,null,text);
+ const explicit=fields.previewFields({postText:'5800 zł/m2 ·63 metry ·2 pokoje ·50 m2'});assert.equal(explicit.area,50);
+});
+test('colloquial adapter keeps sale and foreign city filters intact and supports decimal metres',()=>{
+ const r=fields.previewFields({postText:'5800 zł/m² ·63,5 metrów ·2 pokoje'});assert.equal(r.area,63.5);assert.equal(r.price,368300);
+ assert.equal(fields.previewFields({postText:'Kupię mieszkanie. '+colloquialListing}).price,null);
+ assert.equal(fields.previewFields({postText:'Warszawa. Sprzedam mieszkanie. '+colloquialListing}).usable,false);
+});
+test('SVGAnimatedString photo anchor is read as an exact URL and revalidated after animation',()=>{
+ const h=photoDOM(),n=h.img('880000000000001',{src:'https://scontent.fbcdn.net/tile.jpg',width:300,height:180});
+ const href={baseVal:'https://www.facebook.com/photo/?fbid=880000000000001',animVal:'https://www.facebook.com/photo/?fbid=880000000000001'},a={href};const old=n.closest;
+ n.closest=s=>s==='a[href]'?a:old(s);h.set([n]);const got=preview.photoNodes(h.card,'550000000000001',group,core);assert.equal(got.length,1);assert.equal(got[0].item.mediaId,'880000000000001');assert(got[0].ready());
+ href.animVal='https://www.facebook.com/profile.php?id=777777';assert.equal(got[0].ready(),false);assert.equal(preview.photoNodes(h.card,'550000000000001',group,core).length,0);
+});
+test('SVG anchor resolution rejects unsafe URLs, blank animation and object coercion',()=>{
+ const a={ownerDocument:{baseURI:'https://www.facebook.com/groups/'+group+'/'},href:{baseVal:'/photo/?fbid=880000000000001',animVal:'/photo/?fbid=880000000000001'}};
+ assert.equal(preview.photoAnchorHref(a),'https://www.facebook.com/photo/?fbid=880000000000001');
+ a.href.animVal='';assert.equal(preview.photoAnchorHref(a),null);
+ a.href={toString(){throw Error('must not coerce')}};assert.equal(preview.photoAnchorHref(a),null);
+ const h=photoDOM(),n=h.img('880000000000001');const old=n.closest;n.closest=s=>s==='a[href]'?a:old(s);h.set([n]);
+ for(const raw of ['javascript:alert(1)','https://evil.test/photo/?fbid=880000000000001','https://www.facebook.com/profile.php?id=880000000000001',`https://www.facebook.com/groups/foreign/posts/550000000000001/`]){a.href={baseVal:raw,animVal:raw};assert.equal(preview.photoNodes(h.card,'550000000000001',group,core).length,0,raw);}
+});
+test('shared story message cannot become three offers under three root IDs',()=>{
+ const story=(id,extra)=>({__typename:'Story',post_id:id,url:`https://www.facebook.com/groups/${group}/posts/${id}/`,...extra});
+ const original=story('550000000000093',{message:{text:'Sprzedam mieszkanie 42m2 cena 319000 zł'},actors:[{name:'Synthetic author'}]});
+ const body=JSON.stringify({items:[story('550000000000091',{shared_story:original}),story('550000000000092',{shared_story:original})]});
+ const records=core.extractStructuredRecordsFromText(body,'NETWORK',{sourceType:'GROUP',sourceId:group},0);assert.equal(records.length,3);
+ const m=model();for(const r of records)m.add(r,'NETWORK');
+ assert.equal(m.rows().filter(r=>r.qualification==='CANDIDATE').length,1);
+ for(const id of ['550000000000091','550000000000092']){const r=m.rows().find(r=>r.postId===id);assert.equal(r.price,null);assert.equal(r.area,null);assert.equal(r.qualification,'NO_TEXT');}
+ const good=m.rows().find(r=>r.postId===original.post_id);assert.equal(good.price,319000);assert.equal(good.area,42);
+ m.clear();for(const r of records)m.add(r,'HYDRATION');assert.equal(m.rows().filter(r=>r.qualification==='CANDIDATE').length,1);
+});
+test('same parameters on different own posts remain different exact identities',()=>{const m=model();m.add(record('550000000000091'),'DOM');m.add(record('550000000000092'),'DOM');assert.equal(m.rows().length,2);assert(m.rows().every(r=>r.qualification==='CANDIDATE'));});
+test('late eligible offer replaces a fieldless stub at the twenty-ID cap and clears stale evidence',()=>{
+ const m=model();for(let i=0;i<20;i++)m.add({...record(String(550000000000000+i),''),media:[]},'DOM');assert.equal(m.rows().length,20);
+ m.add(record('550000000000099'),'DOM');assert.equal(m.rows().length,20);assert(m.rows().some(r=>r.postId==='550000000000099'&&r.price===319000));assert(!m.rows().some(r=>r.postId==='550000000000000'));
+ m.clear();assert.equal(m.rows().length,0);assert.equal(m.mediaBindings().length,0);
+});
+test('priority admission never evicts a retained offer or a post with exact media evidence',()=>{
+ const m=model();for(let i=0;i<20;i++)m.add(record(String(550000000000000+i)),'DOM');m.add(record('550000000000099'),'DOM');assert.equal(m.rows().length,20);assert(!m.rows().some(r=>r.postId==='550000000000099'));
+ const n=model();for(let i=0;i<20;i++){const id=String(550000000000000+i);n.add({...record(id,''),media:[{...media('880000000000001'),exactPostId:id}]},'NETWORK');}n.add(record('550000000000099'),'DOM');assert.equal(n.rows().length,20);assert(!n.rows().some(r=>r.postId==='550000000000099'));
+});
+test('own parent message and same-ID Comet message remain available despite an embedded share',()=>{
+ const s=(id,extra)=>({__typename:'Story',post_id:id,url:`https://www.facebook.com/groups/${group}/posts/${id}/`,...extra});
+ const child=s('550000000000093',{message:{text:'Sprzedam mieszkanie 42m2 cena319000 zł'}});
+ const parent=s('550000000000091',{message:{text:'Sprzedam mieszkanie 50m2 cena350000 zł'},shared_story:child});
+ const m=model();for(const r of core.extractStructuredRecordsFromText(JSON.stringify(parent),'NETWORK',{sourceType:'GROUP',sourceId:group},0))m.add(r,'NETWORK');
+ assert.equal(m.rows().find(r=>r.postId===parent.post_id).price,350000);assert.equal(m.rows().find(r=>r.postId===child.post_id).price,319000);
+ const own={...record('550000000000095'),__structuredDiagnostics:{structuredTextPath:'comet_sections.content.story.message'}};m.add(own,'NETWORK');assert.equal(m.rows().find(r=>r.postId===own.postId).price,319000);
+});
+test('background snapshot admission replaces only an unclassified no-media row at capacity',()=>{
+ const m=model();for(let i=0;i<20;i++)m.add({...record(String(550000000000000+i),''),media:[]},'DOM');
+ const n=model();n.add(record('550000000000099'),'NETWORK');m.merge(n.rows()[0]);assert.equal(m.rows().length,20);assert(m.rows().some(r=>r.postId==='550000000000099'));assert.equal(m.stats.candidates,20);
+});
+test('empty DOM observation cannot erase network snapshot media proof and make that row evictable',()=>{
+ const m=model(),n=model();n.add({...record('550000000000091',''),media:[{...media('880000000000001'),exactPostId:'550000000000091'}]},'NETWORK');m.merge(n.rows()[0]);
+ m.add({...record('550000000000091',''),media:[]},'DOM');assert.equal(m.rows()[0].photos,1);
+ for(let i=0;i<19;i++)m.add({...record(String(550000000000000+i),''),media:[]},'DOM');m.add(record('550000000000099'),'DOM');assert.equal(m.rows().length,20);assert(m.rows().some(r=>r.postId==='550000000000091'&&r.photos===1));
+});
+test('snapshot signature cache cannot retain evicted post IDs while late candidates replace empty rows',()=>{
+ const m=model(),cache=new Map();for(let i=0;i<20;i++){const n=model();n.add({...record(String(550000000000000+i),''),media:[]},'DOM');preview.mergeSnapshot(m,cache,n.rows()[0]);}
+ assert.equal(cache.size,20);
+ for(let i=0;i<20;i++){const n=model();n.add(record(String(550000000001000+i)),'NETWORK');preview.mergeSnapshot(m,cache,n.rows()[0]);const ids=new Set(m.rows().map(r=>r.postId));assert.equal(cache.size,20);assert([...cache.keys()].every(id=>ids.has(id)));assert.equal(ids.size,20);}
+});
+test('rejected snapshot extras cannot enter signature memory for an already retained ID',()=>{
+ const m=model(),cache=new Map(),n=model();n.add(record(),'NETWORK');const row=n.rows()[0];preview.mergeSnapshot(m,cache,row);const before=cache.get(row.postId);
+ preview.mergeSnapshot(m,cache,{...row,text:'PRIVATE_RAW_TEXT'});assert.equal(cache.get(row.postId),before);assert.equal(JSON.stringify([...cache.values()]).includes('PRIVATE_RAW_TEXT'),false);
+});
+test('rejected changed background row still prunes signatures evicted by DOM admission',()=>{
+ const m=model(),cache=new Map(),old=[];
+ for(let i=0;i<20;i++){const n=model();n.add({...record(String(550000000000000+i),''),media:[]},'NETWORK');const row=n.rows()[0];old.push(row);preview.mergeSnapshot(m,cache,row);}
+ for(let i=0;i<20;i++)m.add(record(String(550000000001000+i)),'DOM');
+ preview.mergeSnapshot(m,cache,{...old[0],photos:1});const ids=new Set(m.rows().map(r=>r.postId));assert([...cache.keys()].every(id=>ids.has(id)));assert.equal(m.rows().length,20);
+});
+test('late image-only post with exact media evidence can displace an empty stub for manual review',()=>{
+ const m=model();for(let i=0;i<20;i++)m.add({...record(String(550000000000000+i),''),media:[]},'NETWORK');
+ const id='550000000000099';m.add({...record(id,''),media:[{...media('880000000000001'),exactPostId:id}]},'NETWORK');
+ assert.equal(m.rows().length,20);const row=m.rows().find(r=>r.postId===id);assert.equal(row.qualification,'NO_TEXT');assert.equal(row.price,null);assert.equal(row.photos,1);assert.equal(m.mediaBindings().find(r=>r.postId===id).ids.length,1);
+});
+test('unverified or foreign media cannot win priority at the twenty-ID cap',()=>{
+ for(const extra of [{exactAssociation:false},{exactPostId:'550000000000001'},{url:'https://evil.test/a.jpg'}]){const m=model();for(let i=0;i<20;i++)m.add({...record(String(550000000000000+i),''),media:[]},'NETWORK');const id='550000000000099';m.add({...record(id,''),media:[{...media('880000000000001'),exactPostId:id,...extra}]},'NETWORK');assert.equal(m.rows().length,20);assert(!m.rows().some(r=>r.postId===id));}
+});
+test('priority admission cannot forget a known foreign-city exclusion and later promote that ID',()=>{
+ const m=model(),id='550000000000090',foreign={...record(id,'Sprzedam mieszkanie Warszawa 42m2 cena319000 zł'),media:[]};m.add(foreign,'NETWORK');m.add(foreign,'NETWORK');
+ for(let i=0;i<19;i++)m.add({...record(String(550000000000000+i),''),media:[]},'DOM');m.add(record('550000000000099'),'DOM');
+ assert(m.rows().some(r=>r.postId===id&&r.qualification==='FOREIGN_CITY'));
+ m.add({...record(id),media:[]},'DOM');assert.equal(m.rows().find(r=>r.postId===id).usable,false);assert.equal(m.rows().length,20);
+});
+
+test('area unit cannot prepend its digit to the following total price or become a house number',()=>{
+ for(const unit of ['m2','m²'])for(const amount of ['260 000 zł','260000 PLN']){
+  const r=fields.previewFields({postText:`Sprzedam mieszkanie Łódź ul. Różyckiego 45,8 ${unit} ${amount}`});assert.equal(r.price,260000);assert.equal(r.area,45.8);assert.equal(r.street,'Różyckiego');
+ }
+ const named=fields.previewFields({postText:'Sprzedam mieszkanie ul. Testowa 12. 42m2 319 000 zł'});assert.equal(named.street,'Testowa 12');assert.equal(named.price,319000);assert.equal(named.area,42);
+});
+test('bare M3 area is sale-scoped and never interprets a distance or conflicting areas',()=>{
+ const r=fields.previewFields({postText:'Sprzedam M3 40m rozkładowe po remoncie 3piętro niski blok Łódź Dąbrowa 355 tys'});assert.equal(r.area,40);assert.equal(r.rooms,2);assert.equal(r.price,355000);assert.equal(fields.previewFields({postText:'Na sprzedaż M3 40m po remoncie 355 tys'}).area,40);
+ for(const text of ['Sprzedam M3 200m do przystanku 355 tys','Sprzedam M3 200m od tramwaju 355 tys','Sprzedam M3 40m i M3 50m 355 tys','M3 40m 355 tys','Sprzedam M3 9m 355 tys','Sprzedam M3 301m 355 tys'])assert.equal(fields.previewFields({postText:text}).area,null,text);
+ const explicit=fields.previewFields({postText:'Sprzedam M3 40m. Powierzchnia 44m2. Cena 355 tys'});assert.equal(explicit.area,44);
+});
