@@ -22,6 +22,7 @@ export function CollectorSetupPage() {
   const [pairingStatus, setPairingStatus] = useState<PairingStatusMessage>(INITIAL_STATUS);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [androidCode, setAndroidCode] = useState<string | null>(null);
 
   useEffect(() => {
     let received = false;
@@ -58,6 +59,24 @@ export function CollectorSetupPage() {
     }
   }
 
+  async function registerAndroid(): Promise<void> {
+    setError(null); setAndroidCode(null); setBusy(true);
+    try {
+      const challengeResponse = await fetch("/api/collector/pairing/challenge", { method: "POST", credentials: "same-origin", cache: "no-store" });
+      const challenge = await challengeResponse.json() as { challenge?: string };
+      if (!challengeResponse.ok || !challenge.challenge) throw new Error("Nie udało się rozpocząć parowania.");
+      const response = await fetch("/api/collector/pairing/complete", {
+        method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challenge: challenge.challenge, deviceName: "Flip Watcher Android", installationId: crypto.randomUUID() }),
+      });
+      const value = await response.json() as { deviceId?: string; deviceToken?: string };
+      if (!response.ok || !value.deviceId || !value.deviceToken) throw new Error("Nie udało się utworzyć kodu urządzenia.");
+      setAndroidCode(JSON.stringify({ apiUrl: window.location.origin, deviceId: value.deviceId, deviceToken: value.deviceToken }));
+    } catch {
+      setError("Nie udało się przygotować kodu Androida. Sprawdź połączenie i spróbuj ponownie.");
+    } finally { setBusy(false); }
+  }
+
   const canPair = pairingStatus.status === "DISCONNECTED" || pairingStatus.status === "RECONNECT_REQUIRED";
   return (
     <main className="mx-auto max-w-xl space-y-5">
@@ -75,6 +94,16 @@ export function CollectorSetupPage() {
           <Button disabled={!deviceName.trim() || busy} onClick={() => void register()}>{busy ? "Łączenie…" : pairingStatus.status === "RECONNECT_REQUIRED" ? "Połącz ponownie" : "Połącz collector"}</Button>
         </> : null}
         {pairingStatus.status === "UNVERIFIED" ? <Button variant="outline" disabled={busy} onClick={requestStatus}>Sprawdź ponownie</Button> : null}
+        <div className="space-y-3 border-t pt-4">
+          <p className="font-medium">Aplikacja Android — synchronizacja grup</p>
+          <p className="text-sm text-muted-foreground">Kod zawiera klucz urządzenia. Wklej go tylko do swojej aplikacji Flip Watcher. Oferty i zdjęcia pozostają na telefonie.</p>
+          <Button variant="outline" disabled={busy || androidCode !== null} onClick={() => void registerAndroid()}>Kod dla aplikacji Android</Button>
+          {androidCode ? <div className="space-y-2">
+            <label className="block text-sm">Kod parowania<textarea readOnly autoComplete="off" spellCheck={false} className="mt-1 w-full rounded-lg border p-2 font-mono text-xs" rows={5} value={androidCode} /></label>
+            <Button variant="outline" onClick={() => { void navigator.clipboard.writeText(androidCode).catch(() => setError("Zaznacz i skopiuj kod ręcznie.")); }}>Kopiuj kod</Button>
+            <Button variant="outline" onClick={() => setAndroidCode(null)}>Ukryj kod</Button>
+          </div> : null}
+        </div>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
       </section>
     </main>
