@@ -166,10 +166,29 @@ test('nested main aliases are one region but independent sibling roots stay ambi
 test('region limit and absent scope produce explicit count-only diagnostics',async()=>{
  for(const kind of ['roots','depth','anchors','missing']){
   const h=plainOwnPhoto();
-  if(kind==='roots'){const previous=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='main,[role="main"]'?Array(21).fill(h.main):previous(s);}
-  if(kind==='depth'){let p=h.main;for(let i=0;i<40;i++)p={ownerDocument:h.doc,isConnected:true,parentElement:p,getAttribute:()=>null};h.wrapper.parentElement=p;}
-  if(kind==='anchors')h.main.querySelectorAll=()=>Array(201).fill({});
+  if(kind==='roots'){const previous=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='main,[role="main"]'?Array(513).fill(h.main):previous(s);}
+  if(kind==='depth'){let p=h.main;for(let i=0;i<520;i++)p={ownerDocument:h.doc,isConnected:true,parentElement:p,getAttribute:()=>null};h.wrapper.parentElement=p;}
+  if(kind==='anchors')h.main.querySelectorAll=()=>Array(4097).fill({});
   if(kind==='missing'){h.image.closest=()=>null;h.doc.body=null;}
-  const r=await h.run();assert.equal(r.count,0,kind);assert.equal(r.details[kind==='missing'?'regionMissing':'regionLimit'],1,kind);assert.equal(h.calls.length,0,kind);assert(Object.values(r.details).every(Number.isInteger));
+  const r=await h.run();assert.equal(r.count,0,kind);assert.equal(r.details[kind==='missing'?'regionMissing':'regionLimit'],1,kind);if(kind!=='missing')assert.equal(r.details[{roots:'rootLimit',depth:'depthLimit',anchors:'anchorLimit'}[kind]],1,kind);assert.equal(h.calls.length,0,kind);assert(Object.values(r.details).every(Number.isInteger));
+ }
+});
+
+
+test('exact own sources survive each former region work limit without truncating the checks',async()=>{
+ for(const kind of ['depth','anchors','roots']){
+  const h=plainOwnPhoto();
+  if(kind==='depth'){let p=h.main;for(let i=0;i<80;i++)p={ownerDocument:h.doc,isConnected:true,parentElement:p,getAttribute:()=>null};h.wrapper.parentElement=p;}
+  if(kind==='anchors')h.main.querySelectorAll=()=>Array.from({length:300},()=>({href:'https://www.facebook.com/help/',closest:()=>null,contains:()=>false}));
+  if(kind==='roots'){const previous=h.doc.querySelectorAll;h.doc.querySelectorAll=s=>s==='main,[role="main"]'?[h.main,...Array.from({length:25},()=>({...h.main,contains:()=>false,checkVisibility:()=>false}))]:previous(s);}
+  const r=await h.run();assert.equal(r.reason,'CAPTURED',kind);assert.equal(r.details.sourceOwner,1,kind);assert.equal(r.details.regionLimit,0,kind);
+ }
+});
+test('foreign owners beyond the old depth and anchor limits are still inspected and rejected',async()=>{
+ for(const kind of ['depth','anchors']){
+  const h=plainOwnPhoto();
+  if(kind==='depth'){let p={ownerDocument:h.doc,isConnected:true,parentElement:h.main,getAttribute:k=>k==='data-post-id'?'550000000000092':null};for(let i=0;i<80;i++)p={ownerDocument:h.doc,isConnected:true,parentElement:p,getAttribute:()=>null};h.wrapper.parentElement=p;}
+  else h.main.querySelectorAll=()=>[...Array.from({length:300},()=>({href:'https://www.facebook.com/help/',closest:()=>null,contains:()=>false})),{href:link.replace(id,'550000000000092'),closest:()=>null,contains:()=>false}];
+  const r=await h.run();assert.equal(r.count,0,kind);assert.equal(r.details.foreignOwner,1,kind);assert.equal(r.details.regionLimit,0,kind);assert.equal(h.calls.length,0,kind);
  }
 });

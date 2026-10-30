@@ -14,7 +14,7 @@ data class OcrSummary(val reason:String,val selected:Int,val images:Int,val text
   append("Zachowane dane pozostają lokalnie. Sugestie OCR wymagają porównania ze zdjęciem. Szczegółowe przyczyny: Diagnostyka.")
  }
  fun report()=buildString{
-  appendLine("OCR 0.5.64 • tylko lokalnie • $reason")
+  appendLine("OCR 0.5.65 • tylko lokalnie • $reason")
   appendLine("Posty wybrane: $selected • obrazy: $images • odczytane napisy: $texts • wyniki do sprawdzenia: $suggestions • błędy: $errors")
   if(imageChecks.isNotEmpty())appendLine(ReviewImageChecks.report(imageChecks))
   if(reason=="PARTIAL")appendLine("OCR obrazów z pamięci ukończony; etap otwierania pozostałych postów zatrzymany. Wynik częściowy.")
