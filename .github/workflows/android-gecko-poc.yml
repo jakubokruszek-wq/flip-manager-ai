@@ -416,3 +416,53 @@ jobs:
 
 
 
+
+  publish-tested-0567:
+    name: Direct download of tested 0.5.67 APK
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/claude/facebook-watcher-mobile-gq36l8' && github.event.head_commit.message == 'delivery: publish tested Gecko POC 0.5.67 download'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Require the exact tested source and both successful full runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41120851017 --jq '.head_sha + " " + .conclusion' > verified-pr.txt
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41120843646 --jq '.head_sha + " " + .conclusion' > verified-push.txt
+          grep -Fxq '0aba32a24b918363c965879264b1332a3218a511 success' verified-pr.txt
+          grep -Fxq '0aba32a24b918363c965879264b1332a3218a511 success' verified-push.txt
+      - name: Require the deployed Manager group endpoint
+        run: |
+          manager_status=$(curl --silent --show-error --max-time 20 --output manager-route.json --write-out '%{http_code}' https://flip-manager-ai.vercel.app/api/collector/facebook/groups)
+          test "$manager_status" = 401
+          jq -e '.code == "UNAUTHORIZED"' manager-route.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: flip-watcher-gecko-poc-arm64-520
+          repository: jakubokruszek-wq/flip-manager-ai
+          run-id: 41120851017
+          github-token: ${{ github.token }}
+          path: tested-apk
+      - name: Verify and publish the existing APK without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mv tested-apk/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk flip-watcher-0.5.67-arm64.apk
+          echo '192b380127d0e865dde2916b8d89428a1e7d69a44bb6f72df1964dd46e682398  flip-watcher-0.5.67-arm64.apk' | sha256sum -c -
+          cat > release-notes.md <<'NOTES'
+          Tested Gecko POC 0.5.67, ARM64. This is the unchanged APK from successful run 41120851017, source 0aba32a24b918363c965879264b1332a3218a511.
+          Validation: 579 JavaScript tests, 307 JVM tests, 138 Android tests in both full runs; 10 offline OCR tests. Android tests use local emulator fixtures, not a real Facebook account.
+          Eleven enabled Watcher groups, independent encrypted archives and device pairing for read-only group configuration. Offers, images and OCR remain local. Sources outside the reviewed eleven are rejected.
+          Manager backend 8014ba5868e27bb8bdfb6609bb6b6be4485cf970 is live. Real pairing, the exact group feed and token revocation passed using a temporary device revoked after testing.
+          VersionCode 3220. In Manager open /flip-finder/collector/setup and generate the Android code. In the app choose Tools > Connect/synchronize Watcher and paste the code.
+          Install as an update to preserve the local database and login.
+          SHA256: 192b380127d0e865dde2916b8d89428a1e7d69a44bb6f72df1964dd46e682398
+          NOTES
+          gh release create gecko-poc-0.5.67 flip-watcher-0.5.67-arm64.apk --repo jakubokruszek-wq/flip-manager-ai --target "${{ github.sha }}" --title 'Gecko POC 0.5.67 — Watcher groups and pairing' --prerelease --notes-file release-notes.md
+
+
+
