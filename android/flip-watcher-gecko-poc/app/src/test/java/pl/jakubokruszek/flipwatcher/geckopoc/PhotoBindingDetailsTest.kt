@@ -23,4 +23,14 @@ class PhotoBindingDetailsTest {
    assertNull(ReviewImageChecks.details(JSONObject().put("details",d)))
   }
  }
+ @Test fun previousSixteenCounterDiagnosisGetsZeroForNewSourceScopeCounter(){
+  val old=ReviewImageChecks.detailKeys.filter{it!="sourceOwner"}.associateWith{0}
+  val restored=PhotoDiagnosis.decode(PhotoDiagnosis("550000000000091","NO_IMAGE",old,emptyMap()).encode())!!
+  assertEquals(0,restored.details.getValue("sourceOwner"));assertTrue(restored.report().contains("własne źródło bez linku 0"))
+ }
+ @Test fun exactSourceScopeCountersRoundTripAndCannotExceedAcceptedOrExactMatches(){
+  val values=ReviewImageChecks.detailKeys.associateWith{0}.toMutableMap().apply{put("documentImg",61);put("rawImg",61);put("sourceProof",5);put("sourceExact",5);put("sourceOwner",5);put("noArticle",5);put("ownerAccepted",5);put("qualified",5)}
+  val diagnosis=PhotoDiagnosis("550000000000091","CAPTURED",values,emptyMap());assertEquals(diagnosis,PhotoDiagnosis.decode(diagnosis.encode()))
+  for(key in listOf("ownerAccepted","sourceExact")){val bad=values.toMutableMap().apply{put(key,4)};assertNull(ReviewImageChecks.details(JSONObject().put("details",JSONObject(bad))))}
+ }
 }
