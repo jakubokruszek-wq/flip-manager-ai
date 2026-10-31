@@ -47,8 +47,8 @@ android {
         applicationId = "pl.jakubokruszek.flipwatcher.geckopoc"
         minSdk = 26
         targetSdk = 36
-        versionCode = providers.gradleProperty("GECKO_POC_VERSION_CODE").orElse("5000").get().toInt()
-        versionName = "0.5.68-gecko-poc"
+        versionCode = providers.gradleProperty("GECKO_POC_VERSION_CODE").orElse("6000").get().toInt()
+        versionName = "0.5.69-gecko-poc"
         buildConfigField("String", "COLLECTOR_CORE_SHA256", "\"$collectorCoreSha256\"")
         // Transfers require explicit automation opt-in and paired device credentials.
         buildConfigField("boolean", "LIVE_UPLOAD_ENABLED", "true")

@@ -211,6 +211,7 @@ class PocActivity : ComponentActivity() {
         if(selected!=null)PocPolicy.selectGroup(selected)
         setContentView(buildLayout())
         readSavedResult()
+        if(WatcherAutomation.enabled(this))runCatching{WatcherAutomation.configure(this,true)}
         lifecycleScope.launch {
             extension = runCatching { GeckoHost.collectorExtension(this@PocActivity) }
                 .onFailure { extensionError = it.javaClass.simpleName + ": " + (it.message ?: "").take(80) }
@@ -232,6 +233,7 @@ class PocActivity : ComponentActivity() {
     override fun onResume(){super.onResume();WatcherAutomation.uiVisible=true;if(!reviewWorking())runCatching{session?.setActive(true)};window.decorView.post{showSavedResult();showPendingPhotosReport();showPendingReviewReport();showPendingOcrReport();showPendingWatcherResult()}}
 
     override fun onPause() {
+        automationScheduleDialog?.dismiss();automationTimeDialog?.dismiss()
         ocrConsentDialog?.dismiss();ocrConsentDialog=null;cancelOcr("PAUSED")
         reviewConsentDialog?.dismiss();reviewConsentDialog=null;cancelReview("PAUSED")
         desktopConsentDialog?.dismiss();desktopConsentDialog=null
@@ -242,6 +244,7 @@ class PocActivity : ComponentActivity() {
         stopVisiblePosts()
         WatcherAutomation.uiVisible=false
         super.onPause()
+        runCatching{WatcherAutomation.onBackground(applicationContext)}
     }
 
     private fun stopVisiblePosts() {
@@ -900,14 +903,49 @@ class PocActivity : ComponentActivity() {
     }
 
     private val automationPermission=registerForActivityResult(ActivityResultContracts.RequestPermission()){ }
+    internal var automationScheduleDialog:AlertDialog?=null;private set
+    internal var automationTimeDialog:android.app.TimePickerDialog?=null;private set
+    internal fun editAutomationSchedule(){
+        val times=runCatching{WatcherAutomation.schedule(this)}.getOrDefault(AutomationPolicy.defaultMinutes).toMutableList()
+        val layout=android.widget.LinearLayout(this).apply{orientation=android.widget.LinearLayout.VERTICAL;setPadding(24,12,24,12)}
+        layout.addView(android.widget.TextView(this).apply{text="Trzy pory dziennie, według czasu telefonu. Android może opóźnić zadanie, zwłaszcza przy oszczędzaniu baterii."})
+        val error=android.widget.TextView(this).apply{setTextColor(android.graphics.Color.RED);tag="automation.schedule.error"}
+        val choices=times.indices.map{index->android.widget.Button(this).apply{
+            tag="automation.time.$index";text=AutomationPolicy.label(times[index]);isAllCaps=false
+            setOnClickListener{
+                automationTimeDialog=android.app.TimePickerDialog(this@PocActivity,{_,hour,minute->
+                    times[index]=hour*60+minute;text=AutomationPolicy.label(times[index]);error.text=""
+                },times[index]/60,times[index]%60,true).also{picker->
+                    picker.setOnDismissListener{if(automationTimeDialog===picker)automationTimeDialog=null};picker.show()
+                }
+            }
+        }}
+        choices.forEach(layout::addView);layout.addView(error)
+        val dialog=AlertDialog.Builder(this).setTitle("Godziny skanów").setView(layout)
+            .setNegativeButton("Anuluj",null).setPositiveButton("Zapisz",null).create()
+        automationScheduleDialog=dialog
+        dialog.setOnDismissListener{if(automationScheduleDialog===dialog)automationScheduleDialog=null}
+        dialog.show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
+            if(times.distinct().size!=3){error.text="Wybierz trzy różne godziny.";return@setOnClickListener}
+            runCatching{WatcherAutomation.saveSchedule(this,times)}.onSuccess{
+                output.text="Zapisano godziny: "+AutomationPolicy.validate(times).joinToString(" • ",transform=AutomationPolicy::label)
+                dialog.dismiss()
+            }.onFailure{error.text="Nie udało się zapisać godzin. Dotychczasowy harmonogram pozostaje zachowany."}
+        }
+    }
     private fun automationSettings(){
         val enabled=WatcherAutomation.enabled(this)
         lifecycleScope.launch {
-            val status=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){WatcherOutbox(this@PocActivity).use{it.status()}}
+            val status=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){runCatching{WatcherOutbox(this@PocActivity).use{it.status()}}.getOrDefault("Nie udało się odczytać dziennika. Baza pozostaje zachowana.")}
             if(isDestroyed)return@launch
-            AlertDialog.Builder(this@PocActivity).setTitle("Automat: "+if(enabled)"włączony" else "wyłączony")
-                .setMessage("Trzy okna dziennie: 07:00, 15:00, 23:00 według czasu telefonu. Android może opóźnić pracę. Skan działa po opuszczeniu aplikacji, bez komputera. Powiadomienie informuje o pracy.\n\nOferty i przypisane miniatury zdjęć trafiają do sparowanego Managera. Kolejka ponawia wysyłkę bez tworzenia drugiej oferty. Sesja Facebooka i lokalna baza pozostają na telefonie. CAPTCHA lub logowanie zatrzymują odczyt.\n\n"+status)
-                .setNegativeButton("Zamknij",null)
+            val times=runCatching{WatcherAutomation.schedule(this@PocActivity)}.getOrDefault(AutomationPolicy.defaultMinutes)
+            val hours=times.joinToString(" • ",transform=AutomationPolicy::label)
+            val next=AutomationPolicy.next(java.time.Instant.now(),java.time.ZoneId.systemDefault(),times).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("dd.MM HH:mm"))
+            val actions=android.widget.LinearLayout(this@PocActivity).apply{orientation=android.widget.LinearLayout.VERTICAL;setPadding(24,8,24,8)}
+            val dialog=AlertDialog.Builder(this@PocActivity).setTitle("Automat: "+if(enabled)"włączony" else "wyłączony")
+                .setMessage("Godziny: $hours\nNastępne okno: $next (czas telefonu).\n\nAutomat skanuje w tle po opuszczeniu aplikacji. Skan ręczny wymaga otwartego ekranu aplikacji. Android może opóźnić start; po wymuszonym zatrzymaniu trzeba ponownie otworzyć aplikację.\n\nOferty i przypisane miniatury trafiają do sparowanego Managera. Kolejka ponawia wysyłkę bez duplikatów. Logowanie i baza pozostają na telefonie. CAPTCHA wymaga ręcznej obsługi.\n\n"+status)
+                .setView(actions).setNegativeButton("Zamknij",null)
                 .setNeutralButton("Ponów wysyłkę"){_,_->lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO){WatcherOutbox(this@PocActivity).use{it.retry()};if(WatcherAutomation.enabled(this@PocActivity))WatcherAutomation.retry(this@PocActivity)}}
                 .setPositiveButton(if(enabled)"Wyłącz automat" else "Włącz automat"){_,_->
                     if(enabled)WatcherAutomation.configure(this@PocActivity,false)
@@ -918,9 +956,18 @@ class PocActivity : ComponentActivity() {
                         if(android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)
                             automationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
                         WatcherAutomation.configure(this@PocActivity,true)
-                        output.text="Automat włączony. Opuść aplikację, aby rozpocząć skan. Stan i błędy znajdziesz w panelu automatu."
+                        output.text="Automat włączony. Po opuszczeniu aplikacji może wykonać zaległe okno. Godziny i dziennik są w panelu automatu."
                     }
-                }.show()
+                }.create()
+            actions.addView(android.widget.Button(this@PocActivity).apply{text="Godziny skanów";tag="automation.edit";setOnClickListener{dialog.dismiss();editAutomationSchedule()}})
+            actions.addView(android.widget.Button(this@PocActivity).apply{
+                text="Skan teraz w tle";tag="automation.scan.now";isEnabled=enabled
+                setOnClickListener{closeSession();WatcherAutomation.requestScan(this@PocActivity);dialog.dismiss();output.text="Skan zlecony. Przejdź na ekran główny telefonu. Postęp i błędy znajdziesz w panelu automatu."}
+            })
+            actions.addView(android.widget.Button(this@PocActivity).apply{
+                text="Ustawienia Androida";setOnClickListener{startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:$packageName")))}
+            })
+            dialog.show()
         }
     }
 

@@ -33,7 +33,7 @@ class WatcherAutomationInstrumentedTest {
     }
     @Test fun actualBackgroundRendererReadsExactRowsAndBoundPhotoWithoutActivity()=runBlocking {
         val path="/groups/$FIXTURE_GROUP_ID/"
-        val server=LoopbackFixtureServer(pages=mapOf(path to "desktop-viewport")){name->runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}
+        val server=LoopbackFixtureServer(redirects=mapOf(path to path.trimEnd('/')),pages=mapOf(path.trimEnd('/') to "desktop-viewport")){name->runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}
         try {
             val saved=BackgroundWatcherScan(context).runFixture("http://127.0.0.1:${server.port}$path"){true}
             assertTrue(saved.rows.isNotEmpty())
