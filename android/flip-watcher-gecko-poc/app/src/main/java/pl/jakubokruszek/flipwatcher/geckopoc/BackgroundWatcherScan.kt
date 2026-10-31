@@ -28,27 +28,30 @@ class BackgroundWatcherScan(private val context:Context) {
             check(alive())
             val browser=GeckoSession()
             val images=DesktopThumbnails()
-            val gate=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()},fixture,groupId=group.id)
-            var current:String?=null;var pageReady=false;var initial=true;var stopped=false
+            var gate:DesktopTrial?=null
+            var current:String?=null;var pageReady=false;var initial=true;var stopReason:String?=null
             val channel=CollectorChannel(browser,fixtureMode=fixture)
             var surface:BackgroundViewport?=null
-            fun live()=alive()&&!stopped
+            fun live()=alive()&&stopReason==null
             browser.navigationDelegate=object:GeckoSession.NavigationDelegate {
                 override fun onLoadRequest(s:GeckoSession,r:GeckoSession.NavigationDelegate.LoadRequest):GeckoResult<org.mozilla.geckoview.AllowOrDeny>? {
-                    val allowed=live()&&if(initial)r.uri==target else gate.request(r.uri,r.isRedirect,false,r.hasUserGesture)
-                    if(!allowed)stopped=true
+                    val newWindow=r.target==GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW
+                    val rejected=if(initial&&r.uri=="about:blank")null else BackgroundNavigationPolicy.rejection(r.uri,group.id,if(fixture)target else null)
+                    val allowed=live()&&!newWindow&&!r.hasUserGesture&&if(initial)rejected==null else gate?.request(r.uri,r.isRedirect,newWindow,r.hasUserGesture)==true
+                    if(!allowed&&stopReason==null)stopReason=rejected?:"GROUP_CONTEXT_REJECTED"
                     return GeckoResult.fromValue(if(allowed)org.mozilla.geckoview.AllowOrDeny.ALLOW else org.mozilla.geckoview.AllowOrDeny.DENY)
                 }
                 override fun onLocationChange(s:GeckoSession,u:String?,permissions:MutableList<GeckoSession.PermissionDelegate.ContentPermission>,gesture:Boolean){
+                    if(initial&&(u==null||u=="about:blank"))return
                     current=u
-                    if(initial){if(u!=null&&u!=target&&u!="about:blank")stopped=true}
-                    else if(!gate.location(u))stopped=true
+                    if(initial){u?.let{BackgroundNavigationPolicy.rejection(it,group.id,if(fixture)target else null)}?.let{stopReason=it}}
+                    else if(gate?.location(u)!=true)stopReason="GROUP_CONTEXT_REJECTED"
                 }
-                override fun onLoadError(s:GeckoSession,u:String?,e:org.mozilla.geckoview.WebRequestError):GeckoResult<String>?{stopped=true;return null}
+                override fun onLoadError(s:GeckoSession,u:String?,e:org.mozilla.geckoview.WebRequestError):GeckoResult<String>?{stopReason="GROUP_LOAD_ERROR";return null}
             }
             browser.progressDelegate=object:GeckoSession.ProgressDelegate {
                 override fun onPageStart(s:GeckoSession,u:String){pageReady=false}
-                override fun onPageStop(s:GeckoSession,success:Boolean){pageReady=success;if(!success)stopped=true}
+                override fun onPageStop(s:GeckoSession,success:Boolean){pageReady=success;if(!success)stopReason="GROUP_LOAD_ERROR"}
             }
             try {
                 channel.attach(GeckoHost.collectorExtension(context));check(live())
@@ -56,14 +59,20 @@ class BackgroundWatcherScan(private val context:Context) {
                 browser.setActive(true);browser.setFocused(true);browser.loadUri(target)
                 val until=android.os.SystemClock.elapsedRealtime()+(if(fixture)90_000 else 35_000)
                 while(live()&&android.os.SystemClock.elapsedRealtime()<until){
-                    if(current==target&&pageReady&&channel.isConnected&&channel.connectedUrl==target&&channel.probe(1000)?.readyState in setOf("interactive","complete"))break
+                    if(current!=null&&pageReady&&channel.isConnected&&channel.connectedUrl==current){
+                        val probe=channel.probe(1000)
+                        if((probe?.passwordInputs?:0)>0){stopReason="LOGIN_REQUIRED";break}
+                        if(probe?.readyState in setOf("interactive","complete"))break
+                    }
                     delay(200)
                 }
-                check(live()&&current==target&&pageReady&&channel.isConnected){"LOGIN_OR_PAGE_REQUIRED"}
-                initial=false;check(gate.begin(true));val nonce=UUID.randomUUID().toString()
-                channel.viewportBridge=DesktopViewportBridge(checkNotNull(surface),nonce,images,{live()&&gate.active&&gate.phase==DesktopTrial.Phase.READING})
-                val result=DesktopSessionPreview.run(browser,channel,gate,nonce,target,{current},{pageReady&&live()},fastScroll=true,fixture=fixture,groupId=group.id,alive=::live)
-                check(live()&&result.reason=="DONE"){"SCAN_"+result.reason}
+                check(live()&&current!=null&&pageReady&&channel.isConnected&&channel.connectedUrl==current){stopReason?:"GROUP_NOT_READY"}
+                val actualTarget=checkNotNull(current)
+                val trial=DesktopTrial(actualTarget,{android.os.SystemClock.elapsedRealtime()},fixture,groupId=group.id,allowRootQuery=true)
+                gate=trial;initial=false;check(trial.begin(true));val nonce=UUID.randomUUID().toString()
+                channel.viewportBridge=DesktopViewportBridge(checkNotNull(surface),nonce,images,{live()&&trial.active&&trial.phase==DesktopTrial.Phase.READING})
+                val result=DesktopSessionPreview.run(browser,channel,trial,nonce,actualTarget,{current},{pageReady&&live()},fastScroll=true,fixture=fixture,groupId=group.id,alive=::live)
+                check(live()&&result.reason=="DONE"){stopReason?:"SCAN_"+result.reason}
                 val rows=checkNotNull(result.reply).rows
                 val photos=rows.flatMap{row->images.rows(row.postId).mapIndexed{slot,b->ResultArchive.photo(row.postId,slot,false,b)}}
                 SavedResult(System.currentTimeMillis(),rows,emptyList(),photos)

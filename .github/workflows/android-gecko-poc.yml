@@ -81,17 +81,17 @@ jobs:
       - name: Compile (Kotlin, app and instrumented tests)
         run: |
           set -o pipefail
-          ./gradlew --no-daemon compileDebugKotlin compileDebugAndroidTestKotlin -PGECKO_POC_VERSION_CODE=$((5000 + ${{ github.run_number }})) 2>&1 | tee compile.log || {
+          ./gradlew --no-daemon compileDebugKotlin compileDebugAndroidTestKotlin -PGECKO_POC_VERSION_CODE=$((6000 + ${{ github.run_number }})) 2>&1 | tee compile.log || {
             echo "::group::Compiler errors"; grep -E "^e: |What went wrong|^> " -A3 compile.log | head -80; echo "::endgroup::"; exit 1; }
 
       - name: JVM unit tests
-        run: ./gradlew --no-daemon testDebugUnitTest -PGECKO_POC_VERSION_CODE=$((5000 + ${{ github.run_number }}))
+        run: ./gradlew --no-daemon testDebugUnitTest -PGECKO_POC_VERSION_CODE=$((6000 + ${{ github.run_number }}))
 
       - name: Pilot snapshot against unchanged pinned backend contract (synthetic, no HTTP)
         run: node pilot/verify-batch.cjs app/build/pilot-fixture.json
 
       - name: Assemble debug APKs
-        run: ./gradlew --no-daemon assembleDebug -PGECKO_POC_VERSION_CODE=$((5000 + ${{ github.run_number }}))
+        run: ./gradlew --no-daemon assembleDebug -PGECKO_POC_VERSION_CODE=$((6000 + ${{ github.run_number }}))
 
       - name: Verify APK identity, signature and bundled extension
         run: |
@@ -162,7 +162,7 @@ jobs:
           force-avd-creation: true
           script: |
             adb logcat -c || true
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.PhotoBindingInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.GroupArchiveInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherLinkInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherPairingUiInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.DesktopConsentInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ArchiveProcessInstrumentedTest#a_seed || (adb logcat -d -s AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)

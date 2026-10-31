@@ -3,7 +3,7 @@ package pl.jakubokruszek.flipwatcher.geckopoc
 import java.net.URI
 
 /** One newly consented reload of an approved root, desktop settings, no collector or upload. */
-class DesktopTrial(private val target: String, private val now: () -> Long, private val fixture: Boolean = false, private val groupId:String=PocPolicy.APPROVED_GROUP_ID) {
+class DesktopTrial(private val target: String, private val now: () -> Long, private val fixture: Boolean = false, private val groupId:String=PocPolicy.APPROVED_GROUP_ID, private val allowRootQuery:Boolean=false) {
     enum class Phase { ARMING, NAVIGATION, LOCATION, PORT, FRESHNESS, PAGE, FOCUS, READING }
     var phase=Phase.ARMING; private set
     var active=false; private set
@@ -16,7 +16,7 @@ class DesktopTrial(private val target: String, private val now: () -> Long, priv
     private var deadline=0L
     private fun root(raw:String):Boolean = runCatching {
         val u=URI(raw);val group=if(fixture)FIXTURE_GROUP_ID else groupId
-        u.rawUserInfo==null && u.rawFragment==null && (fixture || u.rawQuery==null) && u.rawPath.trimEnd('/')=="/groups/$group" &&
+        u.rawUserInfo==null && u.rawFragment==null && (fixture || allowRootQuery || u.rawQuery==null) && u.rawPath.trimEnd('/')=="/groups/$group" &&
             (if(fixture) u.scheme=="http" && u.host=="127.0.0.1" && u.rawAuthority==URI(target).rawAuthority
              else u.scheme=="https" && u.port==-1 && u.host in setOf("facebook.com","www.facebook.com","m.facebook.com"))
     }.getOrDefault(false)
