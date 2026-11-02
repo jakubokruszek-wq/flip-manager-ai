@@ -233,7 +233,7 @@ class PocActivity : ComponentActivity() {
     override fun onResume(){super.onResume();WatcherAutomation.uiVisible=true;if(!reviewWorking())runCatching{session?.setActive(true)};window.decorView.post{showSavedResult();showPendingPhotosReport();showPendingReviewReport();showPendingOcrReport();showPendingWatcherResult()}}
 
     override fun onPause() {
-        automationScheduleDialog?.dismiss();automationTimeDialog?.dismiss()
+        automationStatusDialog?.dismiss();automationScheduleDialog?.dismiss();automationTimeDialog?.dismiss()
         ocrConsentDialog?.dismiss();ocrConsentDialog=null;cancelOcr("PAUSED")
         reviewConsentDialog?.dismiss();reviewConsentDialog=null;cancelReview("PAUSED")
         desktopConsentDialog?.dismiss();desktopConsentDialog=null
@@ -934,18 +934,23 @@ class PocActivity : ComponentActivity() {
             }.onFailure{error.text="Nie udało się zapisać godzin. Dotychczasowy harmonogram pozostaje zachowany."}
         }
     }
+    internal var automationStatusDialog:AlertDialog?=null;private set
     private fun automationSettings(){
-        val enabled=WatcherAutomation.enabled(this)
         lifecycleScope.launch {
             val status=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){runCatching{WatcherOutbox(this@PocActivity).use{it.status()}}.getOrDefault("Nie udało się odczytać dziennika. Baza pozostaje zachowana.")}
-            if(isDestroyed)return@launch
+            if(isDestroyed||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return@launch
+            showAutomationSettings(status)
+        }
+    }
+    internal fun showAutomationSettings(status:String){
+            val enabled=WatcherAutomation.enabled(this)
             val times=runCatching{WatcherAutomation.schedule(this@PocActivity)}.getOrDefault(AutomationPolicy.defaultMinutes)
             val hours=times.joinToString(" • ",transform=AutomationPolicy::label)
             val next=AutomationPolicy.next(java.time.Instant.now(),java.time.ZoneId.systemDefault(),times).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("dd.MM HH:mm"))
             val actions=android.widget.LinearLayout(this@PocActivity).apply{orientation=android.widget.LinearLayout.VERTICAL;setPadding(24,8,24,8)}
             val dialog=AlertDialog.Builder(this@PocActivity).setTitle("Automat: "+if(enabled)"włączony" else "wyłączony")
-                .setMessage("Godziny: $hours\nNastępne okno: $next (czas telefonu).\n\nAutomat skanuje w tle po opuszczeniu aplikacji. Skan ręczny wymaga otwartego ekranu aplikacji. Android może opóźnić start; po wymuszonym zatrzymaniu trzeba ponownie otworzyć aplikację.\n\nOferty i przypisane miniatury trafiają do sparowanego Managera. Kolejka ponawia wysyłkę bez duplikatów. Logowanie i baza pozostają na telefonie. CAPTCHA wymaga ręcznej obsługi.\n\n"+status)
-                .setView(actions).setNegativeButton("Zamknij",null)
+                .setView(android.widget.ScrollView(this).apply{tag="automation.scroll";isFillViewport=false;addView(actions)})
+                .setNegativeButton("Zamknij",null)
                 .setNeutralButton("Ponów wysyłkę"){_,_->lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO){WatcherOutbox(this@PocActivity).use{it.retry()};if(WatcherAutomation.enabled(this@PocActivity))WatcherAutomation.retry(this@PocActivity)}}
                 .setPositiveButton(if(enabled)"Wyłącz automat" else "Włącz automat"){_,_->
                     if(enabled)WatcherAutomation.configure(this@PocActivity,false)
@@ -967,8 +972,13 @@ class PocActivity : ComponentActivity() {
             actions.addView(android.widget.Button(this@PocActivity).apply{
                 text="Ustawienia Androida";setOnClickListener{startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:$packageName")))}
             })
+            actions.addView(android.widget.TextView(this).apply{
+                tag="automation.status";text="Godziny: $hours\nNastępne okno: $next (czas telefonu).\n\nAutomat skanuje w tle po opuszczeniu aplikacji. Skan ręczny wymaga otwartego ekranu aplikacji. Android może opóźnić start; po wymuszonym zatrzymaniu trzeba ponownie otworzyć aplikację.\n\nOferty i przypisane miniatury trafiają do sparowanego Managera. Kolejka ponawia wysyłkę bez duplikatów. Logowanie i baza pozostają na telefonie. CAPTCHA wymaga ręcznej obsługi.\n\n"+status
+                setTextIsSelectable(true)
+            })
+            automationStatusDialog?.dismiss();automationStatusDialog=dialog
+            dialog.setOnDismissListener{if(automationStatusDialog===dialog)automationStatusDialog=null}
             dialog.show()
-        }
     }
 
     private fun watcherConnection(){
