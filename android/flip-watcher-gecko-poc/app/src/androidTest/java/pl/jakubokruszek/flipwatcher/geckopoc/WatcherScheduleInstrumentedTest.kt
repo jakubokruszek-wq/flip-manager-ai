@@ -43,4 +43,27 @@ class WatcherScheduleInstrumentedTest {
             prefs.edit().putString("scan_minutes",old).putLong("schedule_since",since).commit()
         }
     }
+    @Test fun longJournalCannotHideScheduleButtonOnCompactDialog() {
+        ActivityScenario.launch(PocActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                activity.showAutomationSettings((1..200).joinToString("\n"){"SCAN_STARTED ($it)"})
+                val dp=activity.resources.displayMetrics.density
+                activity.automationStatusDialog!!.window!!.setLayout((320*dp).toInt(),(480*dp).toInt())
+            }
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            scenario.onActivity { activity ->
+                val dialog=activity.automationStatusDialog!!
+                val decor=dialog.window!!.decorView
+                val button=decor.findViewWithTag<Button>("automation.edit")
+                val visible=android.graphics.Rect()
+                assertTrue("Edit hours must be visible before scrolling the journal",button.getGlobalVisibleRect(visible))
+                assertEquals("The whole edit control must fit",button.height,visible.height())
+                val scroll=decor.findViewWithTag<android.widget.ScrollView>("automation.scroll")
+                assertTrue("Long journal must scroll",scroll.getChildAt(0).height>scroll.height)
+                button.performClick()
+                assertNull(activity.automationStatusDialog)
+                assertTrue(activity.automationScheduleDialog!!.isShowing)
+            }
+        }
+    }
 }
