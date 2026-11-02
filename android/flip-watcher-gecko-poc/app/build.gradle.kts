@@ -47,8 +47,8 @@ android {
         applicationId = "pl.jakubokruszek.flipwatcher.geckopoc"
         minSdk = 26
         targetSdk = 36
-        versionCode = providers.gradleProperty("GECKO_POC_VERSION_CODE").orElse("7000").get().toInt()
-        versionName = "0.5.70-gecko-poc"
+        versionCode = providers.gradleProperty("GECKO_POC_VERSION_CODE").orElse("8000").get().toInt()
+        versionName = "0.5.71-gecko-poc"
         buildConfigField("String", "COLLECTOR_CORE_SHA256", "\"$collectorCoreSha256\"")
         // Transfers require explicit automation opt-in and paired device credentials.
         buildConfigField("boolean", "LIVE_UPLOAD_ENABLED", "true")
@@ -137,6 +137,7 @@ dependencies {
     // Android's org.json is a stub on the JVM; tests use the real library.
     testImplementation("org.json:json:20240303")
 
+    androidTestImplementation("androidx.work:work-testing:2.10.5")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:core-ktx:1.6.1")
