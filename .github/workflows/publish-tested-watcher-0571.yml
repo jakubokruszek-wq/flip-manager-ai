@@ -7,7 +7,7 @@ permissions:
   contents: read
 concurrency:
   group: publish-tested-watcher-0571
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   publish:
     runs-on: ubuntu-22.04
@@ -18,13 +18,13 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: jakubokruszek-wq/flip-manager-ai
-      TESTED_SHA: 53c17c2a2f3191a8502325614950133c163dfc71
+      TESTED_SHA: 274347d5fad1b59a418c5e7ea503e88e79c1a166
     steps:
       - name: Require complete successful Android verification for the exact source
         run: |
           set -euo pipefail
           for attempt in $(seq 1 120); do
-            gh api "repos/$REPO/actions/runs/41507152176" > verified-run.json
+            gh api "repos/$REPO/actions/runs/41507860241" > verified-run.json
             test "$(jq -r .head_sha verified-run.json)" = "$TESTED_SHA"
             status="$(jq -r .status verified-run.json)"
             conclusion="$(jq -r .conclusion verified-run.json)"
@@ -45,17 +45,17 @@ jobs:
           jq -e '.code == "PAIRING_REQUIRED"' manager-check.json
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: flip-watcher-gecko-poc-arm64-532
+          name: flip-watcher-gecko-poc-arm64-534
           repository: jakubokruszek-wq/flip-manager-ai
-          run-id: 41507152176
+          run-id: 41507860241
           github-token: ${{ github.token }}
           path: tested-apk
       - name: Verify original APK digest and publish without rebuilding
         run: |
           set -euo pipefail
-          gh api "repos/$REPO/actions/jobs/125489255031" > build-job.json
-          jq -e '.run_id == 41507152176 and .conclusion == "success"' build-job.json
-          gh api --allow-escape-sequences "repos/$REPO/actions/jobs/125489255031/logs" > build-job.log
+          gh api "repos/$REPO/actions/jobs/125492038193" > build-job.json
+          jq -e '.run_id == 41507860241 and .conclusion == "success"' build-job.json
+          gh api --allow-escape-sequences "repos/$REPO/actions/jobs/125492038193/logs" > build-job.log
           python3 - <<'PYCODE'
           import re
           from pathlib import Path
@@ -76,7 +76,7 @@ jobs:
 
           Instaluj jako aktualizację 0.5.70, bez odinstalowywania ani kasowania danych. Zachowuje istniejącą szyfrowaną kolejkę, klucze ponowień, potwierdzenia, bazę lokalną, logowanie, parowanie i godziny. Po aktualizacji wybierz Skan teraz w tle, aby zlecić obsługę kolejki i skan. Nie trzeba ponownie parować. Android nadal może opóźniać zadania ze względu na baterię, sieć i limity zadań.
 
-          Nieprzebudowany APK z run 41507152176, źródło 53c17c2a2f3191a8502325614950133c163dfc71, versionCode 8532. Publikacja wymaga pełnego sukcesu kompilacji, JVM, JS, kontraktu/importera i testów Androida. Nowy test rzeczywistego CoroutineWorker zapisuje 31 ofert w szyfrowanej kolejce, symuluje utratę potwierdzenia, sprawdza niezmienność klucza i treści ponowienia oraz 31 unikalnych przyjęć bez powtórnej wysyłki po potwierdzeniu. Wstrzyknięty mechanizm odmawia każdego startu usługi foreground, a test wymaga zera takich startów. Sprawdza także wysyłkę przy widocznym UI. Testy używają lokalnych danych i syntetycznego odbiorcy; nie są potwierdzeniem działania na prywatnym koncie Facebook użytkownika.
+          Nieprzebudowany APK z run 41507860241, źródło 274347d5fad1b59a418c5e7ea503e88e79c1a166, versionCode 8534. Publikacja wymaga pełnego sukcesu kompilacji, JVM, JS, kontraktu/importera i testów Androida. Nowy test rzeczywistego CoroutineWorker zapisuje 31 ofert w szyfrowanej kolejce, symuluje utratę potwierdzenia, sprawdza niezmienność klucza i treści ponowienia oraz 31 unikalnych przyjęć bez powtórnej wysyłki po potwierdzeniu. Wstrzyknięty mechanizm odmawia każdego startu usługi foreground, a test wymaga zera takich startów. Sprawdza także wysyłkę przy widocznym UI. Testy używają lokalnych danych i syntetycznego odbiorcy; nie są potwierdzeniem działania na prywatnym koncie Facebook użytkownika.
           NOTES
           cat apk.sha256 >> release-notes.md
           gh release create gecko-poc-0.5.71 flip-watcher-0.5.71-arm64.apk --repo "$REPO" --target "$TESTED_SHA" --title 'Flip Watcher 0.5.71 — wysyłka bez blokady usługi' --prerelease --notes-file release-notes.md
