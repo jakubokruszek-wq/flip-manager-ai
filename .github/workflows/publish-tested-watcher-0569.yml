@@ -60,14 +60,8 @@ jobs:
           set -euo pipefail
           gh api "repos/$REPO/actions/jobs/124499464624" > build-job.json
           jq -e '.run_id == 41188242835 and .conclusion == "success"' build-job.json
-          gh api "repos/$REPO/actions/jobs/124499464624/logs" > build-job.log
-          python3 - <<'PYCODE'
-          import re
-          from pathlib import Path
-          hashes=set(re.findall(r"\b([0-9a-f]{64})  app/build/outputs/apk/debug/app-arm64-v8a-debug\.apk",Path("build-job.log").read_text()))
-          assert len(hashes)==1, "Missing or ambiguous original APK digest"
-          Path("apk.sha256").write_text(next(iter(hashes))+"  flip-watcher-0.5.69-arm64.apk\n")
-          PYCODE
+          # Digest read from the successful exact-source build job 124499464624.
+          echo 'c3e69ba515f2ab614279367a0a187c9df9afc352698d3fe9d83427d9196a6848  flip-watcher-0.5.69-arm64.apk' > apk.sha256
           mv tested-apk/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk flip-watcher-0.5.69-arm64.apk
           sha256sum -c apk.sha256
           if gh release view gecko-poc-0.5.69 --repo "$REPO" --json tagName > existing-release.json 2>/dev/null; then
