@@ -88,6 +88,11 @@ class WatcherAutomationInstrumentedTest {
             assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork())
             assertEquals("Acknowledged snapshots must not be sent again",32,calls)
             assertEquals("No foreground service may be requested",0,foregroundAttempts)
+            WatcherAutomation.lock.lock()
+            try {
+                assertEquals("Duplicate work must not wait past its Android job budget",
+                    androidx.work.ListenableWorker.Result.success(),kotlinx.coroutines.withTimeout(1000){worker().doWork()})
+            }finally{WatcherAutomation.lock.unlock()}
         }finally{
             WatcherAutomation.configure(context,false)
             prefs.edit().putBoolean("enabled",oldEnabled).putString("completed_slot",oldCompleted).commit();WatcherAutomation.uiVisible=oldVisible

@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.work.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.CancellationException
@@ -81,10 +80,15 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
     internal open fun credentials(context:Context)=WatcherLink.load(context)
     internal open fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=WatcherUpload.send(credentials,item)
     internal open fun groups(credentials:WatcherLink.Credentials)=WatcherLink.groups(credentials,verifyDevice=true)
-    override suspend fun doWork():Result=WatcherAutomation.lock.withLock {
+    override suspend fun doWork():Result {
+        // A duplicate calendar/kick must not spend its job budget waiting behind another scan.
+        if(!WatcherAutomation.lock.tryLock())return Result.success()
+        return try{runWork()}finally{WatcherAutomation.lock.unlock()}
+    }
+    private suspend fun runWork():Result {
         val context=applicationContext
-        if(!BuildConfig.LIVE_UPLOAD_ENABLED||!WatcherAutomation.enabled(context))return@withLock Result.success()
-        withContext(Dispatchers.IO){
+        if(!BuildConfig.LIVE_UPLOAD_ENABLED||!WatcherAutomation.enabled(context))return Result.success()
+        return withContext(Dispatchers.IO){
             WatcherOutbox(context).use { queue ->
                 try {
                     // Ordinary WorkManager jobs need no background-started foreground service.
