@@ -1,0 +1,7 @@
+# 0.5.71: foreground service refusal must not block saved offers
+
+A real phone reported 31 pending snapshots and repeated ANDROID_FOREGROUND_START_DENIED. The worker previously called setForeground before upload, so Android denying the dataSync foreground service prevented draining already saved offers.
+
+The worker now uses ordinary WorkManager jobs without starting a foreground service. It drains frozen queued snapshots even while the UI is visible; only Gecko scanning waits for the UI to leave. Each run has an eight-minute cooperative budget, reserves two minutes before opening another group, and uses durable per-group scan receipts and a rotating cursor to continue in another job. A nine-minute outer bound protects against accidental overruns. Existing queue bytes, idempotency keys, receipts, login and schedule stay unchanged. Android can still defer ordinary jobs because of battery, network and job quotas; exact start times are not guaranteed.
+
+Regression: the real CoroutineWorker drains 31 encrypted snapshots with the UI marked visible. A synthetic receiver accepts the first snapshot but loses its receipt; retry must preserve the exact key and body, produce 31 unique accepted snapshots, persist all acknowledgments and never resend them. No real credentials or external requests are used by the fixture. Existing offscreen Gecko and full Android regression tests remain required for release. This verifies the saved-offer path without claiming a private Facebook session has been tested.

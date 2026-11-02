@@ -42,4 +42,61 @@ class WatcherAutomationInstrumentedTest {
             assertTrue(saved.photos.all{p->saved.rows.any{it.postId==p.postId}&&p.jpeg.isNotEmpty()})
         }finally{server.close()}
     }
+    @Test fun workerDrains31QueuedOffersWhileUiVisibleAndReplaysLostReceiptWithoutDuplicates()=runBlocking {
+        context.deleteDatabase("watcher-outbox-v1.db")
+        val prefs=WatcherAutomation.preferences(context)
+        val oldEnabled=WatcherAutomation.enabled(context);val oldVisible=WatcherAutomation.uiVisible
+        val oldCompleted=prefs.getString("completed_slot",null)
+        prefs.edit().putBoolean("enabled",true).remove("completed_slot").commit();WatcherAutomation.uiVisible=false
+        val accepted=linkedMapOf<String,String>();var calls=0;var loseReceipt=true;var foregroundAttempts=0
+        val credentials=WatcherLink.Credentials(device,"synthetic-credential-unused-over-network")
+        val factory=object:androidx.work.WorkerFactory(){
+            override fun createWorker(appContext:Context,name:String,parameters:androidx.work.WorkerParameters):androidx.work.ListenableWorker =
+                object:WatcherAutomationWorker(appContext,parameters){
+                    override fun credentials(context:Context)=credentials
+                    override fun groups(credentials:WatcherLink.Credentials):List<WatcherGroup> { check(!WatcherAutomation.uiVisible){"Browser must not be used while UI is visible"};return emptyList() }
+                    override fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item):String {
+                        calls++
+                        val old=accepted.putIfAbsent(item.id,item.body)
+                        if(old!=null)assertEquals("Retries must preserve the exact frozen body",old,item.body)
+                        if(loseReceipt){loseReceipt=false;throw java.io.IOException("Synthetic lost receipt")}
+                        return "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+                    }
+                }
+        }
+        fun worker()=androidx.work.testing.TestListenableWorkerBuilder<WatcherAutomationWorker>(context).setWorkerFactory(factory)
+            .setForegroundUpdater{_,_,_->
+                foregroundAttempts++
+                androidx.concurrent.futures.CallbackToFutureAdapter.getFuture<Void>{reply->
+                    reply.setException(android.app.ForegroundServiceStartNotAllowedException("Synthetic background start denial"));"denied"
+                }
+            }.build()
+        try {
+            WatcherOutbox(context).use { q ->
+                repeat(31){index->val post=(550000000000100L+index).toString()
+                    val row=result().rows.single().copy(postId=post,permalink=group.url+"posts/$post/")
+                    q.enqueue(device,group,result().copy(rows=listOf(row)))
+                }
+            }
+            assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork())
+            assertEquals(1,accepted.size)
+            WatcherOutbox(context).use{it.retry()}
+            WatcherAutomation.uiVisible=true
+            assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork())
+            WatcherOutbox(context).use{q->assertNull(q.next(device,Long.MAX_VALUE));assertTrue(q.status().contains("sent: 31"))}
+            assertEquals(31,accepted.size);assertEquals(32,calls)
+            assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork())
+            assertEquals("Acknowledged snapshots must not be sent again",32,calls)
+            assertEquals("No foreground service may be requested",0,foregroundAttempts)
+            WatcherAutomation.lock.lock()
+            try {
+                assertEquals("Duplicate work must not wait past its Android job budget",
+                    androidx.work.ListenableWorker.Result.success(),kotlinx.coroutines.withTimeout(1000){worker().doWork()})
+            }finally{WatcherAutomation.lock.unlock()}
+        }finally{
+            WatcherAutomation.configure(context,false)
+            prefs.edit().putBoolean("enabled",oldEnabled).putString("completed_slot",oldCompleted).commit();WatcherAutomation.uiVisible=oldVisible
+            context.deleteDatabase("watcher-outbox-v1.db")
+        }
+    }
 }
