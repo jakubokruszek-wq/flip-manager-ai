@@ -61,6 +61,9 @@ class WatcherScheduleInstrumentedTest {
                 val scroll=decor.findViewWithTag<android.widget.ScrollView>("automation.scroll")
                 assertTrue("Long journal must scroll",scroll.getChildAt(0).height>scroll.height)
                 button.performClick()
+            }
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            scenario.onActivity { activity ->
                 assertNull(activity.automationStatusDialog)
                 assertTrue(activity.automationScheduleDialog!!.isShowing)
             }
