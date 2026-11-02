@@ -1,0 +1,68 @@
+name: Publish tested Flip Watcher 0.5.70
+on:
+  push:
+    branches: ["delivery/watcher-tested-0570"]
+    paths: [".github/workflows/publish-tested-watcher-0570.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: publish-tested-watcher-0570
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: jakubokruszek-wq/flip-manager-ai
+      TESTED_SHA: 3a85d45bfb5c533b033b4434faf6eba67dd363c7
+    steps:
+      - name: Require complete successful Android verification for the exact source
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/actions/runs/41498329135" > verified-run.json
+          test "$(jq -r .head_sha verified-run.json)" = "$TESTED_SHA"
+          jq -e '.status == "completed" and .conclusion == "success"' verified-run.json
+          gh api "repos/$REPO/actions/jobs/125459040323" > build-job.json
+          jq -e '.run_id == 41498329135 and .conclusion == "success"' build-job.json
+          gh api "repos/$REPO/actions/jobs/125459040131" > android-job.json
+          jq -e '.run_id == 41498329135 and .conclusion == "success"' android-job.json
+      - name: Require deployed Manager mobile endpoint
+        run: |
+          set -euo pipefail
+          status="$(curl --silent --show-error --max-time 20 --request POST --header 'Content-Type: application/json' --data '{}' --output manager-check.json --write-out '%{http_code}' https://flip-manager-ai.vercel.app/api/collector/facebook/mobile)"
+          test "$status" = 401
+          jq -e '.code == "PAIRING_REQUIRED"' manager-check.json
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: flip-watcher-gecko-poc-arm64-530
+          repository: jakubokruszek-wq/flip-manager-ai
+          run-id: 41498329135
+          github-token: ${{ github.token }}
+          path: tested-apk
+      - name: Verify original APK digest and publish without rebuilding
+        run: |
+          set -euo pipefail
+          mv tested-apk/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk flip-watcher-0.5.70-arm64.apk
+          echo 'e830beffe94f3ec0b082e848def135ff3340bd48805bc42b4a14ee8d84f202f1  flip-watcher-0.5.70-arm64.apk' | sha256sum -c -
+          if gh release view gecko-poc-0.5.70 --repo "$REPO" --json tagName > existing-release.json 2>/dev/null; then
+            echo "Release already exists; refusing to replace published files."
+            exit 1
+          fi
+          cat > release-notes.md <<'NOTES'
+          Flip Watcher 0.5.70 — widoczna edycja godzin przy długim dzienniku.
+
+          Naprawiono panel automatu: przyciski Godziny skanów, Skan teraz w tle i Ustawienia Androida są na początku jednego przewijanego panelu. Opis i dziennik znajdują się poniżej. Długi dziennik nie wypycha przycisków poza ekran.
+
+          Narzędzia / raport → Automat 3× dziennie / stan → Godziny skanów. Ustaw trzy różne pory i zapisz. Włącz automat i przejdź na ekran główny telefonu. Android może opóźnić skan przy oszczędzaniu baterii lub braku sieci. Po wymuszonym zatrzymaniu otwórz aplikację ponownie. Logowanie i CAPTCHA wymagają ręcznej obsługi.
+
+          Instaluj jako aktualizację 0.5.69, bez odinstalowywania ani usuwania danych. Lokalna baza, logowanie, parowanie i harmonogram pozostają zachowane. Nie trzeba ponownie synchronizować. Bez komputera do pracy i bez nowego płatnego hostingu.
+
+          Nieprzebudowany APK z kompletnego udanego run 41498329135, źródło 3a85d45bfb5c533b033b4434faf6eba67dd363c7, versionCode 7530. Kompilacja, JVM, JS, testy kontraktu/importera i pełne 142 testy Androida zakończyły się sukcesem. Nowy test sprawdza pełną widoczność przycisku i otwarcie edytora przy 200 wpisach dziennika w oknie 320×480 dp. Osobny przebieg push 41498320489 przeszedł kompilację i nowe testy panelu, ale późniejszy test Gecko przerwał emulator device offline; nie jest podstawą publikacji. Testy używają lokalnych danych, nie prywatnego konta Facebook użytkownika.
+
+          SHA256: e830beffe94f3ec0b082e848def135ff3340bd48805bc42b4a14ee8d84f202f1
+          NOTES
+          gh release create gecko-poc-0.5.70 flip-watcher-0.5.70-arm64.apk --repo "$REPO" --target "$TESTED_SHA" --title 'Flip Watcher 0.5.70 — widoczne przyciski automatu' --prerelease --notes-file release-notes.md
