@@ -4,6 +4,7 @@ import { scheduleRadarContinuation } from "@/features/price-radar/server/radar-c
 import { radarSettingsSourcesWereFilteredToEmpty, readRadarSettings } from "@/features/price-radar/server/radar-settings";
 import { latestRadarRun } from "@/features/price-radar/server/radar-run-status";
 import { RADAR_QUALITY_RULES_VERSION } from "@/features/price-radar/types";
+import { ensureRadarWatchdog } from "@/features/price-radar/server/radar-watchdog";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -126,6 +127,7 @@ export async function POST(request: Request) {
  */
 async function handOffToServer(input: { runId: string; ownerId: string; leaseToken: string }, portion: RadarPortionResult, deadlineAt: number): Promise<void> {
   if (portion.status !== "running" || portion.sourceStatuses.olx === "running") return;
+  await ensureRadarWatchdog();
   try {
     if (await releaseRadarRunLease(input)) {
       scheduleRadarContinuation(

@@ -1,4 +1,7 @@
--- Reviewed configuration draft. Do not run as part of a build/deployment.
+-- Optional manual fallback. Do not run as part of a build/deployment.
+-- Production now registers this same timer through the service-only
+-- ensure_price_radar_watchdog RPC after an authenticated scheduler tick or
+-- an operator-started portion. No browser receives its credential.
 --
 -- Why: Radar continues each run itself after every portion, but if that chain
 -- is ever cut (function killed, hand-off rejected, long Retry-After) the run
@@ -13,7 +16,7 @@
 -- lease it is a no-op. The endpoint acknowledges with 202 at once
 -- (x-radar-watchdog: 1) and does the portion after the response.
 --
--- First create Vault secret "price_radar_cron_secret" through the Supabase UI,
+-- For manual setup only: create Vault secret "price_radar_cron_secret" through the Supabase UI,
 -- with the same value as Vercel's PRICE_RADAR_CRON_SECRET. Never paste it here.
 -- Finder, Facebook and OLX jobs are not changed.
 BEGIN;

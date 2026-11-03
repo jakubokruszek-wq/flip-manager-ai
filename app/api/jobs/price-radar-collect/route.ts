@@ -6,6 +6,7 @@ import { radarSettingsSourcesWereFilteredToEmpty, readRadarSettings } from "@/fe
 import { latestRadarRun } from "@/features/price-radar/server/radar-run-status";
 import { isRadarDailyScanDue, radarRunStartedTodayInWarsaw } from "@/features/price-radar/server/radar-scheduler";
 import { RADAR_QUALITY_RULES_VERSION } from "@/features/price-radar/types";
+import { ensureRadarWatchdog } from "@/features/price-radar/server/radar-watchdog";
 
 /**
  * Protected one-portion entry point used by the GitHub Actions Radar scheduler.
@@ -71,6 +72,10 @@ export async function POST(request: Request) {
     });
     return Response.json({ runId: requestedRunId, status: "accepted" }, { status: 202 });
   }
+
+  // Authenticated owner ticks also repair the independent timer. Self-calls
+  // can hit HTTP 508; this timer starts a fresh request without that chain.
+  if (requestedRunId === null) await ensureRadarWatchdog();
 
   if (request.headers.get(RADAR_WATCHDOG_HEADER) === "1" && requestedRunId === null) {
     runAfterResponse(async () => {
