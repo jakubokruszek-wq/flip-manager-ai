@@ -13,15 +13,18 @@ import { canonicalFacebookIdentity } from "@/features/listing-identity";
 type ImportRow = { id: string; listingId: string | null; status: string };
 export type FacebookImportResult = { status: "created" | "updated" | "duplicate"; listingId: string; matchedFilters: string[]; rejectedFilters: Array<{ filterId: string; reasons: string[] }>; calculatedPricePerSqm: number | null; missingFields: string[] };
 
-export async function importFacebookCollectorPayload(deviceId: string, idempotencyKey: string, rawPayload: unknown, options: { mobileSnapshot?: boolean } = {}): Promise<FacebookImportResult> {
+export async function importFacebookCollectorPayload(deviceId: string, idempotencyKey: string, rawPayload: unknown, options: { mobileSnapshot?: boolean; mobileSaleConfirmed?: boolean } = {}): Promise<FacebookImportResult> {
   const payload = normalizeFacebookCollectorPayload(rawPayload);
   const supabase = createAdminClient();
   const existing = await findImport(supabase, deviceId, idempotencyKey);
-  if (existing && existing.status !== "failed" && existing.listingId) return duplicateResult(existing.listingId, payload);
+  if (existing && existing.status !== "failed" && existing.listingId) {
+    if (options.mobileSaleConfirmed) await upsertMetadata(supabase, existing.listingId, payload, true, true);
+    return duplicateResult(existing.listingId, payload);
+  }
   const importRow = existing ?? await createImport(supabase, deviceId, idempotencyKey, payload);
   try {
     const saved = await upsertListing(supabase, payload, options.mobileSnapshot);
-    await upsertMetadata(supabase, saved.id, payload, options.mobileSnapshot);
+    await upsertMetadata(supabase, saved.id, payload, options.mobileSnapshot, options.mobileSaleConfirmed);
     const filters = options.mobileSnapshot ? { matchedFilters: [], rejectedFilters: [] } : await applyFilters(supabase, saved.id, payload);
     const result: FacebookImportResult = { status: saved.status, listingId: saved.id, matchedFilters: filters.matchedFilters, rejectedFilters: filters.rejectedFilters, calculatedPricePerSqm: payload.pricePerSqm, missingFields: missingFields(payload) };
     const { error } = await supabase.from("collector_imports").update({ listing_id: saved.id, status: "imported", error_message: null, result }).eq("id", importRow.id);
@@ -99,12 +102,12 @@ async function upsertListing(supabase: ReturnType<typeof createAdminClient>, pay
   return { id: data.id, status: isRecord(exact) && typeof exact.id === "string" ? "updated" : "created" };
 }
 
-async function upsertMetadata(supabase: ReturnType<typeof createAdminClient>, listingId: string, payload: NormalizedFacebookImport, mobileSnapshot = false): Promise<void> {
+async function upsertMetadata(supabase: ReturnType<typeof createAdminClient>, listingId: string, payload: NormalizedFacebookImport, mobileSnapshot = false, mobileSaleConfirmed = false): Promise<void> {
   const existing = await supabase.from("listing_source_metadata").select("metadata,group_name,author_name,published_at").eq("source", "facebook").eq("source_post_url", payload.normalizedPostUrl).maybeSingle();
   if (existing.error) throw new Error("Nie udało się odczytać workflow posta Facebooka.");
   const previous = isRecord(existing.data?.metadata) ? existing.data.metadata : {};
   const identity = canonicalFacebookIdentity({ source: "facebook", sourcePostUrl: payload.normalizedPostUrl, externalListingId: payload.externalListingId });
-  const { error } = await supabase.from("listing_source_metadata").upsert({ listing_id: listingId, source: "facebook", source_post_url: payload.normalizedPostUrl, group_name: payload.groupName ?? (mobileSnapshot ? existing.data?.group_name ?? null : null), author_name: payload.authorName ?? (mobileSnapshot ? existing.data?.author_name ?? null : null), published_at: payload.publishedAt ?? (mobileSnapshot ? existing.data?.published_at ?? null : null), collected_at: payload.collectedAt, metadata: { ...previous, source: "collector", postId: identity.postId ?? previous.postId ?? null, firstImportedAt: typeof previous.firstImportedAt === "string" ? previous.firstImportedAt : payload.collectedAt, imageCount: mobileSnapshot ? Math.max(typeof previous.imageCount === "number" ? previous.imageCount : 0, payload.imageUrls.length) : payload.imageUrls.length, ...(mobileSnapshot ? { androidSnapshot: true } : {}), workflowStatus: typeof previous.workflowStatus === "string" ? previous.workflowStatus : mobileSnapshot ? "review" : "new" } }, { onConflict: "source,source_post_url" });
+  const { error } = await supabase.from("listing_source_metadata").upsert({ listing_id: listingId, source: "facebook", source_post_url: payload.normalizedPostUrl, group_name: payload.groupName ?? (mobileSnapshot ? existing.data?.group_name ?? null : null), author_name: payload.authorName ?? (mobileSnapshot ? existing.data?.author_name ?? null : null), published_at: payload.publishedAt ?? (mobileSnapshot ? existing.data?.published_at ?? null : null), collected_at: payload.collectedAt, metadata: { ...previous, source: "collector", postId: identity.postId ?? previous.postId ?? null, firstImportedAt: typeof previous.firstImportedAt === "string" ? previous.firstImportedAt : payload.collectedAt, imageCount: mobileSnapshot ? Math.max(typeof previous.imageCount === "number" ? previous.imageCount : 0, payload.imageUrls.length) : payload.imageUrls.length, ...(mobileSnapshot ? { androidSnapshot: true } : {}), ...(mobileSaleConfirmed ? { androidSaleConfirmed: true, ...(previous.listingIntent === undefined || previous.listingIntent === null || previous.listingIntent === "UNKNOWN" ? { listingIntent: "SELL_PROPERTY", intentSource: "ANDROID_TYPED_CLASSIFIER" } : {}) } : {}), workflowStatus: typeof previous.workflowStatus === "string" ? previous.workflowStatus : mobileSnapshot ? "review" : "new" } }, { onConflict: "source,source_post_url" });
   if (error) throw new Error("Nie udało się zapisać metadanych posta Facebooka.");
 }
 

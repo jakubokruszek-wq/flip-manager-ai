@@ -5,7 +5,7 @@ import { createMobilePost, parseMobilePost } from "./facebook-mobile.ts";
 
 const device="12345678-1234-1234-1234-123456789012", listing="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 function snapshot() {
-  return { version:1, groupId:"lodzsprzedazzakupwynajem", row: { postId:"123456789", permalink:"https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/123456789/", layer:"DOM", price:430000, priceSource:"EXPLICIT_TOTAL", area:50, rooms:2, district:"Bałuty", neighborhood:null, street:null, intent:"SELL_PROPERTY", usable:true, photos:0, qualification:"CLASSIFIER" }, photos:[] as Array<{slot:number;jpeg:string}> };
+  return { version:1, groupId:"lodzsprzedazzakupwynajem", row: { postId:"123456789", permalink:"https://www.facebook.com/groups/lodzsprzedazzakupwynajem/posts/123456789/", layer:"DOM", price:430000, priceSource:"EXPLICIT_TOTAL", area:50, rooms:2, district:"Bałuty", neighborhood:null, street:null, intent:"SELL_PROPERTY", usable:true, photos:0, qualification:"CLASSIFIER" }, photos:[{slot:0,jpeg:jpeg()}] as Array<{slot:number;jpeg:string}> };
 }
 // Synthetic SOF headers test transport bounds; Gecko instrumentation tests rendering.
 const jpeg=(w=192,h=144)=>Buffer.from([0xff,0xd8,0xff,0xc0,0,11,8,h>>8,h&255,w>>8,w&255,1,1,0x11,0,0xff,0xd9]).toString("base64");
@@ -51,4 +51,34 @@ test("no receipt on failed persistence, revoked token, disabled source or oversi
   assert.equal((await createMobilePost(deps)(request(frozen(),false))).status,401);
   assert.equal((await createMobilePost({...deps,allowed:async()=>false})(request())).status,409);
   const response=await createMobilePost(deps)(new Request("https://manager.test",{method:"POST",headers:{authorization:"Bearer paired"},body:"x".repeat(512*1024+1)}));assert.equal(response.status,413);
+});
+
+// Text on a genuine bound JPEG is allowed: no OCR or image-content classifier is invoked here.
+test("require a confirmed property sale and at least one stored image, without inspecting image text", async () => {
+  let uploads=0, imports=0;
+  const handler=createMobilePost({authenticate:async()=>({id:device}),allowed:async()=>true,authStatus:()=>null,
+    upload:async()=>{uploads++;return ["https://storage.test/text-poster.jpg"];},
+    importPost:async()=>{imports++;return {listingId:listing,status:"created"};}});
+  const missing=snapshot();missing.photos=[];
+  assert.equal((await handler(request(frozen(missing)))).status,422);
+  for(const intent of ["UNKNOWN","BUY_PROPERTY","RENT_OFFER","RENT_WANTED","SERVICE","OTHER"]){
+    const row=snapshot();row.row.intent=intent;assert.equal((await handler(request(frozen(row)))).status,422);
+  }
+  for(const qualification of ["NO_TEXT","FOREIGN_CITY","NOT_PROPERTY","INTENT","CONFLICT"]){
+    const row=snapshot();row.row.qualification=qualification;assert.equal((await handler(request(frozen(row)))).status,422);
+  }
+  assert.equal(uploads,0);assert.equal(imports,0);
+  assert.equal((await handler(request())).status,201);assert.equal(uploads,1);assert.equal(imports,1);
+});
+
+test("an upload that returned no stored image cannot create an offer or receipt", async () => {
+  let imports=0;const handler=createMobilePost({authenticate:async()=>({id:device}),allowed:async()=>true,authStatus:()=>null,upload:async()=>[],
+    importPost:async()=>{imports++;return {listingId:listing,status:"created"};}});
+  assert.equal((await handler(request())).status,503);assert.equal(imports,0);
+});
+
+test("previously removed posts stop before storing photos or retrying import",async()=>{
+ let writes=0;const handler=createMobilePost({authenticate:async()=>({id:device}),allowed:async()=>true,removed:async()=>true,authStatus:()=>null,
+  upload:async()=>{writes++;return [];},importPost:async()=>{writes++;return {listingId:listing,status:"created"};}});
+ assert.equal((await handler(request())).status,410);assert.equal(writes,0);
 });

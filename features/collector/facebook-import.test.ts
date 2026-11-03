@@ -109,3 +109,16 @@ test("mobile snapshot adds bound photos without replacing authoritative fields o
     assert.equal(state.reconciliationInputs.length,0,"a typed snapshot cannot reject a richer existing listing");
   } finally { state.mobile = false; }
 });
+
+test("validated Android sale evidence is stored as a classifier sidecar, without fabricated post content",async()=>{
+ state.mobile=true;state.metadataUpsertPayloads=[];
+ try{
+  await importFacebookCollectorPayload("device-1","sale-confirmed",{
+   sourcePostUrl:"https://www.facebook.com/groups/new-route/posts/4486483384955652/",title:"Oferta z Facebooka",content:null,
+   price:439000,area:50,rooms:2,imageUrls:["https://storage.test/text-poster.jpg"],
+  },{mobileSnapshot:true,mobileSaleConfirmed:true});
+  const metadata=state.metadataUpsertPayloads[0].metadata as Record<string,unknown>;
+  assert.equal(metadata.androidSaleConfirmed,true);assert.equal(metadata.listingIntent,"SELL_PROPERTY");
+  assert.equal(metadata.intentSource,"ANDROID_TYPED_CLASSIFIER");assert.equal("postText" in metadata,false);
+ }finally{state.mobile=false;}
+});

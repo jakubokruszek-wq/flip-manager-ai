@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 export class MobileInputError extends Error {}
+export class MobileQualityError extends Error {}
 export type MobilePost = {
   groupId: string;
   postId: string;
@@ -42,6 +43,8 @@ export function parseMobilePost(raw: string, deviceId: string, key: string): Mob
   check(district === null || ["Bałuty", "Widzew", "Polesie", "Śródmieście", "Górna"].includes(district));
   const location = [district, text(r.neighborhood, 40), text(r.street, 80)].filter(Boolean).join(", ") || null;
   check(Array.isArray(j.photos) && j.photos.length <= 3);
+  if (r.intent !== "SELL_PROPERTY" || r.usable !== true || !["CLASSIFIER", "CANDIDATE", "MISSING_FIELDS"].includes(String(r.qualification))) throw new MobileQualityError("SALE_NOT_CONFIRMED");
+  if (j.photos.length < 1) throw new MobileQualityError("PHOTO_REQUIRED");
   const seen = new Set<number>();
   const photos = j.photos.map(p => {
     check(record(p)); fields(p, ["slot", "jpeg"]);
@@ -70,6 +73,7 @@ export function parseMobilePost(raw: string, deviceId: string, key: string): Mob
 type Dependencies = {
   authenticate(token: string): Promise<{ id: string }>;
   allowed(group: string): Promise<boolean>;
+  removed?(post:MobilePost):Promise<boolean>;
   upload(device: string, post: MobilePost): Promise<string[]>;
   importPost(device: string, key: string, post: MobilePost, images: string[]): Promise<{ listingId: string; status: string }>;
   authStatus(error: unknown): number | null;
@@ -90,10 +94,13 @@ export function createMobilePost(deps: Dependencies) {
       const key = request.headers.get("idempotency-key") ?? "";
       const post = parseMobilePost(raw, device.id, key);
       if (!await deps.allowed(post.groupId)) return Response.json({ code: "SOURCE_DISABLED" }, { status: 409 });
+      if (await deps.removed?.(post)) return Response.json({code:"POST_PREVIOUSLY_REMOVED"},{status:410});
       const images = await deps.upload(device.id, post);
+      if (images.length !== post.photos.length || images.some(url => !url.startsWith("https://"))) throw new Error("PHOTO_PERSISTENCE_INCOMPLETE");
       const result = await deps.importPost(device.id, key, post, images);
       return Response.json({ ...result, idempotencyKey: key }, { status: result.status === "created" ? 201 : 200 });
     } catch (error) {
+      if (error instanceof MobileQualityError) return Response.json({ code: error.message }, { status: 422 });
       const status = deps.authStatus(error) ?? (error instanceof MobileInputError ? 422 : 503);
       return Response.json({ code: status === 422 ? "INVALID_MOBILE_POST" : status === 401 ? "PAIRING_REQUIRED" : "MOBILE_IMPORT_RETRY" }, { status });
     }

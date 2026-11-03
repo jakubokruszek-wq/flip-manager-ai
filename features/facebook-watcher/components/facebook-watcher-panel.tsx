@@ -40,6 +40,8 @@ const GALLERY_REPAIR_ERROR_MESSAGES: Record<string, string> = {
 };
 
 export function FacebookWatcherPanel() {
+  const [cleanupDate,setCleanupDate]=useState("");
+  const cleanupLock=useRef(false);
   const handledDeepLink=useRef(false);
   const analysisButtonsRef=useRef(new Map<string,HTMLButtonElement>());
   const registerAnalysisButton=useCallback((id:string,button:HTMLButtonElement|null)=>{if(button)analysisButtonsRef.current.set(id,button);else analysisButtonsRef.current.delete(id);},[]);
@@ -89,6 +91,25 @@ export function FacebookWatcherPanel() {
     if(outcome.kind==="cleared"){setListings([]);showToast("success","Historia Watchera została wyczyszczona.");}
     else if(outcome.kind!=="cancelled"&&outcome.kind!=="already-running")showToast("error",outcome.message);
   };
+  const cleanupSavedBefore=async()=>{
+    if(cleanupLock.current||historyClearing||!cleanupDate)return;
+    const before=new Date(cleanupDate+"T00:00:00").toISOString();
+    cleanupLock.current=true;setHistoryClearing(true);
+    try{
+      const previewResponse=await fetch(`/api/facebook-watcher/history/by-saved-date?before=${encodeURIComponent(before)}`,{cache:"no-store"});
+      const preview=await previewResponse.json() as {total?:number;protectedCount?:number;token?:string;code?:string};
+      if(!previewResponse.ok||typeof preview.total!=="number"||!preview.token)throw new Error(preview.code??"CLEANUP_PREVIEW_FAILED");
+      if(!window.confirm(`Usunąć ${preview.total} ofert Facebooka zapisanych w bazie przed ${cleanupDate}? Chronione rekordy CRM, Deal Room i powiązania innych źródeł pozostają (${preview.protectedCount??0}). Usunięte posty nie wrócą przez ponowienie wysyłki. Android ma osobne czyszczenie lokalne.`))return;
+      const response=await fetch("/api/facebook-watcher/history/by-saved-date",{method:"DELETE",credentials:"same-origin",headers:{"Content-Type":"application/json","x-facebook-watcher-action":"clear-watcher-history"},body:JSON.stringify({before,token:preview.token})});
+      const result=await response.json() as {listingIds?:string[];code?:string};
+      if(!response.ok||!Array.isArray(result.listingIds))throw new Error(result.code??"CLEANUP_FAILED");
+      const removed=new Set(result.listingIds);setListings(current=>current.filter(item=>!removed.has(item.listingId)));
+      showToast("success",`Usunięto starsze oferty: ${result.listingIds.length}.`);
+    }catch(error){
+      const code=error instanceof Error?error.message:"";
+      showToast("error",code==="CLEANUP_PREVIEW_CHANGED"?"Baza zmieniła się od podglądu. Przygotuj nowy podgląd.":code==="ACTIVE_FACEBOOK_WORK"?"Poczekaj na zakończenie aktywnego skanu Facebooka.":"Nie potwierdzono czyszczenia. Odśwież stan i spróbuj ponownie.");
+    }finally{cleanupLock.current=false;setHistoryClearing(false);}
+  };
   const repairGallery=async(item:FacebookWatcherListing)=>{
     setBusyId(item.listingId);
     const outcome=await runGalleryRepairAndRefresh({
@@ -110,6 +131,11 @@ export function FacebookWatcherPanel() {
     <section aria-label="Cykl życia ofert Facebook" className="grid grid-cols-2 gap-3 sm:grid-cols-5"><Counter label="W bazie" value={lifecycle.database}/><Counter label="Bieżące" value={lifecycle.current}/><Counter label="Do oceny" value={lifecycle.review}/><Counter label="Archiwum / stare / odrzucone" value={lifecycle.archived+lifecycle.stale+lifecycle.rejected}/><Counter label="Nowe dziś" value={today}/></section>
     <details className="rounded-2xl border border-border/60 bg-card/40 p-4"><summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-muted-foreground">Diagnostyka spójności Finder / Watcher</summary><p className="mt-2 text-xs text-muted-foreground">Watcher pokazuje obserwacje Facebooka i ich cykl życia. Finder pokazuje populację ofert dopasowanych do aktywnych filtrów; te liczniki nie muszą być równe.</p><div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4"><Counter label="MATCHED" value={consistency.matched}/><Counter label="REVIEW" value={consistency.review}/><Counter label="REJECTED" value={consistency.rejected}/><Counter label="HISTORICAL" value={consistency.historical}/></div></details>
     <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div><div className="mb-2 inline-flex items-center gap-2 rounded-full border border-gold/25 bg-gold/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-gold"><Flame className="size-3.5"/>Premium inbox</div><h1 className="font-heading text-3xl font-bold tracking-tight">Facebook Watcher / Inbox</h1><p className="mt-2 max-w-2xl text-sm text-muted-foreground">Jedno miejsce do przeglądania, analizowania i przekazywania ofert Facebooka do CRM.</p></div><div className="flex flex-wrap gap-2"><Button nativeButton={false} variant="outline" render={<Link href="/facebook-watcher/groups"/>} className="min-h-11">Obserwowane grupy</Button><Button nativeButton={false} render={<Link href="/properties/new"/>} className="min-h-11"><Plus className="size-4"/>Dodaj post z Facebooka</Button><Button disabled={historyClearing} variant="outline" className="min-h-11" onClick={()=>void clearWatcherHistory()}>{historyClearing?"Czyszczenie…":"Wyczyść historię Watchera"}</Button></div></header>
+    <section className="flex flex-wrap items-end gap-3 rounded-xl border p-3" aria-label="Czyszczenie według daty zapisu">
+      <label className="text-sm">Usuń oferty zapisane przed<Input aria-label="Data zapisu oferty" type="date" value={cleanupDate} max={new Date().toISOString().slice(0,10)} onChange={event=>setCleanupDate(event.target.value)} disabled={historyClearing}/></label>
+      <Button variant="outline" disabled={!cleanupDate||historyClearing} onClick={()=>void cleanupSavedBefore()}>Podgląd i usuń starsze</Button>
+      <p className="w-full text-xs text-muted-foreground">Wiek według daty zapisania w bazie, nie publikacji ani ostatniego odczytu. Najpierw zobaczysz liczbę ofert. CRM i Deal Room pozostają chronione.</p>
+    </section>
     <nav aria-label="Status ofert Facebook" className="-mx-4 flex snap-x gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0">{TABS.map(item=><button aria-pressed={tab===item.value} className={`min-h-11 shrink-0 snap-start rounded-xl border px-4 text-sm font-semibold ${tab===item.value?"border-gold/40 bg-gold/15 text-gold":"border-border bg-card text-muted-foreground hover:text-foreground"}`} key={item.value} onClick={()=>setTab(item.value)}>{item.label}<span className="ml-2 rounded-full bg-black/15 px-2 py-0.5 text-xs">{item.value==="all"?listings.length:listings.filter(value=>value.workflowStatus===item.value).length}</span></button>)}</nav>
     <section className="space-y-4"><div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_240px_auto]"><label className="relative"><Search className="pointer-events-none absolute left-3 top-3.5 size-4 text-muted-foreground"/><Input aria-label="Szukaj ofert Facebook" className="h-11 pl-10" placeholder="Szukaj: tytuł, opis, ulica, osiedle, grupa" value={filters.query} onChange={event=>setFilters(current=>({...current,query:event.target.value}))}/></label><select aria-label="Sortowanie" className="h-11 rounded-xl border border-input bg-background px-3 text-sm" value={sort} onChange={event=>setSort(event.target.value as FacebookInboxSort)}><option value="newest">Najnowsze</option><option value="opportunity">Najwyższy Opportunity Score</option><option value="flip">Najwyższy Flip Score</option><option value="price_per_sqm">Najniższa cena/m²</option><option value="price">Najniższa cena</option><option value="profit">Największy potencjalny zysk</option></select><details className="relative md:hidden"><summary className="flex min-h-11 cursor-pointer list-none items-center justify-center gap-2 rounded-xl border bg-card px-4 text-sm font-semibold"><Filter className="size-4"/>Filtry</summary><div className="mt-2 rounded-xl border bg-card p-4"><FilterControls filters={filters} listings={listings} setFilters={setFilters}/></div></details></div><div className="hidden rounded-2xl border border-border/70 bg-card p-4 md:block"><FilterControls filters={filters} listings={listings} setFilters={setFilters}/></div>
       <div className="text-sm text-muted-foreground">Wyniki: <strong className="text-foreground">{visible.length}</strong></div>
