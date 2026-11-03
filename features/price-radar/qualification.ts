@@ -107,6 +107,7 @@ const DEVELOPER_STATE_PATTERN = /stan\s+deweloperski|do\s+wyko\p{L}*czenia|bez\s
 const NEEDS_RENOVATION_PATTERN = /(?<!\bnie\s)(?<!\bnie jest\s)(?:do\s+(?:(?:generalnego|kapitalnego)\s+)?remontu|wymaga\s+(?:(?:generalnego|kapitalnego)\s+)?remontu|do\s+odnowienia|surowy\s+stan)/iu;
 const PLANNED_RENOVATION_COMPLETION_PATTERN = /(?:planowan\p{L}*|przewidywan\p{L}*)\s+zakoncz\p{L}*\s+(?:prac\s+)?remon\p{L}*|remon\p{L}*\s+(?:zostanie\s+zakoncz\p{L}*|zakonczy\s+sie)|w\s+trakcie\s+prac\s+remontow\p{L}*/iu;
 const COMPLETED_FULL_RENOVATION_PATTERN = /\bpo\s+(?:generaln\p{L}*|kapitaln\p{L}*)\s+remon\p{L}*/iu;
+const PARTIAL_RENOVATION_PATTERN = /(?:lazienk\p{L}*|kuchni\p{L}*|pokoju|sypialni\p{L}*)[^.!?;]{0,50}\bpo\s+(?:generaln\p{L}*|kapitaln\p{L}*)\s+remon\p{L}*|(?:generaln\p{L}*|kapitaln\p{L}*)\s+remon\p{L}*\s+(?:lazienk\p{L}*|kuchni\p{L}*|pokoju|sypialni\p{L}*)/iu;
 const FINISHED_HIGH_STANDARD_PATTERN = /\bwykonczon\p{L}*\s+w\s+(?:wysok\p{L}*|bardzo\s+dobr\p{L}*)\s+standard\p{L}*/iu;
 const TURNKEY_PATTERN = /wyko\p{L}*czon\p{L}*\s+pod\s+klucz/iu;
 const FULL_FINISH_PATTERN = /(?:w\s+pelni|kompletnie|calkowicie)\s+wyko\p{L}*|pelne\s+wyko\p{L}*|wyko\p{L}*czon\p{L}*\s+pod\s+klucz/iu;
@@ -346,7 +347,7 @@ export function hasCategoryBFinishEvidence(title: string | null, description: st
   const normalizedOwnText = normalizeRadarEvidenceText(ownText);
   const completedFinish = FULL_FINISH_PATTERN.test(ownText)
     || FINISHED_HIGH_STANDARD_PATTERN.test(ownText)
-    || (finish.fullRenovation && COMPLETED_FULL_RENOVATION_PATTERN.test(ownText));
+    || (finish.fullRenovation && COMPLETED_FULL_RENOVATION_PATTERN.test(ownText) && !PARTIAL_RENOVATION_PATTERN.test(ownText));
   return completedFinish
     && (finish.moveInReady || READY_NO_WORK_PATTERN.test(ownText))
     && HIGH_STANDARD_PATTERN.test(ownText)

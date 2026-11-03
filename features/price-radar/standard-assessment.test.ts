@@ -36,3 +36,9 @@ test("future completion cannot be approved from conflicting present-tense market
 test("a confirmed negation of general renovation never becomes category B",()=>{
   assert.equal(hasCategoryBFinishEvidence(null,"Mieszkanie nie jest po generalnym remoncie. Gotowe do zamieszkania, wysoki standard."),false);
 });
+
+test("a general renovation of only the bathroom cannot establish completed whole-apartment finish",()=>{
+  const description="Łazienka po generalnym remoncie. Mieszkanie w wysokim standardzie, gotowe do zamieszkania.";
+  assert.equal(hasCategoryBFinishEvidence(null,description),false);
+  assert.equal(qualifyRadarCandidate(candidate(description)).qualified,false);
+});
