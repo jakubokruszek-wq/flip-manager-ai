@@ -2,6 +2,27 @@ package pl.jakubokruszek.flipwatcher.geckopoc
 import org.junit.Test
 import org.junit.Assert.*
 class BackgroundNavigationPolicyTest {
+    @Test fun rejectionDiagnosticsDistinguishContextWithoutAcceptingAnUnverifiedAlias() {
+        val cases=mapOf(
+            "https://www.facebook.com/groups/other-slug/" to "GROUP_ADDRESS_CHANGED",
+            "https://www.facebook.com/groups/124/" to "GROUP_ADDRESS_CHANGED",
+            "https://www.facebook.com/groups/123/posts/55555/" to "GROUP_PAGE_CHANGED",
+            "https://www.facebook.com/" to "GROUP_PAGE_CHANGED",
+            "https://evil.test/groups/123/" to "GROUP_URL_REJECTED",
+            "https://www.facebook.com/groups/123/#token" to "GROUP_URL_REJECTED",
+            "https://www.facebook.com/groups/124/?secret=hidden" to "GROUP_ADDRESS_CHANGED",
+            "not a URL" to "GROUP_URL_REJECTED",
+        )
+        for((url,reason) in cases){
+            assertEquals(reason,BackgroundNavigationPolicy.diagnosticRejection(url,"123"))
+            assertEquals("GROUP_CONTEXT_REJECTED",BackgroundNavigationPolicy.rejection(url,"123"))
+            assertTrue(reason.matches(Regex("[A-Z0-9_]{1,60}")))
+        }
+        assertNull(BackgroundNavigationPolicy.diagnosticRejection("https://m.facebook.com/groups/123/","123"))
+        assertEquals("LOGIN_REQUIRED",BackgroundNavigationPolicy.diagnosticRejection("https://www.facebook.com/login/","123"))
+        assertEquals("CHECKPOINT",BackgroundNavigationPolicy.diagnosticRejection("https://www.facebook.com/checkpoint/","123"))
+        assertEquals("CAPTCHA",BackgroundNavigationPolicy.diagnosticRejection("https://www.facebook.com/captcha/","123"))
+    }
     @Test fun canonicalHostsKeepExactGroupIdentity() {
         for(host in listOf("facebook.com","www.facebook.com","m.facebook.com"))
             assertNull(BackgroundNavigationPolicy.rejection("https://$host/groups/123/?sorting_setting=CHRONOLOGICAL","123"))

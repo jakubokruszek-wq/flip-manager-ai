@@ -18,6 +18,15 @@ class ScanStatusTextTest {
         val text=ScanStatusText.details(state,true,now,now+1000,true,true,"uruchomione",true,ZoneId.of("Europe/Warsaw"))
         assertTrue(text.contains("Grupy ukończone: 3/11"));assertTrue(text.contains("posty 8 • zdjęcia 5"));assertTrue(text.contains("nie oznacza znalezienia nowych postów"));assertFalse(text.contains("%"))
     }
+    @Test fun rejectedGroupContextDoesNotClaimTheWholeScanCompletedOrAnAccessCause(){
+        val state=ScanState(phase="RETRY",total=11,done=10,position=6,group="Grupa testowa",reason="GROUP_CONTEXT_REJECTED")
+        val text=ScanStatusText.details(state,true,now,now+1000,true,true,"oczekuje",false)
+        assertTrue(text.contains("Grupy ukończone: 10/11"))
+        assertTrue(text.contains("Grupa 6/11"))
+        assertTrue(text.contains("Nie potwierdzono strony wybranej grupy"))
+        assertFalse(text.contains("Skan zakończony"))
+        assertFalse(text.contains("Facebook wymaga logowania"))
+    }
     @Test fun blockedStartHasSpecificReasonAndNoInventedAndroidDiagnosis(){
         val text=ScanStatusText.details(ScanState(phase="QUEUED"),true,now,now+1000,false,false,"zadanie oczekuje",false,pendingWindow=now-60_000)
         assertTrue(text.contains("oczekuje na uruchomienie"));assertTrue(text.contains("oczekuje na dostęp do internetu"));assertTrue(text.contains("Powiadomienia"));assertTrue(text.contains("ukończenie nie zostało potwierdzone"))

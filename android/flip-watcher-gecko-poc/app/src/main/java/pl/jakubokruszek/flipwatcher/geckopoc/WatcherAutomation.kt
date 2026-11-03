@@ -147,15 +147,15 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                         val cursor=groups.indexOfFirst{it.id==prefs.getString("last_attempted_source",null)}
                         val ordered=if(cursor<0)groups else groups.drop(cursor+1)+groups.take(cursor+1)
                         WatcherScanStatus.update(context,run){it.copy(total=groups.size,done=groups.count{g->queue.scanned(slot,g.id)})}
-                        for((index,group) in ordered.withIndex()){
+                        for(group in ordered){
                             currentCoroutineContext().ensureActive()
                             if(WatcherAutomation.uiVisible||!WatcherAutomation.enabled(context))break
                             if(queue.scanned(slot,group.id))continue
                             if(remaining()<120_000){budgetReached=true;break}
-                            queue.log("GROUP_"+(WatcherGroups.configured.indexOfFirst{it.id==group.id}+1))
+                            queue.log("GROUP_"+(groups.indexOfFirst{it.id==group.id}+1))
                             check(prefs.edit().putString("last_attempted_source",group.id).commit())
                             queue.log("SCAN_STARTED")
-                            WatcherScanStatus.update(context,run){it.copy(phase="LOADING",group=group.name,position=index+1,reason="")}
+                            WatcherScanStatus.update(context,run){it.copy(phase="LOADING",group=group.name,position=groups.indexOfFirst{g->g.id==group.id}+1,reason="")}
                             try {
                             val scanned=scan(group){phase->WatcherScanStatus.update(context,run){it.copy(phase=phase)}}
                             WatcherScanStatus.update(context,run){it.copy(phase="SAVING")}
