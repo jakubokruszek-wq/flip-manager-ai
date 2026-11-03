@@ -12,6 +12,7 @@ test("saved-date cleanup previews, fences stale confirmation, protects CRM and p
    create table properties(listing_id uuid);create table deals(listing_id uuid);
    create table source_scans(source text,status text);create table facebook_scan_jobs(job_type text,status text);
    create table receipts(listing_id uuid references listings on delete set null,receipt text);
+   create table collector_imports(listing_id uuid references listings on delete set null,payload jsonb,result jsonb,error_message text);
   `);
   await db.exec(migration);
   const ids=[1,2,3,4,5].map(n=>`00000000-0000-0000-0000-${String(n).padStart(12,'0')}`);
@@ -21,6 +22,7 @@ test("saved-date cleanup previews, fences stale confirmation, protects CRM and p
   }
   await db.query("insert into properties values($1)",[ids[2]]);await db.query("insert into deals values($1)",[ids[3]]);
   await db.query("insert into receipts values($1,'ack-remains')",[ids[0]]);
+  await db.query("insert into collector_imports values($1,$2,$3,null)",[ids[0],{price:430000,photos:["private-old-image-url"]},{status:"imported"}]);
   const call=async(apply=false,token:string|null=null)=>(await db.query<{p: {token:string;total:number;protectedCount:number;listingIds:string[]}}>("select facebook_watcher_cleanup_saved_before('2026-11-01', $1,$2) p",[apply,token])).rows[0].p;
   const preview=await call();assert.equal(preview.total,1);assert.equal(preview.protectedCount,3);
   assert.equal((await db.query("select * from listings")).rows.length,5);
@@ -29,6 +31,7 @@ test("saved-date cleanup previews, fences stale confirmation, protects CRM and p
   assert.equal((await call(true,preview.token)).total,1);
   assert.equal((await db.query("select * from listings")).rows.length,4);
   assert.deepEqual((await db.query("select * from receipts")).rows,[{listing_id:null,receipt:'ack-remains'}]);
+  assert.deepEqual((await db.query("select listing_id,payload,result from collector_imports")).rows,[{listing_id:null,payload:{},result:{removed:true}}]);
   await assert.rejects(()=>db.query("insert into listings values($1,'facebook','facebook:post:550000000',now())",[ids[0]]),/FACEBOOK_POST_REMOVED/);
   assert.equal((await call()).total,0);
   for(const role of ['anon','authenticated']){

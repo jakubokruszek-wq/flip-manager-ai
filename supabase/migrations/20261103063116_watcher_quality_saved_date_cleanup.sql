@@ -36,7 +36,7 @@ begin
   if p_before is null or p_before <= '1970-01-01'::timestamptz or p_before > now() then raise exception 'INVALID_SAVED_CUTOFF'; end if;
   if p_apply then
     lock table public.source_scans, public.facebook_scan_jobs, public.listings,
-      public.listing_source_metadata, public.properties, public.deals in share row exclusive mode;
+      public.listing_source_metadata, public.properties, public.deals, public.collector_imports in share row exclusive mode;
   end if;
   if exists (select 1 from public.source_scans where source='facebook' and status in ('pending','running'))
     or exists (select 1 from public.facebook_scan_jobs where job_type in ('SOURCE_SCAN','GALLERY_HYDRATION') and status in ('queued','claimed','running')) then
@@ -65,6 +65,8 @@ begin
           substring(m.source_post_url from '/(?:posts|permalink)/([0-9]{5,30})(?:/|$)'),
           substring(l.external_listing_id from '^(?:facebook:post:)?([0-9]{5,30})$')) is not null
       on conflict do nothing;
+    -- Retain receipt/replay identity but erase the old business snapshot.
+    update public.collector_imports set payload='{}'::jsonb, result='{"removed":true}'::jsonb, error_message=null where listing_id=any(pure_ids);
     delete from public.listings where id=any(pure_ids) and source='facebook';
   end if;
   return jsonb_build_object('before',p_before,'token',signature,'listingIds',to_jsonb(pure_ids),

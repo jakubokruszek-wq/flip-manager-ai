@@ -22,7 +22,8 @@ signature. Migration installs this functionality but deletes no existing rows.
 The operator must choose a cutoff and explicitly confirm the preview.
 
 Numeric post identity tombstones block later imports, including uploads already
-in flight. Receipt records are not removed. Objects in shared image storage are
+in flight. Receipt/replay identities are not removed, but their deleted offers' old payload
+and result fields are erased. Objects in shared image storage are
 not indiscriminately deleted because other records can reference them. This
 cleanup deletes selected database offers; storage-wide garbage collection is
 not part of this change. The existing all-history cleanup action is unchanged.
