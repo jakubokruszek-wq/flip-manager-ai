@@ -1,4 +1,4 @@
-name: Inspect tested Watcher 0.5.73
+name: Publish tested Watcher 0.5.73
 on:
   push:
     branches: [delivery/watcher-tested-0573]
@@ -6,49 +6,77 @@ on:
 permissions:
   contents: read
 jobs:
-  inspect:
+  publish:
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     permissions:
-      actions: read
       contents: write
+      actions: read
     steps:
-      - name: Require full regression of exact application source
+      - name: Require successful complete tests of exact application source
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh run watch 41651864059 --repo jakubokruszek-wq/flip-manager-ai --exit-status --interval 45
           gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41651864059 > run.json
           jq -e '.head_sha == "ada1546deb5140fe0f1954860a90517739c8b4fe" and .conclusion == "success"' run.json
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41651864059/jobs > jobs.json
+          jq -e '[.jobs[] | select(.name == "Compile, unit tests, APK" or .name == "Isolation, collector-core and adapter tests" or .name == "GeckoView instrumented tests (Android 16 emulator, local HTML)")] | length == 3 and all(.[]; .conclusion == "success")' jobs.json
+      - name: Check deployed Manager authentication boundary
+        run: |
+          status=$(curl --silent --show-error --max-time 30 -o response.json -w '%{http_code}' https://flip-manager-ai.vercel.app/api/collector/facebook/mobile)
+          test "$status" = 405
+          status=$(curl --silent --show-error --max-time 30 -X POST -H 'Content-Type: application/json' --data '{}' -o response.json -w '%{http_code}' https://flip-manager-ai.vercel.app/api/collector/facebook/mobile)
+          test "$status" = 401
+          jq -e '.code == "PAIRING_REQUIRED"' response.json
       - uses: actions/download-artifact@v4
         with:
-          name: gecko-poc-instrumented-reports-560
+          name: gecko-candidate-arm64-560
           repository: jakubokruszek-wq/flip-manager-ai
           run-id: 41651864059
           github-token: ${{ github.token }}
-          path: native
-      - uses: actions/download-artifact@v4
-        with:
-          name: gecko-poc-unit-reports-560
-          repository: jakubokruszek-wq/flip-manager-ai
-          run-id: 41651864059
-          github-token: ${{ github.token }}
-          path: unit
-      - name: Verify actual reports and prepare synthetic screenshot for visual review
+          path: tested-apk
+      - name: Publish identical tested APK
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          mv tested-apk/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk flip-watcher-0.5.73-arm64.apk
+          echo '2b16a09c37e31c47f3ca6e2c340a35fbda4553578f619d66e9b87f53caa9f008  flip-watcher-0.5.73-arm64.apk' | sha256sum -c -
+          unzip -p flip-watcher-0.5.73-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
+          cat > release-notes.md <<'NOTES'
+          Android Watcher 0.5.73, ARM64, versionCode 8560. Exact APK from successful complete run 41651864059, application source ada1546deb5140fe0f1954860a90517739c8b4fe; not rebuilt for publication.
+          
+          Always-visible main status opens a read-only live screen. Scan now and progress notifications open the same screen, which does not pause background scanning.
+          Shows actual stage, group completion, saved rows/photos and upload ACKs; last progress and heartbeat are separate. Start/end/last complete scan, unconfirmed current window and next planned time persist across restarts.
+          Explains known network, pairing, Facebook login/CAPTCHA, open browser UI, partial time budget and upload failures. Android scheduling/process-death causes are not invented when unavailable.
+          Trusted native port teardown is owned by Gecko; pending replies resume after framework callbacks return. This fixes a reproduced native double-teardown crash, with the original navigation/stop regression repeated three times before the complete suite.
+          Partial manual scans retain their request and resume only unfinished groups. Queued fresh requests clear old counters while preserving last full scan.
+          Existing confirmed-sale/one-stored-photo requirements (including text graphics), saved-date cleanup, pairing and phone-only schedules remain.
+          
+          Verified build/JVM/JS and complete Android emulator regression, including actual worker partial retry/reason tests, real live activity refresh and status screenshot inspection. Private Facebook layout and manufacturer background restrictions still require normal phone operation; emulator tests do not prove every live Facebook variant.
+          Install as update; do not uninstall or clear application data. Stable certificate SHA256 878b11e677eb4a62883b0b8709fa19c969926708053a01d47f01b0548fb370a2.
+          APK SHA256 2b16a09c37e31c47f3ca6e2c340a35fbda4553578f619d66e9b87f53caa9f008.
+          NOTES
+          gh release create gecko-poc-0.5.73 flip-watcher-0.5.73-arm64.apk --repo jakubokruszek-wq/flip-manager-ai --target ada1546deb5140fe0f1954860a90517739c8b4fe --title 'Watcher 0.5.73 — live scan progress and clear waiting reasons' --prerelease --notes-file release-notes.md
+
+          gh api repos/jakubokruszek-wq/flip-manager-ai/releases/tags/gecko-poc-0.5.73 > public-release.json
           python - <<'PY'
-          import pathlib,re,html,json,base64
-          for root,suffix,count in [('native','connected/debug/index.html',149),('unit','testDebugUnitTest/index.html',320)]:
-              p=next(p for p in pathlib.Path(root).rglob('index.html') if str(p).endswith(suffix))
-              text=re.sub(r'\s+',' ',html.unescape(re.sub(r'<[^>]*>',' ',p.read_text())))
-              m=re.search(r'(\d+) tests (\d+) failures (\d+) skipped',text)
-              assert m and tuple(map(int,m.groups()))==(count,0,0),(root,text[:1500])
-              print('VERIFIED_REPORT',root,m.groups())
-          png=next(pathlib.Path('native').rglob('scan-status-live.png')).read_bytes()
-          assert png.startswith(b'\x89PNG\r\n\x1a\n') and len(png)>1000
-          pathlib.Path('screenshot-blob.json').write_text(json.dumps({'encoding':'base64','content':base64.b64encode(png).decode()}))
+          import json,urllib.request,time
+          release=json.load(open('public-release.json'))
+          asset=next(a for a in release['assets'] if a['name']=='flip-watcher-0.5.73-arm64.apk')
+          assert asset['digest']=='sha256:2b16a09c37e31c47f3ca6e2c340a35fbda4553578f619d66e9b87f53caa9f008'
+          url=asset['browser_download_url']+'?download=1&v=8560'
+          for attempt in range(6):
+              try:
+                  request=urllib.request.Request(url,headers={'Range':'bytes=0-3','User-Agent':'Watcher-Public-Download-Verification'})
+                  with urllib.request.urlopen(request,timeout=45) as response:
+                      magic=response.read(4)
+                      assert response.status==206 and magic==b'PK\x03\x04'
+                      assert response.headers['Content-Range']==f"bytes 0-3/{asset['size']}"
+                      print('ANONYMOUS_DOWNLOAD_VERIFIED',response.status,response.headers['Content-Range'],magic.hex(),asset['digest'])
+                  break
+              except Exception as error:
+                  print('PUBLIC_DOWNLOAD_RETRY',attempt,type(error).__name__)
+                  if attempt==5: raise
+                  time.sleep(5)
           PY
-          blob=$(gh api --method POST repos/jakubokruszek-wq/flip-manager-ai/git/blobs --input screenshot-blob.json --jq '.sha')
-          echo "STATUS_SCREENSHOT_BLOB=$blob"
