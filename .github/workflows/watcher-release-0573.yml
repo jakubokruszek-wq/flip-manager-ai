@@ -1,0 +1,63 @@
+name: Inspect tested Watcher 0.5.73
+on:
+  push:
+    branches: [delivery/watcher-tested-0573]
+    paths: [.github/workflows/watcher-release-0573.yml]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    permissions:
+      actions: write
+      contents: write
+    steps:
+      - name: Clear only failed native reports for the same-run retry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for artifact in 13229971956 13228432798; do
+            gh api repos/jakubokruszek-wq/flip-manager-ai/actions/artifacts/$artifact > report.json
+            jq -e '.workflow_run.id == 41630040415 and (.name == "gecko-poc-instrumented-reports-548" or .name == "gecko-poc-offline-ocr-reports-548")' report.json
+            gh api --method DELETE repos/jakubokruszek-wq/flip-manager-ai/actions/artifacts/$artifact
+          done
+      - name: Require full regression of exact application source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run watch 41630040415 --repo jakubokruszek-wq/flip-manager-ai --exit-status --interval 45
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41630040415 > run.json
+          jq -e '.head_sha == "5da49fcfa0412890c71a6cf118f993d23d4b14ae" and .conclusion == "success"' run.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: gecko-poc-instrumented-reports-548
+          repository: jakubokruszek-wq/flip-manager-ai
+          run-id: 41630040415
+          github-token: ${{ github.token }}
+          path: native
+      - uses: actions/download-artifact@v4
+        with:
+          name: gecko-poc-unit-reports-548
+          repository: jakubokruszek-wq/flip-manager-ai
+          run-id: 41630040415
+          github-token: ${{ github.token }}
+          path: unit
+      - name: Verify actual reports and prepare synthetic screenshot for visual review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import pathlib,re,html,json,base64
+          for root,suffix,count in [('native','connected/debug/index.html',149),('unit','testDebugUnitTest/index.html',320)]:
+              p=next(p for p in pathlib.Path(root).rglob('index.html') if str(p).endswith(suffix))
+              text=re.sub(r'\s+',' ',html.unescape(re.sub(r'<[^>]*>',' ',p.read_text())))
+              m=re.search(r'(\d+) tests (\d+) failures (\d+) skipped',text)
+              assert m and tuple(map(int,m.groups()))==(count,0,0),(root,text[:1500])
+              print('VERIFIED_REPORT',root,m.groups())
+          png=next(pathlib.Path('native').rglob('scan-status-live.png')).read_bytes()
+          assert png.startswith(b'\x89PNG\r\n\x1a\n') and len(png)>1000
+          pathlib.Path('screenshot-blob.json').write_text(json.dumps({'encoding':'base64','content':base64.b64encode(png).decode()}))
+          PY
+          blob=$(gh api --method POST repos/jakubokruszek-wq/flip-manager-ai/git/blobs --input screenshot-blob.json --jq '.sha')
+          echo "STATUS_SCREENSHOT_BLOB=$blob"
