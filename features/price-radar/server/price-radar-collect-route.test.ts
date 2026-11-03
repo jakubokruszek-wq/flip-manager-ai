@@ -3,6 +3,10 @@ import test, { mock } from "node:test";
 import { radarRunStartedTodayInWarsaw as actualRadarRunStartedTodayInWarsaw } from "./radar-scheduler.ts";
 
 type Row = Record<string, unknown>;
+let watchdogSetups = 0;
+mock.module("@/features/price-radar/server/radar-watchdog", { namedExports: {
+  ensureRadarWatchdog: async () => { watchdogSetups += 1; return true; },
+} });
 
 let ownerRows: Row[] = [];
 let runRows: Row[] = [];
@@ -99,6 +103,7 @@ mock.module("@/features/facebook-watcher/run-after-response", { namedExports: {
 const route = await import("../../../app/api/jobs/price-radar-collect/route.ts");
 
 function reset() {
+  watchdogSetups = 0;
   ownerRows = [];
   runRows = [];
   adminCalls = [];
@@ -142,12 +147,22 @@ test("missing PRICE_RADAR_CRON_SECRET server configuration rejects the request b
   assert.deepEqual(claimCalls, []);
 });
 
+test("an authenticated scheduler tick installs the independent recovery timer", async () => {
+  reset();
+  await withRadarCronSecret("test-secret", async () => {
+    const response = await route.POST(new Request("http://localhost/api/jobs/price-radar-collect", { method: "POST", headers: { authorization: "Bearer test-secret" } }));
+    assert.equal(response.status, 200);
+  });
+  assert.equal(watchdogSetups, 1);
+});
+
 test("a request with no Authorization header is rejected before any Radar work starts", async () => {
   reset();
   await withRadarCronSecret("test-secret", async () => {
     const response = await route.POST(new Request("http://localhost/api/jobs/price-radar-collect", { method: "POST" }));
     assert.equal(response.status, 401);
   });
+  assert.equal(watchdogSetups, 0, "an anonymous request cannot configure infrastructure");
   assert.deepEqual(adminCalls, []);
   assert.deepEqual(claimCalls, []);
 });

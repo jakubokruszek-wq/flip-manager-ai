@@ -19,6 +19,10 @@ let portionStatus = "running";
 let portionSourceStatuses: Record<string, string> = {};
 let releaseCalls: Array<{ runId: string; ownerId: string; leaseToken: string }> = [];
 let continuationCalls: Array<{ runId: string; hop: number }> = [];
+let watchdogSetups = 0;
+mock.module("@/features/price-radar/server/radar-watchdog", { namedExports: {
+  ensureRadarWatchdog: async () => { watchdogSetups += 1; return true; },
+} });
 
 mock.module("@/features/auth/operator", { namedExports: {
   requireOperator: async () => { if (operatorError) throw operatorError; return { id: "owner-1" }; },
@@ -46,6 +50,7 @@ mock.module("@/features/price-radar/server/radar-run-status", { namedExports: { 
 const route = await import("../../../app/api/price-radar/run/route.ts");
 
 function reset() {
+  watchdogSetups = 0;
   latest = { id: "existing-run", status: "running", leaseToken: null, leaseUntil: "2026-10-10T10:00:00.000Z", stopRequestedAt: null, errorMessage: null };
   operatorError = null;
   resumeResult = { kind: "claimed", run: { id: "existing-run", status: "running", leaseToken: "fresh-token", leaseUntil: "2026-10-10T10:02:00.000Z" } };
@@ -65,6 +70,15 @@ function reset() {
   continuationCalls = [];
   sourcesFilteredToEmpty = false;
 }
+
+test("an authorized active portion registers independent recovery before its next server hand-off", async () => {
+  reset();
+  const response = await route.POST(new Request("http://localhost/api/price-radar/run", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ expectedRunId: "existing-run" }),
+  }));
+  assert.equal(response.status, 200);
+  assert.equal(watchdogSetups, 1);
+});
 
 test("anonymous auto-resume does not claim or process a Radar run", async () => {
   reset();
