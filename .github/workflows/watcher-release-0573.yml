@@ -17,21 +17,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh run watch 41643559511 --repo jakubokruszek-wq/flip-manager-ai --exit-status --interval 45
-          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41643559511 > run.json
-          jq -e '.head_sha == "db5350fdae51bde6212b0b38faf912bc7adaa745" and .conclusion == "success"' run.json
+          gh run watch 41650169779 --repo jakubokruszek-wq/flip-manager-ai --exit-status --interval 45
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41650169779 > run.json
+          jq -e '.head_sha == "96386f7f9684f1639e9b23aa52e9144b3a4f840e" and .conclusion == "success"' run.json
       - uses: actions/download-artifact@v4
         with:
-          name: gecko-poc-instrumented-reports-556
+          name: gecko-poc-instrumented-reports-558
           repository: jakubokruszek-wq/flip-manager-ai
-          run-id: 41643559511
+          run-id: 41650169779
           github-token: ${{ github.token }}
           path: native
       - uses: actions/download-artifact@v4
         with:
-          name: gecko-poc-unit-reports-556
+          name: gecko-poc-unit-reports-558
           repository: jakubokruszek-wq/flip-manager-ai
-          run-id: 41643559511
+          run-id: 41650169779
           github-token: ${{ github.token }}
           path: unit
       - name: Verify actual reports and prepare synthetic screenshot for visual review
