@@ -9,7 +9,7 @@ class ScanStatusTextTest {
     @Test fun staleProcessIsNotFalselyReportedAsCompletedOrKilledByAndroid(){
         val state=ScanState(phase="READING",heartbeat=now-120_000,changed=now-120_000)
         assertEquals("Brak potwierdzenia dalszej pracy",ScanStatusText.title(state,true,now,false))
-        assertEquals("Odczyt postów i zdjęć",ScanStatusText.title(state,true,now,true))
+        assertEquals("Zadanie uruchomione — brak świeżego potwierdzenia",ScanStatusText.title(state,true,now,true))
         val text=ScanStatusText.details(state,true,now,now+1000,true,true,"oczekuje",false)
         assertTrue(text.contains("Android nie podał przyczyny"));assertFalse(text.contains("Skan zakończony"))
     }
@@ -19,8 +19,8 @@ class ScanStatusTextTest {
         assertTrue(text.contains("Grupy ukończone: 3/11"));assertTrue(text.contains("posty 8 • zdjęcia 5"));assertTrue(text.contains("nie oznacza znalezienia nowych postów"));assertFalse(text.contains("%"))
     }
     @Test fun blockedStartHasSpecificReasonAndNoInventedAndroidDiagnosis(){
-        val text=ScanStatusText.details(ScanState(phase="QUEUED"),true,now,now+1000,false,false,"zadanie oczekuje",false)
-        assertTrue(text.contains("oczekuje na uruchomienie"));assertTrue(text.contains("oczekuje na dostęp do internetu"));assertTrue(text.contains("Powiadomienia"))
+        val text=ScanStatusText.details(ScanState(phase="QUEUED"),true,now,now+1000,false,false,"zadanie oczekuje",false,pendingWindow=now-60_000)
+        assertTrue(text.contains("oczekuje na uruchomienie"));assertTrue(text.contains("oczekuje na dostęp do internetu"));assertTrue(text.contains("Powiadomienia"));assertTrue(text.contains("ukończenie nie zostało potwierdzone"))
         assertTrue(ScanStatusText.reason("LOGIN_REQUIRED").contains("zaloguj"))
         assertTrue(ScanStatusText.reason("WAITING_FOR_BACKGROUND").contains("ekran główny"))
         assertEquals("Automat wyłączony",ScanStatusText.title(ScanState(phase="DONE"),false,now,false))

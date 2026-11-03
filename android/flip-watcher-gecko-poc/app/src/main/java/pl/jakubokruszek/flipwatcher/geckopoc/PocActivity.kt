@@ -241,7 +241,10 @@ class PocActivity : ComponentActivity() {
                         val state=ScanStatus.read(this@PocActivity)
                         val enabled=WatcherAutomation.enabled(this@PocActivity)
                         val next=AutomationPolicy.next(java.time.Instant.now(),java.time.ZoneId.systemDefault(),WatcherAutomation.schedule(this@PocActivity)).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("dd.MM HH:mm"))
-                        ScanStatusText.title(state,enabled,System.currentTimeMillis(),null)+"\n"+(if(state.total>0)"Grupy ${state.done}/${state.total} • zdjęcia ${state.photos}"else if(enabled)"Następne okno: $next"else "Dotknij, aby sprawdzić stan")+" • Podgląd"
+                        val window=AutomationPolicy.current(java.time.Instant.now(),java.time.ZoneId.systemDefault(),WatcherAutomation.schedule(this@PocActivity))
+                        val prefs=WatcherAutomation.preferences(this@PocActivity)
+                        val pending=enabled&&!state.active&&state.started<window.at.toEpochMilli()&&window.at.toEpochMilli()>=prefs.getLong("schedule_since",0)&&prefs.getString("completed_slot",null)!=window.key
+                        (if(pending)"Bieżący skan oczekuje na uruchomienie"else ScanStatusText.title(state,enabled,System.currentTimeMillis(),null))+"\n"+(if(state.total>0)"Grupy ${state.done}/${state.total} • zdjęcia ${state.photos}"else if(enabled)"Następne okno: $next"else "Dotknij, aby sprawdzić stan")+" • Podgląd"
                     }.getOrDefault("Automat: nie udało się odczytać stanu • Podgląd")
                 }
                 automationSummary.text=text

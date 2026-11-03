@@ -46,7 +46,7 @@ object ScanStatusText {
     }
     fun title(s:ScanState,enabled:Boolean,now:Long,running:Boolean?):String=when {
         !enabled->"Automat wyłączony"
-        s.active&&now-s.heartbeat>90_000&&running!=true->"Brak potwierdzenia dalszej pracy"
+        s.active&&now-s.heartbeat>90_000->if(running==true)"Zadanie uruchomione — brak świeżego potwierdzenia"else"Brak potwierdzenia dalszej pracy"
         s.phase=="QUEUED"->"Skan zlecony — oczekuje na uruchomienie"
         s.phase=="PREPARING"->"Przygotowanie skanu"
         s.phase=="UPLOADING"->"Wysyłanie zapisanych ofert"
@@ -62,20 +62,21 @@ object ScanStatusText {
         else->"Oczekiwanie na termin skanu"
     }
     fun time(at:Long,zone:ZoneId):String=if(at<=0)"brak" else Instant.ofEpochMilli(at).atZone(zone).format(DateTimeFormatter.ofPattern("dd.MM HH:mm:ss"))
-    fun details(s:ScanState,enabled:Boolean,now:Long,next:Long,network:Boolean,notifications:Boolean,work:String,running:Boolean?,zone:ZoneId=ZoneId.systemDefault()):String=buildString {
+    fun details(s:ScanState,enabled:Boolean,now:Long,next:Long,network:Boolean,notifications:Boolean,work:String,running:Boolean?,zone:ZoneId=ZoneId.systemDefault(),pendingWindow:Long=0):String=buildString {
         appendLine(title(s,enabled,now,running))
         if(s.total>0){appendLine("Grupy ukończone: ${s.done}/${s.total}");if(s.group.isNotEmpty())appendLine("Grupa ${s.position}/${s.total}: ${s.group}")}
         if(s.started>0){appendLine("Z tej próby: posty ${s.posts} • zdjęcia ${s.photos} • wysłane ${s.uploads}");appendLine("Start próby: ${time(s.started,zone)}")}
         if(s.changed>0)appendLine("Ostatnia zmiana etapu: ${time(s.changed,zone)}")
         if(s.active){
             appendLine("Potwierdzenie pracy: ${time(s.heartbeat,zone)}")
-            if(now-s.heartbeat>90_000&&running!=true)appendLine("Proces nie potwierdza pracy. Android nie podał przyczyny; nie oznaczamy tej próby jako zakończonej.")
+            if(now-s.heartbeat>90_000)appendLine("Proces nie potwierdza pracy. Android nie podał przyczyny; nie oznaczamy tej próby jako zakończonej.")
             else if(now-s.changed>60_000)appendLine("Etap trwa ponad minutę; aktualne potwierdzenie pracy nie oznacza znalezienia nowych postów.")
         }
         if(s.ended>0)appendLine("Koniec próby: ${time(s.ended,zone)}")
         appendLine("Ostatni pełny skan: ${time(s.lastSuccess,zone)}")
         if(s.reason.isNotEmpty())appendLine("Powód: ${reason(s.reason)}")
         if(enabled){
+            if(pendingWindow>0)appendLine("Bieżące okno: ${time(pendingWindow,zone)} — ukończenie nie zostało potwierdzone.")
             appendLine("Następne okno: ${time(next,zone)} (czas telefonu)")
             if(!network)appendLine("Start oczekuje na dostęp do internetu.")
             appendLine("Harmonogram Androida: $work")
@@ -101,7 +102,7 @@ object ScanStatus {
         if(alert)notify(context,s)
         s
     }
-    fun request(context:Context)=change(context){s->if(s.active)s else s.copy(run="",phase="QUEUED",changed=System.currentTimeMillis(),reason="",ended=0)}
+    fun request(context:Context)=change(context){s->if(s.active&&System.currentTimeMillis()-s.heartbeat<90_000)s else s.copy(run="",phase="QUEUED",changed=System.currentTimeMillis(),reason="",ended=0)}
     fun begin(context:Context,id:String)=change(context){s->val now=System.currentTimeMillis();ScanState(run=id,phase="PREPARING",started=now,changed=now,heartbeat=now,lastSuccess=s.lastSuccess,checked=now)}
     fun update(context:Context,id:String,f:(ScanState)->ScanState)=change(context){s->if(s.run!=id||s.ended>0)s else f(s).copy(changed=System.currentTimeMillis(),heartbeat=System.currentTimeMillis())}
     fun beat(context:Context,id:String)=change(context,false){s->if(s.run==id&&s.active)s.copy(heartbeat=System.currentTimeMillis())else s}
@@ -123,7 +124,7 @@ object ScanStatus {
     /** IO only: constraints can prevent doWork from being entered at all. */
     fun report(context:Context):String {
         val now=System.currentTimeMillis();val enabled=WatcherAutomation.enabled(context)
-        val network=runCatching{val c=context.getSystemService(ConnectivityManager::class.java);c.getNetworkCapabilities(c.activeNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)==true}.getOrDefault(false)
+        val network=runCatching{val c=context.getSystemService(ConnectivityManager::class.java);c.getNetworkCapabilities(c.activeNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)==true}.getOrDefault(false)
         val notifications=runCatching{val n=context.getSystemService(NotificationManager::class.java);n.areNotificationsEnabled()&&n.getNotificationChannel(CHANNEL)?.importance!=NotificationManager.IMPORTANCE_NONE}.getOrDefault(false)
         val infos=runCatching{
             val m=WorkManager.getInstance(context)
@@ -132,6 +133,9 @@ object ScanStatus {
         val running=infos?.any{it.state==WorkInfo.State.RUNNING}
         val work=when {infos==null->"nie udało się odczytać stanu";running==true->"zadanie uruchomione";infos.any{it.state==WorkInfo.State.ENQUEUED}->"zadanie oczekuje; dokładny powód opóźnienia nie jest udostępniany";infos.any{it.state==WorkInfo.State.BLOCKED}->"zadanie zablokowane zależnością";else->"brak oczekującego zadania"}
         val next=AutomationPolicy.next(Instant.ofEpochMilli(now),ZoneId.systemDefault(),WatcherAutomation.schedule(context)).toEpochMilli()
-        return ScanStatusText.details(read(context),enabled,now,next,network,notifications,work,running)
+        val window=AutomationPolicy.current(Instant.ofEpochMilli(now),ZoneId.systemDefault(),WatcherAutomation.schedule(context))
+        val prefs=WatcherAutomation.preferences(context)
+        val due=enabled&&window.at.toEpochMilli()>=prefs.getLong("schedule_since",0)&&prefs.getString("completed_slot",null)!=window.key
+        return ScanStatusText.details(read(context),enabled,now,next,network,notifications,work,running,pendingWindow=if(due)window.at.toEpochMilli()else 0)
     }
 }
