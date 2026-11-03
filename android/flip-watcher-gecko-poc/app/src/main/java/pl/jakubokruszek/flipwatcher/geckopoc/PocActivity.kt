@@ -1718,7 +1718,7 @@ class PocActivity : ComponentActivity() {
             ellipsize = android.text.TextUtils.TruncateAt.END
             setTextColor(Color.WHITE)
             textSize = 14f
-            setPadding((12 * dp).toInt(), (8 * dp).toInt(), (12 * dp).toInt(), (8 * dp).toInt())
+            setPadding((12 * dp).toInt(), (4 * dp).toInt(), (12 * dp).toInt(), (4 * dp).toInt())
         }
         geckoView = GeckoView(this).apply {
             tag = "poc.browser"
