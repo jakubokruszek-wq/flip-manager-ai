@@ -1,6 +1,6 @@
 import type { ListingSource } from "@/features/flip-finder";
 import type { MarketType } from "@/features/flip-finder";
-import type { RadarDetailDiagnostic } from "@/features/flip-finder/source-batches";
+import type { RadarDetailDiagnostic, RadarDetailCursor } from "@/features/flip-finder/source-batches";
 
 /** Sources with a real, direct server-side adapter -- excludes facebook (Watcher-only, never a plain HTTP fetch) and anything not yet schema-ready/active for Finder either. See source-availability.ts's SCHEMA_READY_SOURCE_IDS, the single shared source-of-truth this list is filtered from. */
 export type RadarSource = Exclude<ListingSource, "facebook" | "bezposrednio" | "official_auction">;
@@ -200,6 +200,8 @@ export type RadarCheckpoint = {
   checkedListingKeys?: string[];
   /** Small values derived from stable portal context, with the time they were read. */
   contextValues?: Record<string, { value: string; at: string }>;
+  /** Fixed identities keep the review cursor stable across worker portions and operator decisions. */
+  verificationBacklog?: Record<string, { ids: string[]; cursor: RadarDetailCursor | null; done: boolean }>;
   buffer: unknown[];
   bufferOffset: number;
 };

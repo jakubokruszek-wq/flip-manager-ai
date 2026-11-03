@@ -53,7 +53,7 @@ export function isReviewableRadarVerificationCandidate(input: RadarVerificationC
 export function buildRadarVerificationSnapshot(input: RadarVerificationCandidateInput): Record<string, unknown> {
   const { listing } = input;
   const raw = listing.rawPayload;
-  const description = sanitizeSourceText(listing.description, 1_200);
+  const description = sanitizeSourceText(listing.description, 60_000);
   const title = sanitizeSourceText(listing.title, 240);
   const details = [title, description].filter(Boolean).join(". ");
   const price = positive(listing.price);

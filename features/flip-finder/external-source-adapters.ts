@@ -17,8 +17,8 @@ type PortalParser = (html: string, fallbackCity: string) => ExternalPortalPage;
 const MAX_PAGES = 5;
 const RADAR_DETAIL_PAGE_LIMIT_PER_PORTION = 3;
 const RADAR_DETAIL_REQUEST_TIMEOUT_MS = 8_000;
-const RADAR_DETAIL_SOURCES = new Set<ExternalSourceId>(["oferty_net", "domiporta", "adresowo", "allegro_lokalnie"]);
-type RadarDetailSource = "oferty_net" | "domiporta" | "adresowo" | "allegro_lokalnie" | "otodom";
+const RADAR_DETAIL_SOURCES = new Set<ExternalSourceId>(["oferty_net", "domiporta", "adresowo", "allegro_lokalnie", "gratka"]);
+type RadarDetailSource = "oferty_net" | "domiporta" | "adresowo" | "allegro_lokalnie" | "otodom" | "gratka" | "morizon";
 const TRACKING_PARAM = /^(utm_|fbclid|gclid|dclid|msclkid|yclid|ref$)/iu;
 
 /** Each portal has a separate parser. Only the final canonical mapping is shared. */
@@ -38,7 +38,7 @@ export type ExternalPortalCriteria = { city: string | null; areaMin?: number | n
 
 export async function fetchExternalPortal(config: ExternalSourceConfig, criteria: ExternalPortalCriteria, signal?: AbortSignal, batches?: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number; sourceRejectionCounts?: Record<string, number> }> {
   if (batches?.purpose === "price_radar" && RADAR_DETAIL_SOURCES.has(config.id)) {
-    return fetchRadarPortalDetails(config as ExternalSourceConfig & { id: Exclude<ExternalSourceId, "gratka" | "nieruchomosci_online" | "sprzedajemy" | "bezposrednio" | "domy"> }, criteria, signal, batches);
+    return fetchRadarPortalDetails(config, criteria, signal, batches);
   }
   const ofertyLocation = config.id === "oferty_net" && !batches?.ofertyNetLegacySearch ? await resolveOfertyNetLocation(config, criteria.city ?? "", signal) : null;
   const parser = EXTERNAL_PORTAL_PARSERS[config.id];
@@ -142,6 +142,20 @@ async function fetchRadarPortalDetails(config: ExternalSourceConfig, criteria: E
 }
 
 export async function fetchRadarOtodomDetails(candidates: readonly PropertySourceListing[], signal: AbortSignal | undefined, batches: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
+  return fetchRadarSeedDetails("otodom", "Otodom", candidates, signal, batches);
+}
+
+export async function fetchRadarMorizonDetails(candidates: readonly PropertySourceListing[], signal: AbortSignal | undefined, batches: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
+  return fetchRadarSeedDetails("morizon", "Morizon", candidates, signal, batches);
+}
+
+/** Uses the same bounded, identity-checked path for the saved review backlog. */
+export async function fetchRadarQueuedDetails(source: string, candidates: readonly PropertySourceListing[], signal: AbortSignal | undefined, batches: SourceBatchContext) {
+  if (!["gratka", "morizon", "otodom", "oferty_net", "domiporta", "adresowo", "allegro_lokalnie"].includes(source)) throw new Error("RADAR_BACKLOG_SOURCE_UNSUPPORTED");
+  return fetchRadarSeedDetails(source as RadarDetailSource, source, candidates, signal, batches);
+}
+
+async function fetchRadarSeedDetails(source: RadarDetailSource, label: string, candidates: readonly PropertySourceListing[], signal: AbortSignal | undefined, batches: SourceBatchContext): Promise<{ listings: PropertySourceListing[]; warnings: string[]; fetched: number }> {
   const cursor = batches.radarDetailCursor ?? { kind: "radar_detail_v1" as const, page: 1, candidateIndex: 0 };
   if (isRetryAfterPending(cursor)) throw new SourceBatchYield("detail_rate_limit");
   if (cursor.page > 1 || cursor.candidateIndex >= candidates.length) {
@@ -154,11 +168,11 @@ export async function fetchRadarOtodomDetails(candidates: readonly PropertySourc
   let fetched = 0;
   let detailPagesThisPortion = 0;
   for (let candidateIndex = cursor.candidateIndex; candidateIndex < candidates.length; candidateIndex += 1) {
-    if (signal?.aborted) throw new Error("Otodom: request aborted.");
+    if (signal?.aborted) throw new Error(`${label}: request aborted.`);
     if (batches.deadlineAt && Date.now() + (batches.detailReserveMs ?? RADAR_DETAIL_REQUEST_TIMEOUT_MS) >= batches.deadlineAt) throw new SourceBatchYield("portion_budget");
     if (radarSliceExhausted(batches, detailPagesThisPortion)) throw new SourceBatchYield("detail_batch_limit");
     const next = candidateIndex + 1 < candidates.length ? radarDetailCursor(1, candidateIndex + 1) : null;
-    const result = await processRadarDetailCandidate("otodom", "Otodom", candidates[candidateIndex]!, 1, candidateIndex, next, signal, batches);
+    const result = await processRadarDetailCandidate(source, label, candidates[candidateIndex]!, 1, candidateIndex, next, signal, batches);
     fetched += result.batch.fetched;
     warnings.push(...result.batch.warnings);
     if (result.listing) {
@@ -173,6 +187,7 @@ export async function fetchRadarOtodomDetails(candidates: readonly PropertySourc
 }
 
 async function processRadarDetailCandidate(source: RadarDetailSource, label: string, base: PropertySourceListing, page: number, candidateIndex: number, nextCursor: RadarDetailCursor | null, signal: AbortSignal | undefined, batches: SourceBatchContext, warnings: string[] = []): Promise<{ batch: import("./source-batches").SourceBatch; nextCursor: RadarDetailCursor | null; listing: PropertySourceListing | null; detailFetched: boolean }> {
+  if (base.rawPayload.radarBacklogSkip === true) return { batch: { listings: [], warnings: [], fetched: 0 }, nextCursor, listing: null, detailFetched: false };
   const savedCursor = batches.radarDetailCursor;
   const isSameCursor = savedCursor?.page === page && savedCursor.candidateIndex === candidateIndex;
   const currentCursor: RadarDetailCursor = isSameCursor ? { ...savedCursor } : radarDetailCursor(page, candidateIndex);
@@ -269,6 +284,9 @@ async function processRadarDetailCandidate(source: RadarDetailSource, label: str
 function radarDetailUrl(source: RadarDetailSource, value: string | null): string | null {
   if (!value) return null;
   if (source === "otodom") return isConfirmedOtodomOfferUrl(value) ? normalizeOtodomUrl(value) : null;
+  if (source === "morizon") {
+    try { const url = new URL(value); return url.protocol === "https:" && ["morizon.pl", "www.morizon.pl"].includes(url.hostname) && /^\/oferta\/.+-mzn\d+\/?$/u.test(url.pathname) ? url.toString() : null; } catch { return null; }
+  }
   return absoluteUrl(value, source);
 }
 
@@ -359,6 +377,7 @@ type ParsedRadarPortalDetail = {
  * of candidate IDs/URLs; this parser never discovers or crawls new pages.
  */
 export function parseRadarOfferDetail(source: RadarDetailSource, html: string, offerUrl?: string): ParsedRadarPortalDetail {
+  if (source === "gratka" || source === "morizon") return parseNuxtRadarDetail(source, html, offerUrl ?? "");
   if (source === "adresowo") return parseAdresowoRadarDetail(html);
   if (source === "allegro_lokalnie") return parseAllegroRadarDetail(html);
   if (source === "otodom") return parseOtodomRadarDetail(html);
@@ -581,6 +600,58 @@ function parseAllegroRadarDetail(html: string): ParsedRadarPortalDetail {
   return buildRadarDetail({ source: "allegro_lokalnie", active, titleText, description, price, area, rooms, floor, yearBuilt, city, district, locationText, buildingType, marketType, propertyType, explicitMarket, areaLabel: field("Powierzchnia") });
 }
 
+/** Public Nuxt data from the detail page, never its recommendation cards. */
+function parseNuxtRadarDetail(source: "gratka" | "morizon", html: string, offerUrl: string): ParsedRadarPortalDetail {
+  const $ = load(html);
+  let own: PortalRecord = {};
+  try {
+    const pool: unknown = JSON.parse($("#__NUXT_DATA__").text());
+    if (Array.isArray(pool) && pool.length <= 100_000) {
+      const holder = pool.find((value) => isRecord(value) && Number.isInteger(value.propertyData));
+      let remaining = 15_000;
+      const decode = (index: unknown, depth = 0): unknown => {
+        if (--remaining < 0 || depth > 24 || typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= pool.length) return null;
+        const value: unknown = pool[index];
+        if (Array.isArray(value)) return value.map((item) => decode(item, depth + 1));
+        if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([key, ref]) => [key, decode(ref, depth + 1)]));
+        return value;
+      };
+      const decoded = isRecord(holder) ? decode(holder.propertyData) : null;
+      if (isRecord(decoded)) own = decoded;
+    }
+  } catch { /* malformed source data stays unconfirmed */ }
+  const titleText = text(own, "title") ?? "";
+  const description = stripHtml(text(own, "description") ?? "") || null;
+  const rows = [own.detailedInformation, own.buildingDetailedInformation].flatMap((value) => Array.isArray(value) ? value.filter(isRecord) : []);
+  const field = (label: string) => rows.find((row) => normalizeDetailLabel(text(row, "label") ?? "") === normalizeDetailLabel(label));
+  const value = (label: string) => text(field(label) ?? {}, "value");
+  const address = isRecord(own.location) ? own.location : {};
+  const locations = Array.isArray(address.location) ? address.location.filter((item): item is string => typeof item === "string") : [];
+  const locationText = [...locations, text(address, "street")].filter(Boolean).join(", ");
+  const { city, district } = parseRadarLocation(locationText);
+  let sameOffer = false;
+  try {
+    const expected = new URL(offerUrl);
+    const actual = new URL(text(own, "url") ?? "", expected.origin);
+    const id = text(own, "idOnFrontend");
+    const stableId = (path: string) => source === "gratka" ? path.match(/\/ob\/(\d+)\/?$/u)?.[1] : path.match(/(mzn\d+)\/?$/u)?.[1];
+    sameOffer = Boolean(id && expected.origin === actual.origin && stableId(expected.pathname) === id && stableId(actual.pathname) === id);
+  } catch { /* no trustworthy identity */ }
+  let archived: boolean | null = null;
+  try { const layer: unknown = JSON.parse(text(own, "dataLayer") ?? "null"); if (isRecord(layer) && isRecord(layer.property) && typeof layer.property.is_archived === "boolean") archived = layer.property.is_archived; } catch { /* unknown active state */ }
+  const types = isRecord(own.types) ? own.types : {};
+  const propertyType = types.primaryType === "FLAT" && own.transaction === "SALE" ? "apartment" : null;
+  const explicitMarket = text(own, "marketType");
+  const result = buildRadarDetail({ source, active: sameOffer && own.status === 200 && archived === false,
+    titleText, description, price: decimal(isRecord(own.price) && own.price.currency === "PLN" ? own.price.amount : null), area: decimal(own.area),
+    rooms: decimal(own.numberOfRoomsCount), floor: decimal(own.floor), yearBuilt: parseExplicitConstructionYear(value("Rok budowy") ?? ""),
+    city, district, locationText, buildingType: normalizePortalBuildingType(value("Typ budynku"), titleText, description),
+    marketType: parseMarketType(null, explicitMarket), propertyType, explicitMarket,
+  });
+  if (!sameOffer) { result.verified = false; result.contradictoryFields.push("identity"); }
+  return result;
+}
+
 function parseOtodomRadarDetail(html: string): ParsedRadarPortalDetail {
   const $ = load(html);
   const next = nextData(html);
@@ -726,6 +797,8 @@ function compareRadarDetailIdentity(source: RadarDetailSource, listing: Property
   const idFromUrl = (value: string): string | null => {
     const id = source === "oferty_net" ? ofertyNetIdFromUrl(value)
       : source === "domiporta" ? lastPathSegmentId(value)
+        : source === "gratka" ? value.match(/\/ob\/(\d+)/u)?.[1] ?? null
+          : source === "morizon" ? value.match(/(mzn\d+)/u)?.[1] ?? null
         : source === "otodom" ? extractOtodomListingId(value)
           : null;
     return id?.replace(/\.html?$/iu, "").toLowerCase() ?? null;

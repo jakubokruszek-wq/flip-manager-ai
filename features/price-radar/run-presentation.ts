@@ -78,3 +78,20 @@ function findCurrentSource(queue: string[], statuses: Record<string, string>, cu
 function validTimestamp(value: unknown): string | null {
   return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : null;
 }
+/** Counts fixed queue slots already durably passed, including decisions skipped during a run. */
+export function radarVerificationBacklogProgress(checkpoint: unknown): { checked: number; total: number } | null {
+  if (!checkpoint || typeof checkpoint !== "object" || !("verificationBacklog" in checkpoint)) return null;
+  const backlog = checkpoint.verificationBacklog;
+  if (!backlog || typeof backlog !== "object" || Array.isArray(backlog)) return null;
+  let checked = 0;
+  let total = 0;
+  for (const state of Object.values(backlog)) {
+    if (!state || typeof state !== "object" || !Array.isArray(state.ids)) continue;
+    const count = state.ids.length;
+    total += count;
+    const index = state.cursor && typeof state.cursor.candidateIndex === "number" ? state.cursor.candidateIndex : 0;
+    checked += state.done === true ? count : Math.max(0, Math.min(count, Number.isFinite(index) ? Math.floor(index) : 0));
+  }
+  return total ? { checked, total } : null;
+}
+

@@ -11,6 +11,8 @@ import { radarDistrictQueueFailureWarning, rejectedRadarDistrictQueueExternalIds
 import { createRadarDistrictAiBudget } from "@/features/price-radar/server/radar-district-ai";
 import { applyRadarVerificationDecision, confirmedRadarVerificationDecisions, isReviewableRadarVerificationCandidate, rejectedRadarVerificationExternalIds, upsertPendingRadarVerificationCandidate } from "@/features/price-radar/server/radar-verification-queue";
 import { findRadarOwnListingConflicts } from "@/features/price-radar/own-listing-consistency";
+import { fetchRadarQueuedDetails } from "@/features/flip-finder/external-source-adapters";
+import { RADAR_BACKLOG_SOURCES, readRadarVerificationBacklog } from "./radar-verification-backlog";
 import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic, type SourceBatch, type SourceBatchContext, type SourceBatchCursor } from "@/features/flip-finder/source-batches";
 import type { RadarCheckpoint, RadarRun, RadarRunMetrics, RadarRunStatus, RadarSearchCriteria, RadarSource, RadarSourceMetrics, RadarWaitingReason } from "@/features/price-radar/types";
 import type { SearchFilter } from "@/features/flip-finder";
@@ -508,6 +510,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           return "next";
         }
         let emittedBatches = false;
+        let backlogMode = false;
       const processBatch = async (batch: SourceBatch, nextCursor: SourceBatchCursor) => {
           const batchStartedAt = Date.now();
           await ensureRunStillOwned();
@@ -674,9 +677,13 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           recordRadarSourceWarnings(checkpoint, sourceId, batch.warnings);
           addSourceRejectionCounts(checkpoint, sourceId, batch.sourceRejectionCounts ?? {});
           if (batch.diagnostics?.length) appendDetailDiagnostics(checkpoint, sourceId, batch.diagnostics);
-          const previousCursorKey = cursorProgressKey(checkpoint.perSourceCursor[sourceId]);
-          checkpoint.perSourceCursor[sourceId] = nextCursor === null ? SOURCE_DONE_CURSOR : nextCursor;
-          recordBatchProgress(checkpoint, sourceId, batch.fetched, cursorProgressKey(checkpoint.perSourceCursor[sourceId]) !== previousCursorKey);
+          const backlogState = backlogMode ? checkpoint.verificationBacklog?.[sourceId] : undefined;
+          const previousCursorKey = cursorProgressKey(backlogState ? backlogState.cursor : checkpoint.perSourceCursor[sourceId]);
+          if (backlogState) {
+            backlogState.cursor = isRadarDetailCursor(nextCursor) ? nextCursor : null;
+            backlogState.done = nextCursor === null;
+          } else checkpoint.perSourceCursor[sourceId] = nextCursor === null ? SOURCE_DONE_CURSOR : nextCursor;
+          recordBatchProgress(checkpoint, sourceId, batch.fetched, cursorProgressKey(backlogState ? backlogState.cursor : checkpoint.perSourceCursor[sourceId]) !== previousCursorKey);
           for (const listing of batch.listings) checkedListingKeys.add(`${sourceId}:${listing.externalListingId}`);
           attemptMetrics.fetched += batch.fetched;
           attemptMetrics.qualified += batchQualified;
@@ -715,6 +722,26 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           },
           onBatch: processBatch,
         };
+        // Revisit the existing review queue automatically before fresh search
+        // cards. Fixed owner-scoped identities have a separate durable cursor;
+        // a crash/rejection/removal cannot shift the next item or skip search.
+        if (RADAR_BACKLOG_SOURCES.has(sourceId)) {
+          const savedBacklog = checkpoint.verificationBacklog?.[sourceId];
+          if (!savedBacklog?.done) {
+            const seeds = await readRadarVerificationBacklog(supabase, input.ownerId, sourceId, savedBacklog?.ids);
+            const state = savedBacklog ?? { ids: seeds.ids, cursor: null, done: seeds.ids.length === 0 };
+            (checkpoint.verificationBacklog ??= {})[sourceId] = state;
+            await save("running");
+            if (!state.done) {
+              backlogMode = true;
+              await fetchRadarQueuedDetails(sourceId, seeds.listings, controller.signal, {
+                ...batches, radarDetailCursor: state.cursor ?? undefined,
+              });
+              backlogMode = false;
+            }
+          }
+        }
+        emittedBatches = false;
         const sourcePromise = source.fetch(syntheticCriteria(sourceId, checkpoint.searchCriteria), controller.signal, batches);
         const result = await Promise.race([sourcePromise, abortPromise(controller.signal)]);
         controller.signal.throwIfAborted();
@@ -749,7 +776,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           // and is never counted. Neither is an attempt the portion itself cut
           // short because it started late. Everything else that neither moved
           // the cursor nor increased the counters is a failed attempt.
-          const retryAfterUntil = isYield && reason.reason === "detail_rate_limit" ? pendingRetryAfter(checkpoint.perSourceCursor[sourceId]) : null;
+          const retryAfterUntil = isYield && reason.reason === "detail_rate_limit" ? pendingRetryAfter(effectiveSourceCursor(checkpoint, sourceId)) : null;
           const cutShortByPortion = isYield ? reason.reason === "portion_budget" : controller.signal.aborted;
           const progressed = attemptProgressed();
           const counts = !progressed && retryAfterUntil === null && (hadFairShare || !cutShortByPortion);
@@ -1087,6 +1114,11 @@ function pendingRetryAfter(cursor: unknown, now = Date.now()): string | null {
   return Number.isFinite(until) && until > now ? new Date(until).toISOString() : null;
 }
 
+function effectiveSourceCursor(checkpoint: RadarCheckpoint, source: string): unknown {
+  const backlog = checkpoint.verificationBacklog?.[source];
+  return backlog && !backlog.done ? backlog.cursor : checkpoint.perSourceCursor[source];
+}
+
 function isInitialCursor(cursor: unknown): boolean {
   if (cursor === undefined || cursor === null || cursor === 1) return true;
   return isRecord(cursor) && cursor.page === 1 && cursor.candidateIndex === 0;
@@ -1125,7 +1157,7 @@ function recordPortionDiagnostics(checkpoint: RadarCheckpoint, portionProgressed
   if (!unfinished.length) waitingReason = null;
   else if (!http.length) waitingReason = checkpoint.sourceStatuses.olx === "running" ? "olx_worker" : "next_portion";
   else {
-    const retries = http.map((source) => pendingRetryAfter(checkpoint.perSourceCursor[source]));
+    const retries = http.map((source) => pendingRetryAfter(effectiveSourceCursor(checkpoint, source)));
     if (retries.every((value): value is string => value !== null)) {
       waitingReason = "retry_after";
       waitingUntil = retries.reduce((earliest, value) => Date.parse(value) < Date.parse(earliest) ? value : earliest);

@@ -23,6 +23,18 @@ test("qualifies a confirmed secondary-market apartment in a block after a full, 
   }
 });
 
+test("automatic renovation evidence concerns this dwelling and completed work, never common areas or a future promise", () => {
+  for (const description of [
+    "Klatka schodowa świeżo po generalnym remoncie. Mieszkanie gotowe do zamieszkania. Rynek wtórny.",
+    "Budynek po generalnym remoncie w 2025. Mieszkanie gotowe do zamieszkania. Rynek wtórny.",
+    "Elewacja po generalnym remoncie w 2025. Mieszkanie gotowe do zamieszkania. Rynek wtórny.",
+    "Mieszkanie będzie świeżo po generalnym remoncie, gotowe do zamieszkania. Rynek wtórny.",
+  ]) {
+    assert.equal(inspectRadarFinishEvidence(description).freshFullRenovation, false, description);
+    assert.equal(qualifyRadarCandidate(candidate({ description })).qualified, false, description);
+  }
+});
+
 test("qualifies a confirmed primary-market apartamentowiec finished turnkey", () => {
   const result = qualifyRadarCandidate(candidate({
     title: "Mieszkanie w apartamentowcu, Śródmieście", description: "Rynek pierwotny, wykończone pod klucz, nowa inwestycja.",
@@ -208,10 +220,10 @@ test("assessRadarDistrictOnlyCandidate also respects the saved area range -- a d
 test("Oferty.net and Domiporta do not qualify from a result card until the specific offer detail fields are confirmed", () => {
   assert.deepEqual(qualifyRadarCandidate(candidate({ rawPayload: { detailVerified: false } })), { qualified: false, reason: "detail_not_confirmed" });
   assert.deepEqual(qualifyRadarCandidate(candidate({ source: "oferty_net", rawPayload: {} })), { qualified: false, reason: "detail_not_confirmed" });
-  for (const source of ["adresowo", "allegro_lokalnie", "otodom"] as const) {
+  for (const source of ["adresowo", "allegro_lokalnie", "otodom", "gratka", "morizon"] as const) {
     assert.deepEqual(qualifyRadarCandidate(candidate({ source, rawPayload: { detailVerified: false } })), { qualified: false, reason: "detail_not_confirmed" }, `${source} cannot bypass the detail adapter`);
   }
-  assert.equal(qualifyRadarCandidate(candidate({ source: "morizon", rawPayload: {} })).qualified, true, "the detail gate remains scoped to sources with a detail-enrichment adapter");
+  assert.equal(qualifyRadarCandidate(candidate({ source: "domy", rawPayload: {} })).qualified, true, "the detail gate remains scoped to sources with a detail-enrichment adapter");
 });
 
 test("Radar excludes confirmed tenements even after renovation or with an elevator", () => {

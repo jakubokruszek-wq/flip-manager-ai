@@ -111,6 +111,14 @@ function candidate(overrides: Partial<PropertySourceListing> = {}, reason = "det
   };
 }
 
+test("review snapshot preserves renovation evidence after the former 1200-character cutoff and removes contact data", () => {
+  const description = "Opis lokalizacji. ".repeat(100) + "Świeżo po kapitalnym remoncie, gotowe do zamieszkania. Kontakt test@example.test";
+  const snapshot = buildRadarVerificationSnapshot(candidate({ description }));
+  assert.equal(snapshot.qualityCategory, "fresh_renovation");
+  assert.ok(String(snapshot.description).includes("Świeżo po kapitalnym remoncie"));
+  assert.ok(!String(snapshot.description).includes("test@example.test"));
+});
+
 test("credible uncertain apartment sale is reviewable with field evidence and bounded source metadata", () => {
   const input = candidate({ title: "Mieszkanie, Łódź, Śródmieście", description: "Budynek wielorodzinny.", rawPayload: {
     radarSearchScope: "apartment-sale", propertyType: "apartment", marketType: "secondary", detailVerified: false,

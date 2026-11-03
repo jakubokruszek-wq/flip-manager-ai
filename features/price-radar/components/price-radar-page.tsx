@@ -7,7 +7,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { MetricCard } from "@/components/ui/metric-card";
 import { DEFAULT_RADAR_DISTRICTS, MIN_RADAR_SAMPLE_SIZE, type RadarDistrictQueueItem, type RadarListing, type RadarMarketFilter, type RadarQualificationRejections, type RadarSource, type RadarStatGroup, type RadarRunStatus, type RadarQualityCategory, type RadarProgressDiagnostics, type RadarVerificationDecision, type RadarVerificationQueueItem } from "@/features/price-radar/types";
 import { isRadarDailyScanDue, nextRadarDailyScanAt } from "@/features/price-radar/server/radar-scheduler";
-import { radarRunActivity } from "@/features/price-radar/run-presentation";
+import { radarRunActivity, radarVerificationBacklogProgress } from "@/features/price-radar/run-presentation";
 import { describeRadarRequestError, RadarHttpError, radarConnectionIssue, radarLeaseExpiredForBrowserResume, radarRunPollDelayMs } from "@/features/price-radar/run-connection";
 
 type ResultsResponse = {
@@ -59,6 +59,7 @@ export function PriceRadarPage() {
   const [activeSourceIds, setActiveSourceIds] = useState<RadarSource[]>([]);
   const [disabledSourceNote, setDisabledSourceNote] = useState("");
   const [run, setRun] = useState<RunStatus | null>(null);
+  const backlogProgress = useMemo(() => radarVerificationBacklogProgress(run?.checkpoint), [run]);
   const runActivity = useMemo(() => radarRunActivity(run, clockNow), [run, clockNow]);
   const [runStarting, setRunStarting] = useState(false);
   const [runStopping, setRunStopping] = useState(false);
@@ -560,6 +561,10 @@ export function PriceRadarPage() {
   // so it gets its own section/count instead of inflating this one.
   const sampleListings = useMemo(() => (data?.listings ?? []).filter((listing) => (listing.verificationIssues?.length ?? 0) === 0), [data]);
   const reviewListings = useMemo(() => (data?.listings ?? []).filter((listing) => (listing.verificationIssues?.length ?? 0) > 0), [data]);
+  const pendingVerification = useMemo(() => {
+    const qualifiedKeys = new Set(sampleListings.map((listing) => `${listing.source}:${listing.externalListingId}`));
+    return (verificationQueue?.pending ?? []).filter((item) => !qualifiedKeys.has(`${item.source}:${item.externalListingId}`));
+  }, [verificationQueue, sampleListings]);
   const visibleSources = activeSourceIds.length ? SOURCE_OPTIONS.filter((option) => activeSourceIds.includes(option.value)) : [];
 
   return (
@@ -704,6 +709,7 @@ export function PriceRadarPage() {
           <AutomationMetric label="Sprawdzono" value={run ? String(run.scannedCount) : "—"} />
           <AutomationMetric label="Zakwalifikowano" value={run ? String(run.qualifiedCount) : "—"} />
           <AutomationMetric label="Odrzucono" value={typeof run?.checkpoint?.rejectedCount === "number" ? String(run.checkpoint.rejectedCount) : "—"} />
+          {backlogProgress ? <AutomationMetric label="Automatyczna weryfikacja zapisanej kolejki" value={`${backlogProgress.checked}/${backlogProgress.total}`} /> : null}
           <AutomationMetric label="Skierowano do weryfikacji" value={run && typeof run.checkpoint?.verificationQueuedCount === "number" && typeof run.checkpoint?.districtQueuedCount === "number" ? String(run.checkpoint.verificationQueuedCount + run.checkpoint.districtQueuedCount) : "—"} />
         </div>
         <p aria-live="polite" className="text-xs text-muted-foreground">
@@ -842,12 +848,12 @@ export function PriceRadarPage() {
           Kolejka weryfikacji danych i standardu wymaga lokalnego draftu <code>20261012130000_add_price_radar_verification_queue.sql</code>. Nie została zastosowana w Production.
         </div>
       ) : null}
-      {verificationQueue?.available && verificationQueue.pending.length > 0 ? (
+      {verificationQueue?.available && pendingVerification.length > 0 ? (
         <section aria-label="Do weryfikacji danych i standardu" className="space-y-3">
-          <h2 className="text-lg font-semibold">Do weryfikacji danych i standardu ({verificationQueue.pending.length})</h2>
-          <p className="text-sm text-muted-foreground">To nie są jeszcze porównania ani próbka statystyczna. Potwierdź konkretne wartości z ogłoszenia.</p>
+          <h2 className="text-lg font-semibold">Do weryfikacji danych i standardu ({pendingVerification.length})</h2>
+          <p className="text-sm text-muted-foreground">Radar podczas zbierania automatycznie ponownie sprawdza zapisane ogłoszenia z obsługiwanych portali i dodaje potwierdzone oferty do porównań. Tutaj pozostają przypadki niejednoznaczne; nie należą jeszcze do próby statystycznej.</p>
           <div className="grid gap-4 lg:grid-cols-2">
-            {verificationQueue.pending.map((item) => (
+            {pendingVerification.map((item) => (
               <VerificationQueueRow key={item.id} item={item} pending={verificationPending === item.id}
                 onResolve={(decision) => void resolveVerification(item.id, decision)} onReject={() => void setVerificationRejection(item.id, true)} />
             ))}
