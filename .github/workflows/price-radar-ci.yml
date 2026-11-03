@@ -10,6 +10,7 @@ on:
       - "app/api/price-radar/**"
       - "app/api/jobs/price-radar-collect/**"
       - "features/flip-finder/external-source-adapters.ts"
+      - "features/flip-finder/radar-nuxt-source-detail.test.ts"
       - "features/flip-finder/source-batches.ts"
       - "features/flip-finder/server/search-source-registry.ts"
       - "features/flip-finder/listing-attribute-extraction.ts"

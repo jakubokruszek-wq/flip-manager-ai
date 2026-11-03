@@ -110,7 +110,7 @@ const FULL_FINISH_PATTERN = /(?:w\s+pelni|kompletnie|calkowicie)\s+wyko\p{L}*|pe
 const HIGH_STANDARD_PATTERN = /(?:wysok\p{L}*\s+standard(?:zie|u|em)?|bardzo\s+dobr\p{L}*\s+standard(?:zie|u|em)?|standard\s+wyko\p{L}*\s+(?:jest\s+)?wysok\p{L}*|stan\s+(?:idealn\p{L}*|perfekcyjn\p{L}*)|bardzo\s+dobr\p{L}*\s+stan(?:ie|u)?)/iu;
 const READY_NO_WORK_PATTERN = /(?:bez\s+(?:konieczn\p{L}*\s+)?dodatkow\p{L}*\s+prac|nie\s+wymaga\s+(?:juz\s+)?(?:dodatkow\p{L}*\s+)?prac|bez\s+naklad\p{L}*\s+finansow\p{L}*)/iu;
 const FINISH_CONTRADICTION_PATTERN = /(?:\bnie\s+(?:jest\s+)?(?:w\s+pelni\s+)?wyko\p{L}*czon\p{L}*|wymaga\s+(?:dodatkow\p{L}*\s+)?wyko\p{L}*czenia|do\s+wyko\p{L}*czenia|wyko\p{L}*czenie\s+(?:do\s+wykonania|za\s+doplat\p{L}*|dodatkow\p{L}*\s+platn\p{L}*)|standard\s+do\s+popraw\p{L}*|\bnie\s+(?:jest\s+)?gotow\p{L}*\s+do\s+(?:zamieszkan\p{L}*|wprowadzen\p{L}*))/iu;
-const NON_PROPERTY_SEGMENT_PATTERN = /(?:czesci\s+wspoln\p{L}*|klatk\p{L}*\s+schodow\p{L}*|budyn\p{L}*\s+(?:jest|sa|zostal)|inne\s+mieszkan\p{L}*|inne\s+lokal\p{L}*|wybor\s+lokal\p{L}*|inwestycj\p{L}*\s+oferuj\p{L}*)/iu;
+const NON_PROPERTY_SEGMENT_PATTERN = /(?:czesci\s+wspoln\p{L}*|klatk\p{L}*\s+schodow\p{L}*|(?:budyn\p{L}*|elewac\p{L}*|dach)\s+(?:jest|sa|zostal|po|przesz\p{L}*)|inne\s+mieszkan\p{L}*|inne\s+lokal\p{L}*|wybor\s+lokal\p{L}*|inwestycj\p{L}*\s+oferuj\p{L}*)/iu;
 const HIGH_STANDARD_NEGATION_PATTERN = /(?:nie\s+(?:ma|posiada|jest)\s+(?:w\s+)?(?:wysok\p{L}*\s+standard\p{L}*|bardzo\s+dobr\p{L}*\s+standard\p{L}*|idealn\p{L}*\s+stan\p{L}*)|standard\s+(?:nie\s+jest\s+)?(?:wysok\p{L}*|bardzo\s+dobr\p{L}*)\s+)/iu;
 const TURNKEY_EXTRA_COST_PATTERN = /(?:wyko\p{L}*czon\p{L}*\s+pod\s+klucz|wyko\p{L}*czenie|pakiet\s+wyko\p{L}*czeniow\p{L}*)[\s\S]{0,60}(?:za\s+doplat\p{L}*|dodatkow\p{L}*\s+platn\p{L}*|jest\s+opcjon\p{L}*)|opcjonaln\p{L}*\s+wyko\p{L}*/iu;
 const FRESH_FULL_RENOVATION_PATTERN = /(?:świeżo|niedawno)\s+po\s+(?:generalnym|kapitalnym)\s+remoncie|(?:generalny|kapitalny)\s+remont\s+(?:zakończon\p{L}*\s+)?w\s+20(?:2[1-9]|3\d)|(?:po\s+)?(?:generalnym|kapitalnym)\s+remoncie\s+(?:z\s+)?20(?:2[1-9]|3\d)/iu;
@@ -291,14 +291,19 @@ export function inspectRadarFinishEvidence(text: string): {
   moveInReady: boolean;
   turnkey: boolean;
 } {
-  const fullRenovation = /(?:generaln\p{L}*|kapitaln\p{L}*)\s+remon\p{L}*/iu.test(text);
   const ownText = ownOfferEvidenceText({ title: null, description: text } as QualificationCandidate);
   const normalizedOwnText = normalizeRadarEvidenceText(ownText);
+  const renovationNotCompleted = /\b(?:bedzie|zostanie|ma\s+byc|planowan\p{L}*)[^.!?;]{0,100}remon\p{L}*|\b(?:nie\s+po|bez)\s+(?:generaln\p{L}*|kapitaln\p{L}*)\s+remon\p{L}*/iu.test(normalizedOwnText)
+    || INCOMPLETE_RENOVATION_PATTERN.test(normalizedOwnText);
+  const fullRenovation = !renovationNotCompleted && /(?:generaln\p{L}*|kapitaln\p{L}*)\s+remon\p{L}*/iu.test(ownText);
+  const normalizePattern = (pattern: RegExp) => new RegExp(pattern.source.normalize("NFD").replace(/\p{M}/gu, "").replace(/[łŁ]/gu, "l"), "iu");
+  const freshPattern = normalizePattern(FRESH_FULL_RENOVATION_PATTERN);
+  const unusedPattern = normalizePattern(UNUSED_AFTER_FULL_RENOVATION_PATTERN);
   const completedTurnkey = hasCompletedTurnkeyEvidence(ownText);
   const explicitReadiness = MOVE_IN_READY_PATTERN.test(ownText) || /gotow\p{L}*\s+do\s+wprowadzen\p{L}*/iu.test(ownText);
   return {
     fullRenovation,
-    freshFullRenovation: FRESH_FULL_RENOVATION_PATTERN.test(text) || UNUSED_AFTER_FULL_RENOVATION_PATTERN.test(text),
+    freshFullRenovation: fullRenovation && (freshPattern.test(normalizedOwnText) || unusedPattern.test(normalizedOwnText)),
     moveInReady: completedTurnkey || (explicitReadiness
       && !MOVE_IN_NEGATION_PATTERN.test(normalizedOwnText)
       && !INCOMPLETE_RENOVATION_PATTERN.test(normalizedOwnText)
@@ -381,7 +386,7 @@ export function qualifyRadarCandidate(
   areaMin?: number | null,
   areaMax?: number | null,
 ): QualificationResult {
-  const requiresConfirmedDetail = candidate.source === "oferty_net" || candidate.source === "domiporta" || candidate.source === "adresowo" || candidate.source === "allegro_lokalnie" || candidate.source === "otodom";
+  const requiresConfirmedDetail = candidate.source === "oferty_net" || candidate.source === "domiporta" || candidate.source === "adresowo" || candidate.source === "allegro_lokalnie" || candidate.source === "otodom" || candidate.source === "gratka" || candidate.source === "morizon";
   // Raw source payloads are untrusted, even if they happen to contain a field
   // named operatorVerification. Only a decision read from the owner-scoped
   // verification queue may bypass the source-detail confirmation gate.

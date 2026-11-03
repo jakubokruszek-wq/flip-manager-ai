@@ -11,6 +11,8 @@ import { radarDistrictQueueFailureWarning, rejectedRadarDistrictQueueExternalIds
 import { createRadarDistrictAiBudget } from "@/features/price-radar/server/radar-district-ai";
 import { applyRadarVerificationDecision, confirmedRadarVerificationDecisions, isReviewableRadarVerificationCandidate, rejectedRadarVerificationExternalIds, upsertPendingRadarVerificationCandidate } from "@/features/price-radar/server/radar-verification-queue";
 import { findRadarOwnListingConflicts } from "@/features/price-radar/own-listing-consistency";
+import { fetchRadarQueuedDetails } from "@/features/flip-finder/external-source-adapters";
+import { RADAR_BACKLOG_SOURCES, readRadarVerificationBacklog } from "./radar-verification-backlog";
 import { SourceBatchYield, type RadarDetailCursor, type RadarDetailDiagnostic, type SourceBatch, type SourceBatchContext, type SourceBatchCursor } from "@/features/flip-finder/source-batches";
 import type { RadarCheckpoint, RadarRun, RadarRunMetrics, RadarRunStatus, RadarSearchCriteria, RadarSource, RadarSourceMetrics, RadarWaitingReason } from "@/features/price-radar/types";
 import type { SearchFilter } from "@/features/flip-finder";
@@ -508,6 +510,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           return "next";
         }
         let emittedBatches = false;
+        let backlogMode = false;
       const processBatch = async (batch: SourceBatch, nextCursor: SourceBatchCursor) => {
           const batchStartedAt = Date.now();
           await ensureRunStillOwned();
@@ -674,9 +677,13 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           recordRadarSourceWarnings(checkpoint, sourceId, batch.warnings);
           addSourceRejectionCounts(checkpoint, sourceId, batch.sourceRejectionCounts ?? {});
           if (batch.diagnostics?.length) appendDetailDiagnostics(checkpoint, sourceId, batch.diagnostics);
-          const previousCursorKey = cursorProgressKey(checkpoint.perSourceCursor[sourceId]);
-          checkpoint.perSourceCursor[sourceId] = nextCursor === null ? SOURCE_DONE_CURSOR : nextCursor;
-          recordBatchProgress(checkpoint, sourceId, batch.fetched, cursorProgressKey(checkpoint.perSourceCursor[sourceId]) !== previousCursorKey);
+          const backlogState = backlogMode ? checkpoint.verificationBacklog?.[sourceId] : undefined;
+          const previousCursorKey = cursorProgressKey(backlogState ? backlogState.cursor : checkpoint.perSourceCursor[sourceId]);
+          if (backlogState) {
+            backlogState.cursor = isRadarDetailCursor(nextCursor) ? nextCursor : null;
+            backlogState.done = nextCursor === null;
+          } else checkpoint.perSourceCursor[sourceId] = nextCursor === null ? SOURCE_DONE_CURSOR : nextCursor;
+          recordBatchProgress(checkpoint, sourceId, batch.fetched, cursorProgressKey(backlogState ? backlogState.cursor : checkpoint.perSourceCursor[sourceId]) !== previousCursorKey);
           for (const listing of batch.listings) checkedListingKeys.add(`${sourceId}:${listing.externalListingId}`);
           attemptMetrics.fetched += batch.fetched;
           attemptMetrics.qualified += batchQualified;
@@ -715,6 +722,26 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           },
           onBatch: processBatch,
         };
+        // Revisit the existing review queue automatically before fresh search
+        // cards. Fixed owner-scoped identities have a separate durable cursor;
+        // a crash/rejection/removal cannot shift the next item or skip search.
+        if (RADAR_BACKLOG_SOURCES.has(sourceId)) {
+          const savedBacklog = checkpoint.verificationBacklog?.[sourceId];
+          if (!savedBacklog?.done) {
+            const seeds = await readRadarVerificationBacklog(supabase, input.ownerId, sourceId, savedBacklog?.ids);
+            const state = savedBacklog ?? { ids: seeds.ids, cursor: null, done: seeds.ids.length === 0 };
+            (checkpoint.verificationBacklog ??= {})[sourceId] = state;
+            await save("running");
+            if (!state.done) {
+              backlogMode = true;
+              await fetchRadarQueuedDetails(sourceId, seeds.listings, controller.signal, {
+                ...batches, radarDetailCursor: state.cursor ?? undefined,
+              });
+              backlogMode = false;
+            }
+          }
+        }
+        emittedBatches = false;
         const sourcePromise = source.fetch(syntheticCriteria(sourceId, checkpoint.searchCriteria), controller.signal, batches);
         const result = await Promise.race([sourcePromise, abortPromise(controller.signal)]);
         controller.signal.throwIfAborted();

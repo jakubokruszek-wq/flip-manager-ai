@@ -9,7 +9,7 @@ import {
   type ExternalSourceConfig,
   type ExternalSourceId,
 } from "@/features/flip-finder/external-source-parser";
-import { fetchExternalPortal, fetchRadarOtodomDetails } from "@/features/flip-finder/external-source-adapters";
+import { fetchExternalPortal, fetchRadarOtodomDetails, fetchRadarMorizonDetails } from "@/features/flip-finder/external-source-adapters";
 import { fetchOfficialLodzGroup } from "@/features/flip-finder/official-lodz-adapters";
 import type { SourceBatchContext } from "@/features/flip-finder/source-batches";
 import { SCHEMA_READY_SOURCE_IDS as SHARED_SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
@@ -156,10 +156,11 @@ async function fetchOlx(criteria: SearchFilter, signal?: AbortSignal): Promise<S
   return { listings: result.listings, fetched: result.rawItems, warnings: result.warnings };
 }
 
-async function fetchMorizon(criteria: SearchFilter, signal?: AbortSignal): Promise<SourceFetchResult> {
+async function fetchMorizon(criteria: SearchFilter, signal?: AbortSignal, batches?: SourceBatchContext): Promise<SourceFetchResult> {
   const html = await fetchHtml(`https://www.morizon.pl/mieszkania/${slugifyCity(criteria.city)}/`, "Morizon", signal);
   const offers = parseMorizonOffers(html);
   const listings = offers.map((offer) => toMorizonListing(offer, criteria.city)).filter((item): item is SourceListing => item !== null);
+  if (batches?.purpose === "price_radar") return fetchRadarMorizonDetails(listings, signal, batches);
   return { listings, fetched: offers.length, warnings: offers.length ? [] : ["Morizon zwrócił pustą listę ofert."] };
 }
 

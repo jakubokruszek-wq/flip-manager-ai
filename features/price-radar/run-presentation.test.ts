@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { radarRunActivity } from "./run-presentation.ts";
+import { radarRunActivity, radarVerificationBacklogProgress } from "./run-presentation.ts";
+
+test("saved verification progress counts durable slots across sources and stays absent on legacy runs", () => {
+  assert.equal(radarVerificationBacklogProgress({}), null);
+  assert.deepEqual(radarVerificationBacklogProgress({ verificationBacklog: {
+    gratka: { ids: ["1", "2", "3"], cursor: { candidateIndex: 2 }, done: false },
+    otodom: { ids: ["4", "5"], cursor: null, done: true },
+  } }), { checked: 4, total: 5 });
+  assert.deepEqual(radarVerificationBacklogProgress({ verificationBacklog: { gratka: { ids: ["1"], cursor: { candidateIndex: 999 }, done: false } } }), { checked: 1, total: 1 });
+});
 
 const now = Date.parse("2026-10-13T00:00:00.000Z");
 

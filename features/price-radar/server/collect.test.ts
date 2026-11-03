@@ -181,7 +181,7 @@ function qualifyingListing(id: string, source: string) {
     title: "Mieszkanie w bloku, Łódź Bałuty", description: "Świeżo po generalnym remoncie w 2025, nowe instalacje, gotowe do zamieszkania. Rynek wtórny.",
     price: 450_000, area: 50, pricePerSqm: 9_000, rooms: 2, city: "Łódź", district: "Bałuty",
     buildingType: null, floor: null, locationText: "Bałuty, Łódź", thumbnailUrl: null, images: [], publishedAt: null,
-    rawPayload: source === "domiporta" ? { detailVerified: true } : {}, contentHash: `hash-${id}`,
+    rawPayload: ["domiporta", "morizon"].includes(source) ? { detailVerified: true } : {}, contentHash: `hash-${id}`,
   };
 }
 
@@ -195,6 +195,38 @@ test("claimOrCreateRadarRun creates exactly one run and reports a concurrent att
   const second = await claimOrCreateRadarRun(ownerId, [], db as never);
   assert.equal(second.kind, "blocked");
   assert.equal(db.tables.price_radar_runs.length, 1);
+});
+
+test("saved backlog is verified automatically, resumes without repeating it, then still persists a non-streaming fresh result", async () => {
+  const originalUrl = "https://www.oferty.net/mieszkanie-na-sprzedaz,123";
+  const db = fakeDb({ verificationQueue: [{ id: "backlog-1", owner_id: ownerId, source: "oferty_net", external_listing_id: "123",
+    original_url: originalUrl, normalized_url: originalUrl, title: "Mieszkanie na sprzedaż", status: "pending",
+    source_snapshot: { price: 450000, area: 50, rooms: 2, city: "Łódź", district: "Bałuty", description: "Krótki opis", contentHash: "old", rawPayload: {} },
+  }] });
+  let requests = 0;
+  const fetched = mock.method(globalThis, "fetch", async () => {
+    requests += 1;
+    const response = new Response(`<title>Mieszkanie na sprzedaż</title><div class="header"><h1>Łódź, Bałuty</h1><h3>Pow.: 50 m2, Cena: 450 000 PLN</h3></div><div class="param"><dl><dt>Powierzchnia użytkowa</dt><dd>50 m2</dd><dt>Typ budynku</dt><dd>BLOK</dd><dt>Rynek pierwotny</dt><dd>Nie</dd></dl></div><div class="description">Świeżo po generalnym remoncie, gotowe do zamieszkania. Rynek wtórny.</div>`);
+    Object.defineProperty(response, "url", { value: originalUrl });
+    return response;
+  });
+  let first = true;
+  fakeSourceImpl = async () => {
+    if (first) { first = false; throw new SourceBatchYield("portion_budget"); }
+    return { listings: [{ ...qualifyingListing("fresh", "oferty_net"), rawPayload: { detailVerified: true } }], warnings: [], fetched: 1 };
+  };
+  try {
+    const claim = await claimOrCreateRadarRun(ownerId, ["oferty_net"], db as never);
+    if (claim.kind !== "claimed") throw new Error("expected claimed");
+    const input = { runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! };
+    await runRadarCollectionPortion(input, db as never);
+    assert.equal(db.tables.price_radar_listings.length, 1, "the old review candidate is promoted using real detail evidence without a manual decision");
+    assert.equal(db.tables.price_radar_verification_queue[0].status, "pending", "automation does not forge a human confirmation");
+    const result = await runRadarCollectionPortion(input, db as never);
+    assert.equal(result.status, "completed");
+    assert.equal(requests, 1, "the durable backlog cursor survives the next portion");
+    assert.deepEqual(db.tables.price_radar_listings.map((row) => row.external_listing_id).sort(), ["123", "fresh"]);
+  } finally { fetched.mock.restore(); }
 });
 
 test("claim and continuation checkpoints use the 75-second lease for a 42-second portion", async () => {
