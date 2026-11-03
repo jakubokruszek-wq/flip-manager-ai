@@ -65,13 +65,17 @@ class CollectorChannel(
 
         override fun onDisconnect(port: WebExtension.Port) {
             if (port !== this@CollectorChannel.port) return
-            onPageDisconnect()
             this@CollectorChannel.port = null
             connectedUrl = null
             portReady = CompletableDeferred()
-            // The page went away: every waiting request ends now.
-            pending.values.forEach { it.complete(null) }
+            val interrupted = pending.values.toList()
             pending.clear()
+            // Gecko tears down its native port AFTER this callback returns.
+            // Main.immediate awaiters must not close the session reentrantly.
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                interrupted.forEach { it.complete(null) }
+            }
+            onPageDisconnect()
         }
     }
 

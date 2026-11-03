@@ -30,8 +30,12 @@ class BackgroundChannel {
             if (port !== this@BackgroundChannel.port) return
             this@BackgroundChannel.port = null
             portReady = CompletableDeferred()
-            pending.values.forEach { it.complete(null) }
+            val interrupted = pending.values.toList()
             pending.clear()
+            // Resume clients after Gecko finishes native disconnection.
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                interrupted.forEach { it.complete(null) }
+            }
         }
     }
 
