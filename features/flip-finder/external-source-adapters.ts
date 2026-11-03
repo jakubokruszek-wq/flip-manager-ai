@@ -273,7 +273,14 @@ async function processRadarDetailCandidate(source: RadarDetailSource, label: str
       { area: detail.area, rooms: detail.rooms, floor: detail.floor, locationText: detail.locationText, price: detail.price },
     );
     const resolvedDetail = { ...detail, contradictoryFields: [...new Set([...detail.contradictoryFields, ...conflicts])], verified: detail.verified && conflicts.length === 0 };
-    if (resolvedDetail.active) listing = mergeRadarDetail(base, resolvedDetail, { listingUrl: detailUrl, finalUrl, httpStatus: response.status, identity });
+    // Historical queue excerpts identify the request, but are not fresh
+    // evidence of condition/location. Never concatenate an old "świeżo po
+    // remoncie" claim into a different current description or fill its gaps.
+    const currentBase = base.rawPayload.radarBacklogRescan === true
+      ? { ...base, title: resolvedDetail.title ?? null, description: null, city: null, district: null, buildingType: null,
+        rawPayload: { ...base.rawPayload, marketType: null, propertyType: null } }
+      : base;
+    if (resolvedDetail.active) listing = mergeRadarDetail(currentBase, resolvedDetail, { listingUrl: detailUrl, finalUrl, httpStatus: response.status, identity });
     if (!resolvedDetail.verified || resolvedDetail.unconfirmedFields.length > 0 || resolvedDetail.contradictoryFields.length > 0) {
       diagnostic = { kind: "detail_not_confirmed", listingUrl: detailUrl, finalUrl, httpStatus: response.status, identity, unconfirmedFields: resolvedDetail.unconfirmedFields, contradictoryFields: resolvedDetail.contradictoryFields };
     }
@@ -353,6 +360,7 @@ async function retryDelay(attempt: number, signal?: AbortSignal): Promise<void> 
 }
 
 type ParsedRadarPortalDetail = {
+  title?: string | null;
   active: boolean;
   verified: boolean;
   unconfirmedFields: string[];
@@ -467,7 +475,7 @@ export function parseRadarOfferDetail(source: RadarDetailSource, html: string, o
   // queue. The collector re-runs qualification with a temporary district
   // probe and queues the candidate only if every other rule passes.
   const verified = active && price !== null && price > 0 && area !== null && area > 0 && city === "Łódź" && Boolean(buildingType) && Boolean(marketType) && propertyType === "apartment" && finishStatusConfirmed && contradictoryFields.length === 0;
-  return { active, verified, unconfirmedFields, contradictoryFields: [...new Set(contradictoryFields)], price, area, rooms, floor, yearBuilt, city, district, locationText, buildingType, marketType, propertyType, description };
+  return { title: titleText || null, active, verified, unconfirmedFields, contradictoryFields: [...new Set(contradictoryFields)], price, area, rooms, floor, yearBuilt, city, district, locationText, buildingType, marketType, propertyType, description };
 }
 
 function parseAdresowoRadarDetail(html: string): ParsedRadarPortalDetail {
@@ -724,7 +732,7 @@ function buildRadarDetail(input: RadarDetailFactsInput): ParsedRadarPortalDetail
   if (!active) contradictoryFields.push("active_listing");
   contradictoryFields.push(...findRadarOwnListingConflicts({ price, area, rooms, floor, locationText, title: titleText, description }));
   const verified = active && price !== null && price > 0 && area !== null && area > 0 && city === "Łódź" && Boolean(buildingType) && Boolean(marketType) && propertyType === "apartment" && finishStatusConfirmed && contradictoryFields.length === 0;
-  return { active, verified, unconfirmedFields: [...new Set(unconfirmedFields)], contradictoryFields: [...new Set(contradictoryFields)], price, area, rooms, floor, yearBuilt, city, district, locationText, buildingType, marketType, propertyType, description };
+  return { title: titleText || null, active, verified, unconfirmedFields: [...new Set(unconfirmedFields)], contradictoryFields: [...new Set(contradictoryFields)], price, area, rooms, floor, yearBuilt, city, district, locationText, buildingType, marketType, propertyType, description };
 }
 
 function labeledDetailValue($: ReturnType<typeof load>, labels: string[]): string | null {

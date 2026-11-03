@@ -20,11 +20,13 @@ const row = (id: string, patch: Row = {}): Row => ({ id, owner_id: "owner", sour
   original_url: `https://gratka.pl/nieruchomosci/mieszkanie/ob/${id}`, source_snapshot: { price: 400000, area: 40, rawPayload: { detailVerified: true } }, ...patch });
 
 test("automatic backlog is owner/source scoped, excludes previous decisions and already qualified offers", async () => {
-  const db = database([row("1"), row("2", { owner_id: "other" }), row("3", { status: "rejected" }), row("4", { status: "confirmed" }), row("5"), row("6", { source: "morizon" })],
+  const db = database([row("1", { source_snapshot: { crossSourceIdentity: "portal_shared_unit_id:unit-1", rawPayload: { detailVerified: true } } }), row("2", { owner_id: "other" }), row("3", { status: "rejected" }), row("4", { status: "confirmed" }), row("5"), row("6", { source: "morizon" })],
     [{ owner_id: "owner", source: "gratka", status: "active", external_listing_id: "5" }]);
   const result = await readRadarVerificationBacklog(db as never, "owner", "gratka");
   assert.deepEqual(result.ids, ["1"]);
   assert.equal(result.listings[0].rawPayload.detailVerified, false, "a saved hint never counts as a newly verified detail");
+  assert.equal(result.listings[0].rawPayload.radarBacklogRescan, true);
+  assert.equal(result.listings[0].crossSourceIdentity, "portal_shared_unit_id:unit-1");
 });
 test("rejections, removals and confirmations between portions keep their fixed cursor slots and are skipped", async () => {
   const db = database([row("1", { status: "rejected" }), row("3"), row("4", { status: "confirmed" })]);

@@ -42,9 +42,10 @@ export async function readRadarVerificationBacklog(db: SupabaseClient, ownerId: 
         pricePerSqm: num(snapshot.pricePerSqm), rooms: num(snapshot.rooms), floor: null,
         city: str(snapshot.city), district: str(snapshot.district), locationText: null, buildingType: str(snapshot.buildingType),
         thumbnailUrl: null, ownership: null, images: [], publishedAt: str(snapshot.publishedAt),
+        crossSourceIdentity: str(snapshot.crossSourceIdentity),
         contentHash: str(snapshot.contentHash) ?? `${source}:${externalId}`,
         rawPayload: { ...record(snapshot.rawPayload), marketType: snapshot.marketType,
-          detailVerified: false, radarSearchScope: "apartment-sale",
+          detailVerified: false, radarSearchScope: "apartment-sale", radarBacklogRescan: true,
           radarBacklogSkip: row.status !== "pending" || active.has(externalId) },
       };
     }),

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test, { mock } from "node:test";
 import { fetchRadarMorizonDetails, parseRadarOfferDetail } from "./external-source-adapters.ts";
 import type { PropertySourceListing } from "@/features/properties/types/property";
+import { qualifyRadarCandidate } from "@/features/price-radar/qualification";
 
 // Same reference-pool/propertyData structure as public detail responses from
 // Gratka and Morizon. Recommendations intentionally contain better facts.
@@ -62,14 +63,17 @@ test("Morizon canonical street redirects match the stable mzn number even with l
   const originalUrl = "https://www.morizon.pl/oferta/sprzedaz-mieszkanie-lodz-50m2-mzn123";
   const base: PropertySourceListing = {
     source: "morizon", externalListingId: "sprzedaz-mieszkanie-lodz-50m2-mzn123", originalUrl, normalizedUrl: originalUrl,
-    title: "Mieszkanie na sprzedaż", description: "Skrócony opis.", price: 500000, area: 50, pricePerSqm: 10000,
+    title: "Mieszkanie świeżo po generalnym remoncie", description: "Świeżo po generalnym remoncie, gotowe do zamieszkania.", price: 500000, area: 50, pricePerSqm: 10000,
     rooms: 2, floor: null, city: "Łódź", district: "Bałuty", locationText: null,
     buildingType: null, thumbnailUrl: null, ownership: null, images: [], publishedAt: null,
-    rawPayload: { radarSearchScope: "apartment-sale" }, contentHash: "short",
+    rawPayload: { radarSearchScope: "apartment-sale", radarBacklogRescan: true }, contentHash: "short",
   };
   let wrongId = false;
+  let oldRenovation = false;
   const fetched = mock.method(globalThis, "fetch", async () => {
-    const response = new Response(page({ idOnFrontend: "mzn123", url: "/oferta/sprzedaz-mieszkanie-lodz-mokra-50m2-mzn123" }));
+    const response = new Response(page({ idOnFrontend: "mzn123", url: "/oferta/sprzedaz-mieszkanie-lodz-mokra-50m2-mzn123",
+      ...(oldRenovation ? { description: "Mieszkanie po generalnym remoncie w 2016, gotowe do zamieszkania. Rynek wtórny." } : {}),
+    }));
     Object.defineProperty(response, "url", { value: wrongId
       ? "https://www.morizon.pl/oferta/sprzedaz-mieszkanie-lodz-mokra-50m2-mzn999"
       : "https://www.morizon.pl/oferta/sprzedaz-mieszkanie-lodz-mokra-50m2-mzn123" });
@@ -84,5 +88,12 @@ test("Morizon canonical street redirects match the stable mzn number even with l
     wrongId = true;
     const wrong = await fetchRadarMorizonDetails([base], undefined, batches);
     assert.equal(wrong.listings[0]?.rawPayload.detailVerified, false, "a different mznID is still rejected");
+    wrongId = false;
+    oldRenovation = true;
+    const updated = (await fetchRadarMorizonDetails([base], undefined, batches)).listings[0]!;
+    assert.equal(updated.rawPayload.detailVerified, true);
+    assert.ok(!`${updated.title} ${updated.description}`.includes("Świeżo"), "historical freshness claims never leak into the new full detail");
+    const qualification = qualifyRadarCandidate({ ...updated, source: "morizon", propertyType: "apartment", marketType: "secondary" });
+    assert.deepEqual(qualification, { qualified: false, reason: "renovation_not_confirmed_fresh_full" });
   } finally { fetched.mock.restore(); }
 });
