@@ -167,7 +167,7 @@ class DesktopPreviewInstrumentedTest {
             val buyer=review.copy(postId="550000000000093",permalink=review.permalink.replace(reviewId,"550000000000093"),intent="BUY_PROPERTY")
             var opened:String?=null;val panel=OffersPanel(host,{opened=it.postId},{})
             val picture=android.graphics.Bitmap.createBitmap(8,8,android.graphics.Bitmap.Config.ARGB_8888)
-            host.setContentView(panel);panel.showRows(listOf(offer,review,buyer),thumbnails={if(it==reviewId)listOf(picture)else emptyList()})
+            host.setContentView(panel);panel.showRows(listOf(offer,review,buyer),thumbnails={if(it==reviewId||it==id)listOf(picture)else emptyList()})
             val image=panel.findViewWithTag<android.widget.ImageView>("poc.review.photo.$reviewId.0")
             assertNotNull(image);assertNotNull(image.drawable)
             assertTrue(panel.findViewWithTag<android.widget.TextView>("poc.review.fields.$reviewId").text.toString().contains("319"))
@@ -315,11 +315,12 @@ class DesktopPreviewInstrumentedTest {
                         assertEquals("DERIVED_FROM_PRICE_PER_M2",row.priceSource);assertTrue(DesktopSummary.eligible(row))
                         assertNull(row.street);assertNull(row.district)
                         val panel=OffersPanel(context,{},{})
-                        panel.showRows(reply.rows)
+                        val picture=android.graphics.Bitmap.createBitmap(8,8,android.graphics.Bitmap.Config.ARGB_8888)
+                        panel.showRows(reply.rows,thumbnails={if(it==row.postId)listOf(picture)else emptyList()})
                         val price=panel.findViewWithTag<android.widget.TextView>("poc.offer.price.${row.postId}")
                         assertNotNull(price);assertTrue(price.text.toString().startsWith("Cena wyliczona z ceny za m²:"))
                         val report=DesktopSummary.create("DONE",trial.requests,reply).encode()
-                        assertFalse(report.contains("365400"));assertFalse(report.contains(row.postId));panel.showRows(emptyList())
+                        assertFalse(report.contains("365400"));assertFalse(report.contains(row.postId));panel.showRows(emptyList());picture.recycle()
                     }
                     if(fullMessage){
                         assertEquals(1,reply.stats.getValue("textExpandArmed"));assertEquals(1,reply.stats.getValue("dataPrice"));assertEquals(1,reply.stats.getValue("dataArea"));assertEquals(1,reply.stats.getValue("dataRooms"));assertEquals(1,reply.stats.getValue("dataLocation"));assertTrue(reply.stats.getValue("textRecognized")>=1)
@@ -482,6 +483,8 @@ class DesktopPreviewInstrumentedTest {
                 val summary=DesktopSummary.create("DONE",1,DesktopReply("OK","DONE",listOf(row),stats))
                 var stale:android.widget.Button?=null
                 scenario.onActivity{a->
+                    val picture=android.graphics.Bitmap.createBitmap(12,12,android.graphics.Bitmap.Config.ARGB_8888).apply{eraseColor(android.graphics.Color.GREEN)}
+                    assertTrue(a.desktopThumbnails.put(id,0,picture))
                     a.publishDesktop(summary,listOf(row))
                     val root=a.findViewById<android.view.ViewGroup>(android.R.id.content)
                     assertTrue(launched.isEmpty()) // Showing/switching tabs never opens a link.
@@ -518,6 +521,8 @@ class DesktopPreviewInstrumentedTest {
                         val id="550000000000096"
                         val row=DesktopRow(id,"https://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/posts/$id/","DOM",319000.0,"EXPLICIT_TOTAL",42.42,2,null,null,null,"SELL_PROPERTY",true,0,"CANDIDATE")
                         val stats=DesktopProtocol.emptyStats().toMutableMap().apply{put("candidates",1);put("verified",1);put("desktop",1)}
+                        val picture=android.graphics.Bitmap.createBitmap(12,12,android.graphics.Bitmap.Config.ARGB_8888).apply{eraseColor(android.graphics.Color.BLUE)}
+                        assertTrue(a.desktopThumbnails.put(id,0,picture))
                         a.publishDesktop(DesktopSummary.create("DONE",1,DesktopReply("OK","DONE",listOf(row),stats)),listOf(row))
                         repeat(2){
                             delay(400);assertTrue(channel.isConnected);assertEquals(generation,channel.connectionGeneration)

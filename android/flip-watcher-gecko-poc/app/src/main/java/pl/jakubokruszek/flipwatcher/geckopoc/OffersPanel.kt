@@ -41,7 +41,8 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
         content.setPadding((12*dp).toInt(),(8*dp).toInt(),(12*dp).toInt(),(12*dp).toInt())
         fun label(text:String,size:Float=16f)=TextView(context).apply{this.text=text;textSize=size;isSaveEnabled=false;setPadding(0,6,0,6)}
         val visible=rows.filter{filter.matches(it)}
-        val offers=visible.filter{DesktopSummary.eligible(it)}
+        fun ready(row:DesktopRow)=OfferQuality.reason(row,thumbnails(row.postId).count{!it.isRecycled})==null
+        val offers=visible.filter(::ready)
         content.addView(label("Oferty (${offers.size})",22f).apply{setTypeface(null,Typeface.BOLD)})
         content.addView(Button(context).apply{
             tag="poc.offers.filters";text="Filtry: ${visible.size}/${rows.size} postów • ${filter.section.label}";isAllCaps=false;isSaveEnabled=false
@@ -85,7 +86,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
             parent.addView(label("Heurystyki; porównaj ze zdjęciem. ${DesktopPresentation.explanation(r)}",13f))
         }}
         if(notice!=null)content.addView(label(notice,14f))
-        content.addView(label("Kandydaci do porównania z postem. Wynik jest zapisywany lokalnie; opuszczenie aplikacji nie kasuje bazy.",14f))
+        content.addView(label("Oferty: potwierdzona sprzedaż i co najmniej jedno zapisane zdjęcie, także grafika z tekstem. Wynik jest zapisywany lokalnie; opuszczenie aplikacji nie kasuje bazy.",14f))
         if(offers.isEmpty())content.addView(label(notice?:if(rows.any{DesktopPresentation.reviewable(it)})"Brak automatycznie rozpoznanych ofert. Posty do ręcznego sprawdzenia znajdują się poniżej." else "Brak zachowanych ofert. Uruchom nowe wyszukiwanie z nową zgodą."))
         val format=NumberFormat.getNumberInstance(Locale.forLanguageTag("pl-PL")).apply{maximumFractionDigits=2}
         fun number(n:Number?)=n?.let{format.format(it)}?:"—"
@@ -123,7 +124,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
             })
             content.addView(card)
         }
-        val review=visible.filter{DesktopPresentation.reviewable(it)}
+        val review=visible.filter{!ready(it)&&(DesktopPresentation.reviewable(it)||DesktopSummary.eligible(it))}
         if(review.isNotEmpty()){
             content.addView(label("Do ręcznego sprawdzenia (${review.size})",22f).apply{tag="poc.offers.review"})
             content.addView(label("Te posty mają dokładny link, ale nie zostały rozpoznane jako oferty. Napisy na grafikach mogą być niedostępne jako tekst. Nowy OCR wymaga zgody i dostępnego wycinka zdjęcia; jego wyniki są oznaczone do sprawdzenia.",14f))

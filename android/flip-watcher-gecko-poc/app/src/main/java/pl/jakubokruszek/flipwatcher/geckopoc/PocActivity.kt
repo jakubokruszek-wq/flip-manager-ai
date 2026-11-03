@@ -343,7 +343,7 @@ class PocActivity : ComponentActivity() {
         if(::offersPanel.isInitialized)offersPanel.showRows(emptyList())
         desktopThumbnails.clear()
         showSavedResult()
-        if(::offersTab.isInitialized)offersTab.text="Oferty (${displayedRows().count{DesktopSummary.eligible(it)}})"
+        if(::offersTab.isInitialized)offersTab.text="Oferty (${displayedRows().count{OfferQuality.reason(it,offerPictures(it.postId).count{b->!b.isRecycled})==null}})"
     }
     private fun busyForTabs()=WatcherAutomation.lock.isLocked||watcherBusy||deletingResults||ocrBusy||reviewWorking()||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad
     private fun selectContentTab(offers:Boolean){
@@ -942,6 +942,40 @@ class PocActivity : ComponentActivity() {
             showAutomationSettings(status)
         }
     }
+    internal fun askSavedCleanup(){
+        if(busyForTabs()||archiveWritePending)return
+        val day=java.time.LocalDate.now().minusDays(30)
+        android.app.DatePickerDialog(this,{_,year,month,date->
+            val selected=java.time.LocalDate.of(year,month+1,date)
+            val before=runCatching{SavedCleanup.cutoff(selected)}.getOrNull()
+            if(before==null){output.text="Wybierz przeszłą datę.";return@DatePickerDialog}
+            val group=PocPolicy.APPROVED_GROUP_ID
+            lifecycleScope.launch {
+                val preview=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){runCatching{SavedCleanup.preview(this@PocActivity,group,before)}}
+                if(isDestroyed||PocPolicy.APPROVED_GROUP_ID!=group)return@launch
+                val p=preview.getOrNull()?:run{output.text="Nie udało się przygotować podglądu. Nic nie usunięto.";return@launch}
+                AlertDialog.Builder(this@PocActivity).setTitle("Usuń zapisane przed $selected")
+                    .setMessage("Wybrana grupa: $group.\nKolejka: ${p.queue.rows} zapisów (${p.queue.posts} postów), w tym niewysłane: ${p.queue.pending}.\nArchiwum ręczne: ${p.archiveRows} postów.\nBez znanej daty zapisu: ${p.queue.unknownDate} — pozostają.\n\nUsuwamy lokalne dane i zdjęcia. Klucze ponowień pozostają, aby usunięte wpisy nie wróciły do wysyłki. Manager ma osobne czyszczenie. Logowanie i parowanie pozostają.")
+                    .setNegativeButton("Anuluj",null).setPositiveButton("Usuń starsze"){_,_->
+                        if(busyForTabs()||archiveWritePending||PocPolicy.APPROVED_GROUP_ID!=group)return@setPositiveButton
+                        deletingResults=true;archiveRevision++;render()
+                        lifecycleScope.launch {
+                            val result=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){
+                                WatcherAutomation.lock.lock()
+                                try{runCatching{SavedCleanup.apply(this@PocActivity,group,before,p)}}finally{WatcherAutomation.lock.unlock()}
+                            }
+                            deletingResults=false
+                            if(!isDestroyed){
+                                if(result.isSuccess){clearDesktopDetails();savedResult=null;savedThumbnails.clear();readSavedResult();output.text="Usunięto starsze lokalne zapisy. Baza Managera pozostaje bez zmian."}
+                                else output.text="Czyszczenie nie zostało potwierdzone. Sprawdź stan i przygotuj nowy podgląd."
+                                render()
+                            }
+                        }
+                    }.show()
+            }
+        },day.year,day.monthValue-1,day.dayOfMonth).show()
+    }
+
     internal fun showAutomationSettings(status:String){
             val enabled=WatcherAutomation.enabled(this)
             val times=runCatching{WatcherAutomation.schedule(this@PocActivity)}.getOrDefault(AutomationPolicy.defaultMinutes)
@@ -964,6 +998,7 @@ class PocActivity : ComponentActivity() {
                         output.text="Automat włączony. Po opuszczeniu aplikacji może wykonać zaległe okno. Godziny i dziennik są w panelu automatu."
                     }
                 }.create()
+            actions.addView(android.widget.Button(this@PocActivity).apply{text="Usuń zapisane przed datą…";tag="automation.cleanup";setOnClickListener{dialog.dismiss();askSavedCleanup()}})
             actions.addView(android.widget.Button(this@PocActivity).apply{text="Godziny skanów";tag="automation.edit";setOnClickListener{dialog.dismiss();editAutomationSchedule()}})
             actions.addView(android.widget.Button(this@PocActivity).apply{
                 text="Skan teraz w tle";tag="automation.scan.now";isEnabled=enabled
@@ -1608,7 +1643,7 @@ class PocActivity : ComponentActivity() {
         if(::offersTab.isInitialized){
             val enabled=!busyForTabs()
             facebookTab.isEnabled=enabled;offersTab.isEnabled=enabled
-            offersTab.text="Oferty (${displayedRows().count{DesktopSummary.eligible(it)}})"
+            offersTab.text="Oferty (${displayedRows().count{OfferQuality.reason(it,offerPictures(it.postId).count{b->!b.isRecycled})==null}})"
         }
         listOf("desktopResult","reviewResult","ocrResult","deleteResults","savedOcr","photoDiagnosis","watcherGroups","watcherConnect").forEach{buttons[it]?.isEnabled=!busyForTabs()}
         buttons["savedOcr"]?.isEnabled=!busyForTabs()&&!archiveWritePending&&savedResult?.photos?.any{it.crop}==true
