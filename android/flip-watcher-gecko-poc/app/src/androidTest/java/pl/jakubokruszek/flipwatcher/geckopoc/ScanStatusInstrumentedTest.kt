@@ -91,6 +91,10 @@ class ScanStatusInstrumentedTest {
             try{context.openFileOutput("scan-status-live.png",Context.MODE_PRIVATE).use{screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)}}finally{screenshot.recycle()}
         }
         assertEquals(5,WatcherScanStatus.read(context).photos)
+        WatcherScanStatus.finish(context,"live-test","DONE")
+        val completed=WatcherScanStatus.read(context).lastSuccess
+        WatcherScanStatus.request(context)
+        assertEquals("QUEUED",WatcherScanStatus.read(context).phase);assertEquals(0,WatcherScanStatus.read(context).photos);assertEquals(0L,WatcherScanStatus.read(context).started);assertEquals(completed,WatcherScanStatus.read(context).lastSuccess)
         WatcherScanStatus.begin(context,"new-owner");WatcherScanStatus.update(context,"live-test"){it.copy(photos=999)}
         assertEquals("new-owner",WatcherScanStatus.read(context).run);assertEquals(0,WatcherScanStatus.read(context).photos)
     }

@@ -102,7 +102,7 @@ object WatcherScanStatus {
         if(alert)notify(context,s)
         s
     }
-    fun request(context:Context)=change(context){s->if(s.active&&System.currentTimeMillis()-s.heartbeat<90_000)s else s.copy(run="",phase="QUEUED",changed=System.currentTimeMillis(),reason="",ended=0)}
+    fun request(context:Context)=change(context){s->if(s.active&&System.currentTimeMillis()-s.heartbeat<90_000)s else ScanState(phase="QUEUED",changed=System.currentTimeMillis(),lastSuccess=s.lastSuccess,checked=s.checked,skipped=s.skipped)}
     fun begin(context:Context,id:String)=change(context){s->val now=System.currentTimeMillis();ScanState(run=id,phase="PREPARING",started=now,changed=now,heartbeat=now,lastSuccess=s.lastSuccess,checked=now)}
     fun update(context:Context,id:String,f:(ScanState)->ScanState)=change(context){s->if(s.run!=id||s.ended>0)s else f(s).copy(changed=System.currentTimeMillis(),heartbeat=System.currentTimeMillis())}
     fun beat(context:Context,id:String)=change(context,false){s->if(s.run==id&&s.active)s.copy(heartbeat=System.currentTimeMillis())else s}

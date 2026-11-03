@@ -1026,7 +1026,7 @@ class PocActivity : ComponentActivity() {
             actions.addView(android.widget.Button(this@PocActivity).apply{text="Godziny skanów";tag="automation.edit";setOnClickListener{dialog.dismiss();editAutomationSchedule()}})
             actions.addView(android.widget.Button(this@PocActivity).apply{
                 text="Skan teraz w tle";tag="automation.scan.now";isEnabled=enabled
-                setOnClickListener{closeSession();WatcherAutomation.requestScan(this@PocActivity);dialog.dismiss();output.text="Skan zlecony. Przejdź na ekran główny telefonu. Postęp i powody oczekiwania znajdziesz w Podglądzie na żywo oraz powiadomieniu."}
+                setOnClickListener{closeSession();WatcherAutomation.requestScan(this@PocActivity);dialog.dismiss();output.text="Skan zlecony. Postęp jest w podglądzie na żywo i powiadomieniu.";startActivity(Intent(this@PocActivity,ScanStatusActivity::class.java))}
             })
             actions.addView(android.widget.Button(this@PocActivity).apply{
                 text="Ustawienia Androida";setOnClickListener{startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:$packageName")))}
