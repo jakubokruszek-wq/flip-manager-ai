@@ -59,6 +59,25 @@ class ScanStatusInstrumentedTest {
         assertNull(WatcherAutomation.preferences(context).getString("requested_scan",null))
         assertEquals(2,calls.count{it==first.id});assertEquals(1,calls.count{it==second.id})
     }
+    @Test fun rotatedRetryKeepsTheOriginalGroupNumberAndTenDurableReceipts()=runBlocking {
+        val groups=WatcherGroups.configured
+        val failed=groups[5]
+        WatcherOutbox(context).use{queue->
+            for(group in groups)if(group!=failed)queue.completeScan("manual/status-test",group.id)
+        }
+        WatcherAutomation.preferences(context).edit().putString("last_attempted_source",failed.id).commit()
+        val calls=mutableListOf<String>()
+        repeat(2){
+            val result=worker(groups=groups){group,_->calls+=group.id;error("GROUP_ADDRESS_CHANGED")}.doWork()
+            assertEquals(androidx.work.ListenableWorker.Result.retry(),result)
+            val state=WatcherScanStatus.read(context)
+            assertEquals(10,state.done);assertEquals(11,state.total);assertEquals(6,state.position)
+            assertEquals(failed.name,state.group);assertEquals("GROUP_ADDRESS_CHANGED",state.reason)
+            assertEquals(0L,state.lastSuccess)
+            assertEquals("status-test",WatcherAutomation.preferences(context).getString("requested_scan",null))
+        }
+        assertEquals(listOf(failed.id,failed.id),calls)
+    }
     @Test fun missingPairingAndVisibleBrowserHaveDistinctPersistentReasons()=runBlocking {
         val unused:suspend (WatcherGroup,(String)->Unit)->SavedResult={_,_->error("Browser must not start")}
         assertEquals(androidx.work.ListenableWorker.Result.retry(),worker(missingCredentials=true,scan=unused).doWork())

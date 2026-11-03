@@ -40,16 +40,16 @@ class BackgroundWatcherScan(private val context:Context) {
             browser.navigationDelegate=object:GeckoSession.NavigationDelegate {
                 override fun onLoadRequest(s:GeckoSession,r:GeckoSession.NavigationDelegate.LoadRequest):GeckoResult<org.mozilla.geckoview.AllowOrDeny>? {
                     val newWindow=r.target==GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW
-                    val rejected=if(initial&&r.uri=="about:blank")null else BackgroundNavigationPolicy.rejection(r.uri,group.id,if(fixture)target else null)
+                    val rejected=if(initial&&r.uri=="about:blank")null else BackgroundNavigationPolicy.diagnosticRejection(r.uri,group.id,if(fixture)target else null)
                     val allowed=live()&&!newWindow&&!r.hasUserGesture&&if(initial)rejected==null else gate?.request(r.uri,r.isRedirect,newWindow,r.hasUserGesture)==true
-                    if(!allowed&&stopReason==null)stopReason=rejected?:"GROUP_CONTEXT_REJECTED"
+                    if(!allowed&&stopReason==null)stopReason=rejected?:"GROUP_RELOAD_REJECTED"
                     return GeckoResult.fromValue(if(allowed)org.mozilla.geckoview.AllowOrDeny.ALLOW else org.mozilla.geckoview.AllowOrDeny.DENY)
                 }
                 override fun onLocationChange(s:GeckoSession,u:String?,permissions:MutableList<GeckoSession.PermissionDelegate.ContentPermission>,gesture:Boolean){
                     if(initial&&(u==null||u=="about:blank"))return
                     current=u
-                    if(initial){u?.let{BackgroundNavigationPolicy.rejection(it,group.id,if(fixture)target else null)}?.let{stopReason=it}}
-                    else if(gate?.location(u)!=true)stopReason="GROUP_CONTEXT_REJECTED"
+                    if(initial){u?.let{BackgroundNavigationPolicy.diagnosticRejection(it,group.id,if(fixture)target else null)}?.let{stopReason=it}}
+                    else if(gate?.location(u)!=true)stopReason=u?.let{BackgroundNavigationPolicy.diagnosticRejection(it,group.id,if(fixture)target else null)}?:"GROUP_RELOAD_REJECTED"
                 }
                 override fun onLoadError(s:GeckoSession,u:String?,e:org.mozilla.geckoview.WebRequestError):GeckoResult<String>?{stopReason="GROUP_LOAD_ERROR";return null}
             }
