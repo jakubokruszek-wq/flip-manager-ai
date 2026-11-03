@@ -24,7 +24,7 @@ class BackgroundChannel {
             if (port !== this@BackgroundChannel.port) return
             val json = ScanProtocol.asJson(message) ?: return
             pending.remove(json.optString("nonce"))?.let { reply ->
-                android.os.Handler(android.os.Looper.getMainLooper()).post { reply.complete(json) }
+                android.os.Handler(android.os.Looper.getMainLooper()).post { reply.complete(if (port === this@BackgroundChannel.port) json else null) }
             }
         }
 

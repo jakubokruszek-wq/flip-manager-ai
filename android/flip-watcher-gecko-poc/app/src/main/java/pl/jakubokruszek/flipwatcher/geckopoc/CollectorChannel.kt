@@ -59,7 +59,7 @@ class CollectorChannel(
                 "reviewImagesResult", "reviewPostResult", "desktopDocumentProof", "desktopArmed", "desktopPreviewResult", "shareLinkContextResult", "mainTransportResult", "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                     pending.remove(json.optString("nonce"))?.let { reply ->
-                        android.os.Handler(android.os.Looper.getMainLooper()).post { reply.complete(json) }
+                        android.os.Handler(android.os.Looper.getMainLooper()).post { reply.complete(if (port === this@CollectorChannel.port) json else null) }
                     }
                 }
             }
