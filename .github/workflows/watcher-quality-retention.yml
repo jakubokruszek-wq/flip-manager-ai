@@ -1,0 +1,23 @@
+name: Watcher sale photo and saved-date cleanup
+on:
+  push:
+    branches: [codex/watcher-quality-retention]
+  pull_request:
+    paths: ['features/collector/**', 'features/facebook-watcher/**', 'app/api/facebook-watcher/history/**', 'app/api/collector/facebook/mobile/**', 'supabase/migrations/*watcher_quality_saved_date_cleanup.sql', '.github/workflows/watcher-quality-retention.yml']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Sale, real image transport, duplicate receipts and cleanup boundaries
+        run: node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/collector/facebook-mobile.test.ts features/collector/mobile-jpeg.test.ts features/collector/facebook-import.test.ts features/facebook-watcher/offer-quality.test.ts features/facebook-watcher/saved-cleanup.test.ts features/facebook-watcher/saved-cleanup-route.test.ts features/facebook-watcher/saved-cleanup.rpc.test.ts features/facebook-watcher/history-clear.test.ts features/facebook-watcher/history-summary.integration.test.ts features/facebook-watcher/search-quality.test.ts features/facebook-watcher/facebook-inbox.test.ts
+      - run: npx tsc --noEmit --incremental false
+      - run: npx eslint features/collector/facebook-mobile.ts features/collector/facebook-import.ts features/facebook-watcher/offer-quality.ts features/facebook-watcher/saved-cleanup.ts features/facebook-watcher/components/facebook-watcher-panel.tsx app/api/collector/facebook/mobile/route.ts app/api/facebook-watcher/history/by-saved-date/route.ts

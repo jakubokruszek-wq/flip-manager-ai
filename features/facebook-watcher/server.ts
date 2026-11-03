@@ -1,3 +1,4 @@
+import { visibleFacebookSale } from "./offer-quality";
 import "server-only";
 
 import { calculateFlipScore } from "@/features/flip-score/calculate-flip-score";
@@ -665,6 +666,7 @@ export async function listFacebookWatcher(): Promise<FacebookWatcherListing[]> {
     const facebookUrl = str(row.source_post_url);
     const sourceUrl = str(listing.original_url);
     const listingIntent = parseEnum(meta.listingIntent, ["SELL_PROPERTY", "BUY_PROPERTY", "RENT_OFFER", "RENT_WANTED", "SERVICE", "OTHER", "UNKNOWN"] as const);
+    if (!visibleFacebookSale(listingIntent, listing.images)) return [];
     if (!isSaleListingIntent(listingIntent) || isBelowMinimumSalePrice(num(listing.price), listingIntent)) return [];
     const priceQuality = parseFacebookPriceQuality(meta.priceQuality);
     const listingQuality = parseFacebookListingQuality(meta.listingQuality);
