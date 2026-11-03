@@ -87,7 +87,7 @@ object ScanStatusText {
     }
 }
 
-object ScanStatus {
+object WatcherScanStatus {
     private val guard=Any()
     private const val PREFS="watcher-scan-status-v1"
     private const val CHANNEL="watcher-scan-progress-v1"

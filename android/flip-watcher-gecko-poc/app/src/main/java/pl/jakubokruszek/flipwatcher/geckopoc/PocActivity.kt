@@ -238,7 +238,7 @@ class PocActivity : ComponentActivity() {
             while(true){
                 val text=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){
                     runCatching{
-                        val state=ScanStatus.read(this@PocActivity)
+                        val state=WatcherScanStatus.read(this@PocActivity)
                         val enabled=WatcherAutomation.enabled(this@PocActivity)
                         val next=AutomationPolicy.next(java.time.Instant.now(),java.time.ZoneId.systemDefault(),WatcherAutomation.schedule(this@PocActivity)).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("dd.MM HH:mm"))
                         val window=AutomationPolicy.current(java.time.Instant.now(),java.time.ZoneId.systemDefault(),WatcherAutomation.schedule(this@PocActivity))

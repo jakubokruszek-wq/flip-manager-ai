@@ -35,7 +35,7 @@ class ScanStatusActivity:ComponentActivity(){
     }
     override fun onResume(){super.onResume();refresh=lifecycleScope.launch{
         while(true){
-            val value=withContext(Dispatchers.IO){runCatching{ScanStatus.report(this@ScanStatusActivity) to WatcherOutbox(this@ScanStatusActivity).use{it.status()}}}
+            val value=withContext(Dispatchers.IO){runCatching{WatcherScanStatus.report(this@ScanStatusActivity) to WatcherOutbox(this@ScanStatusActivity).use{it.status()}}}
             value.onSuccess{(report,log)->if(status.text.toString()!=report)status.text=report;if(journal.text.toString()!=log)journal.text=log}.onFailure{status.text="Nie udało się odczytać stanu. Zapisane wyniki pozostają zachowane."}
             delay(2_000)
         }
