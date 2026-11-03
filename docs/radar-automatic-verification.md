@@ -17,6 +17,9 @@ nowego harmonogramu: działa w dotychczasowym skanie i jego kontynuacjach.
 - Remont klatki, elewacji, innego lokalu lub planowane prace nie stanowią
   dowodu wykonanego remontu mieszkania. Niejednoznaczne opisy nie trafiają
   automatycznie do próby statystycznej.
+- Ponowny odczyt używa aktualnego tytułu, opisu i lokalizacji pełnego
+  ogłoszenia. Historyczny skrót służy do identyfikacji żądania; nie uzupełnia
+  braków i nie przenosi dawnej deklaracji „świeżo po remoncie” do nowego opisu.
 - Odrzucenia i zatwierdzenia operatora zachowują pierwszeństwo. Zmiana decyzji
   pomiędzy porcjami nie przesuwa kursora. Przed zapisem nadal obowiązują
   kontrola właściciela, dzierżawa skanu, STOP i blokada zmienionej tożsamości.
