@@ -104,7 +104,10 @@ const APARTMENT_NEGATION_PATTERN = /(?:to\s+nie|nie\s+jest|brak)\s+(?:konkretneg
 const PRIMARY_MARKET_PATTERN = /rynek\s+pierwotny|od\s+dewelopera|nowa\s+inwestycja|inwestycja\s+deweloperska/iu;
 const SECONDARY_MARKET_PATTERN = /rynek\s+wt\p{L}*rny/iu;
 const DEVELOPER_STATE_PATTERN = /stan\s+deweloperski|do\s+wyko\p{L}*czenia|bez\s+wyko\p{L}*czenia/iu;
-const NEEDS_RENOVATION_PATTERN = /(?<!\bnie\s)(?<!\bnie jest\s)(?:do\s+remontu|wymaga\s+remontu|do\s+odnowienia|surowy\s+stan)/iu;
+const NEEDS_RENOVATION_PATTERN = /(?<!\bnie\s)(?<!\bnie jest\s)(?:do\s+(?:(?:generalnego|kapitalnego)\s+)?remontu|wymaga\s+(?:(?:generalnego|kapitalnego)\s+)?remontu|do\s+odnowienia|surowy\s+stan)/iu;
+const PLANNED_RENOVATION_COMPLETION_PATTERN = /(?:planowan\p{L}*|przewidywan\p{L}*)\s+zakoncz\p{L}*\s+(?:prac\s+)?remon\p{L}*|remon\p{L}*\s+(?:zostanie\s+zakoncz\p{L}*|zakonczy\s+sie)|w\s+trakcie\s+prac\s+remontow\p{L}*/iu;
+const COMPLETED_FULL_RENOVATION_PATTERN = /\bpo\s+(?:generaln\p{L}*|kapitaln\p{L}*)\s+remon\p{L}*/iu;
+const FINISHED_HIGH_STANDARD_PATTERN = /\bwykonczon\p{L}*\s+w\s+(?:wysok\p{L}*|bardzo\s+dobr\p{L}*)\s+standard\p{L}*/iu;
 const TURNKEY_PATTERN = /wyko\p{L}*czon\p{L}*\s+pod\s+klucz/iu;
 const FULL_FINISH_PATTERN = /(?:w\s+pelni|kompletnie|calkowicie)\s+wyko\p{L}*|pelne\s+wyko\p{L}*|wyko\p{L}*czon\p{L}*\s+pod\s+klucz/iu;
 const HIGH_STANDARD_PATTERN = /(?:wysok\p{L}*\s+standard(?:zie|u|em)?|bardzo\s+dobr\p{L}*\s+standard(?:zie|u|em)?|standard\s+wyko\p{L}*\s+(?:jest\s+)?wysok\p{L}*|stan\s+(?:idealn\p{L}*|perfekcyjn\p{L}*)|bardzo\s+dobr\p{L}*\s+stan(?:ie|u)?)/iu;
@@ -293,8 +296,9 @@ export function inspectRadarFinishEvidence(text: string): {
 } {
   const ownText = ownOfferEvidenceText({ title: null, description: text } as QualificationCandidate);
   const normalizedOwnText = normalizeRadarEvidenceText(ownText);
-  const renovationNotCompleted = /\b(?:bedzie|zostanie|ma\s+byc|planowan\p{L}*)[^.!?;]{0,100}remon\p{L}*|\b(?:nie\s+po|bez)\s+(?:generaln\p{L}*|kapitaln\p{L}*)\s+remon\p{L}*/iu.test(normalizedOwnText)
-    || INCOMPLETE_RENOVATION_PATTERN.test(normalizedOwnText);
+  const renovationNotCompleted = /\b(?:bedzie|zostanie|ma\s+byc|planowan\p{L}*)[^.!?;]{0,100}remon\p{L}*|\b(?:nie\s+(?:jest\s+)?po|bez)\s+(?:generaln\p{L}*|kapitaln\p{L}*)\s+remon\p{L}*/iu.test(normalizedOwnText)
+    || INCOMPLETE_RENOVATION_PATTERN.test(normalizedOwnText)
+    || PLANNED_RENOVATION_COMPLETION_PATTERN.test(normalizedOwnText);
   const fullRenovation = !renovationNotCompleted && /(?:generaln\p{L}*|kapitaln\p{L}*)\s+remon\p{L}*/iu.test(ownText);
   const normalizePattern = (pattern: RegExp) => new RegExp(pattern.source.normalize("NFD").replace(/\p{M}/gu, "").replace(/[łŁ]/gu, "l"), "iu");
   const freshPattern = normalizePattern(FRESH_FULL_RENOVATION_PATTERN);
@@ -307,6 +311,7 @@ export function inspectRadarFinishEvidence(text: string): {
     moveInReady: completedTurnkey || (explicitReadiness
       && !MOVE_IN_NEGATION_PATTERN.test(normalizedOwnText)
       && !INCOMPLETE_RENOVATION_PATTERN.test(normalizedOwnText)
+      && !PLANNED_RENOVATION_COMPLETION_PATTERN.test(normalizedOwnText)
       && !FINISH_CONTRADICTION_PATTERN.test(ownText)
       && !FINISH_CONTRADICTION_PATTERN.test(normalizedOwnText)),
     turnkey: completedTurnkey,
@@ -327,6 +332,7 @@ function hasCompletedTurnkeyEvidence(text: string): boolean {
     && !TURNKEY_FUTURE_PATTERN.test(normalized)
     && !TURNKEY_EXTRA_COST_PATTERN.test(normalized)
     && !INCOMPLETE_RENOVATION_PATTERN.test(normalized)
+    && !PLANNED_RENOVATION_COMPLETION_PATTERN.test(normalized)
     && !FINISH_CONTRADICTION_PATTERN.test(text)
     && !FINISH_CONTRADICTION_PATTERN.test(normalized);
 }
@@ -338,7 +344,10 @@ export function hasCategoryBFinishEvidence(title: string | null, description: st
   const ownText = ownOfferEvidenceText({ title, description } as QualificationCandidate);
   const finish = inspectRadarFinishEvidence(ownText);
   const normalizedOwnText = normalizeRadarEvidenceText(ownText);
-  return FULL_FINISH_PATTERN.test(ownText)
+  const completedFinish = FULL_FINISH_PATTERN.test(ownText)
+    || FINISHED_HIGH_STANDARD_PATTERN.test(ownText)
+    || (finish.fullRenovation && COMPLETED_FULL_RENOVATION_PATTERN.test(ownText));
+  return completedFinish
     && (finish.moveInReady || READY_NO_WORK_PATTERN.test(ownText))
     && HIGH_STANDARD_PATTERN.test(ownText)
     && !HIGH_STANDARD_NEGATION_PATTERN.test(ownText)
@@ -346,7 +355,15 @@ export function hasCategoryBFinishEvidence(title: string | null, description: st
     && !FINISH_CONTRADICTION_PATTERN.test(normalizedOwnText)
     && !TURNKEY_FUTURE_PATTERN.test(normalizedOwnText)
     && !TURNKEY_EXTRA_COST_PATTERN.test(normalizedOwnText)
-    && !INCOMPLETE_RENOVATION_PATTERN.test(normalizedOwnText);
+    && !INCOMPLETE_RENOVATION_PATTERN.test(normalizedOwnText)
+    && !PLANNED_RENOVATION_COMPLETION_PATTERN.test(normalizedOwnText)
+    && !NEEDS_RENOVATION_PATTERN.test(ownText);
+}
+
+/** Shared, own-dwelling negative evidence for saved-queue triage. */
+export function hasRadarUnfinishedWorkEvidence(title: string | null, description: string | null): boolean {
+  const text = normalizeRadarEvidenceText(ownOfferEvidenceText({title,description} as QualificationCandidate));
+  return NEEDS_RENOVATION_PATTERN.test(text) || INCOMPLETE_RENOVATION_PATTERN.test(text) || PLANNED_RENOVATION_COMPLETION_PATTERN.test(text);
 }
 
 type RadarPreflightCandidate = Pick<QualificationCandidate, "title" | "description" | "buildingType" | "propertyType" | "rawPayload">;
@@ -482,6 +499,7 @@ export function qualifyRadarCandidate(
 
   const normalizedOwnText = normalizeRadarEvidenceText(ownOfferEvidenceText(candidate));
   const explicitlyNeedsWork = NEEDS_RENOVATION_PATTERN.test(text)
+    || PLANNED_RENOVATION_COMPLETION_PATTERN.test(normalizedOwnText)
     || INCOMPLETE_RENOVATION_PATTERN.test(normalizedOwnText)
     || (operatorDecision && (RENOVATION_CONFLICT_PATTERN.test(normalizedOwnText)
       || TURNKEY_NEGATION_PATTERN.test(normalizedOwnText)

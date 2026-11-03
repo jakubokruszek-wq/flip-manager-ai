@@ -253,6 +253,7 @@ test("an AI district hint is stored only with its quote and never as an operator
   db.rows.push({ ...template, id: "another-owner", owner_id: "owner-2", status: "pending" });
   const queue = await getRadarVerificationQueue("owner-1", db as never);
   assert.equal(queue.pending.length, 507);
+  assert.ok(queue.pending.every(item=>Boolean(item.snapshot.automaticStandardAssessment?.version)), "every paginated pending row receives a current automatic text assessment");
   assert.equal(queue.rejected.length, 1000);
   assert.ok(!queue.pending.some((item) => item.id === "another-owner"));
 });

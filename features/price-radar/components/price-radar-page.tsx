@@ -561,10 +561,14 @@ export function PriceRadarPage() {
   // so it gets its own section/count instead of inflating this one.
   const sampleListings = useMemo(() => (data?.listings ?? []).filter((listing) => (listing.verificationIssues?.length ?? 0) === 0), [data]);
   const reviewListings = useMemo(() => (data?.listings ?? []).filter((listing) => (listing.verificationIssues?.length ?? 0) > 0), [data]);
+  const [standardQueueFilter,setStandardQueueFilter]=useState("promising");
   const pendingVerification = useMemo(() => {
     const qualifiedKeys = new Set(sampleListings.map((listing) => `${listing.source}:${listing.externalListingId}`));
     return (verificationQueue?.pending ?? []).filter((item) => !qualifiedKeys.has(`${item.source}:${item.externalListingId}`));
   }, [verificationQueue, sampleListings]);
+  const queueAssessmentCounts=useMemo(()=>pendingVerification.reduce<Record<string,number>>((counts,item)=>{const assessment=item.snapshot.automaticStandardAssessment;if(assessment){counts.assessed+=1;counts[assessment.category]=(counts[assessment.category]??0)+1;}return counts;},{assessed:0}),[pendingVerification]);
+  const effectiveStandardQueueFilter=queueAssessmentCounts.assessed>0?standardQueueFilter:"all";
+  const visiblePendingVerification=useMemo(()=>pendingVerification.filter(item=>effectiveStandardQueueFilter==="all"||(effectiveStandardQueueFilter==="promising"?item.snapshot.automaticStandardAssessment?.priority===3:item.snapshot.automaticStandardAssessment?.category===effectiveStandardQueueFilter)).sort((a,b)=>(b.snapshot.automaticStandardAssessment?.priority??1)-(a.snapshot.automaticStandardAssessment?.priority??1)),[pendingVerification,effectiveStandardQueueFilter]);
   const visibleSources = activeSourceIds.length ? SOURCE_OPTIONS.filter((option) => activeSourceIds.includes(option.value)) : [];
 
   return (
@@ -852,8 +856,14 @@ export function PriceRadarPage() {
         <section aria-label="Do weryfikacji danych i standardu" className="space-y-3">
           <h2 className="text-lg font-semibold">Do weryfikacji danych i standardu ({pendingVerification.length})</h2>
           <p className="text-sm text-muted-foreground">Radar podczas zbierania automatycznie ponownie sprawdza zapisane ogłoszenia z obsługiwanych portali i dodaje potwierdzone oferty do porównań. Tutaj pozostają przypadki niejednoznaczne; nie należą jeszcze do próby statystycznej.</p>
+          <div aria-label="Automatyczna analiza zapisanych opisów" className="space-y-3 rounded-xl border p-4">
+            <h3 className="font-semibold">Automatyczna ocena standardu: {queueAssessmentCounts.assessed}/{pendingVerification.length} opisów</h3>
+            <p className="text-sm text-muted-foreground">Ocena opisu nie potwierdza jeszcze całej oferty. Automat najpierw ponownie sprawdza kandydatów po świeżym remoncie i gotowych w wysokim standardzie. Brak danych oraz planowany remont nie trafiają do porównań jako zakończone prace.</p>
+            <div className="flex flex-wrap gap-2">{[["promising","Kandydaci do ponownego odczytu",(queueAssessmentCounts.fresh_renovation??0)+(queueAssessmentCounts.ready_high_standard??0)],["all","Wszystkie",pendingVerification.length],["fresh_renovation","Świeży pełny remont",queueAssessmentCounts.fresh_renovation??0],["ready_high_standard","Gotowe — wysoki standard",queueAssessmentCounts.ready_high_standard??0],["renovated_unknown_recency","Remont — brak świeżości",queueAssessmentCounts.renovated_unknown_recency??0],["needs_work","Prace planowane / wymagane",queueAssessmentCounts.needs_work??0],["insufficient","Za mało danych",queueAssessmentCounts.insufficient??0]].map(([value,label,count])=><button key={value} type="button" aria-pressed={effectiveStandardQueueFilter===value} className="rounded-lg border px-3 py-2 text-sm" onClick={()=>setStandardQueueFilter(String(value))}>{label} ({count})</button>)}</div>
+            <Button variant="outline" disabled={runStarting||runStopping||runTerminating||isRunActuallyActive(run)||!settingsLoaded} onClick={()=>void startCollection()}>Uruchom ponowną weryfikację</Button>
+          </div>
           <div className="grid gap-4 lg:grid-cols-2">
-            {pendingVerification.map((item) => (
+            {visiblePendingVerification.map((item) => (
               <VerificationQueueRow key={item.id} item={item} pending={verificationPending === item.id}
                 onResolve={(decision) => void resolveVerification(item.id, decision)} onReject={() => void setVerificationRejection(item.id, true)} />
             ))}
@@ -1030,6 +1040,7 @@ function VerificationQueueRow({ item, pending, onResolve, onReject }: {
         <h3 className="min-w-0 break-words font-semibold [overflow-wrap:anywhere]">{item.title ?? "Oferta bez tytułu"}</h3>
         <span className="rounded-full bg-muted px-2 py-0.5 text-xs">{sourceLabel(item.source)}</span>
       </div>
+      {item.snapshot.automaticStandardAssessment?<div className="mt-3 rounded-lg bg-muted/50 p-3 text-sm"><p className="font-medium">{item.snapshot.automaticStandardAssessment.label}</p><p className="mt-1 text-xs text-muted-foreground">{item.snapshot.automaticStandardAssessment.reason}</p></div>:null}
       <a className="mt-2 block break-all text-xs text-primary underline" href={item.originalUrl} target="_blank" rel="noopener noreferrer">Otwórz konkretne ogłoszenie</a>
       <div className="mt-4 grid min-w-0 gap-3 sm:grid-cols-2">
         <label className="grid gap-1 text-xs">Cena całkowita, zł<input className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" type="number" min="1" step="1" value={price} disabled={pending} onChange={(event) => setPrice(event.target.value)} /></label>
