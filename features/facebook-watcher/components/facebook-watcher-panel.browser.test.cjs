@@ -114,6 +114,7 @@ const VIEWPORTS = [
   { name: "1280x800", width: 1280, height: 800, mobile: false },
   { name: "768x1024", width: 768, height: 1024, mobile: true },
   { name: "390x844", width: 390, height: 844, mobile: true },
+  { name: "360x800", width: 360, height: 800, mobile: true },
 ];
 
 const TOLERANCE = 1;
@@ -261,6 +262,7 @@ async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode 
     galleryTraceRequestCount += 1;
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
   });
+  await page.route("**/api/alerts", route => route.fulfill({contentType:"application/json",body:JSON.stringify({alerts:[]}),status:200}));
   await page.route("**/api/facebook-watcher/**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/facebook-watcher/listings" && route.request().method() === "GET") {
@@ -421,6 +423,13 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
       // Let layout settle after the resize before measuring.
       await page.waitForTimeout(150);
 
+      if (viewport.width < 768) {
+        const filters = page.getByText("Filtry", {exact:true});
+        const detail = filters.locator("xpath=ancestor::details");
+        if ((await detail.getAttribute("open")) === null) await filters.click();
+        const fields = await detail.locator("input, select, button").evaluateAll(nodes => nodes.map(node => ({label:node.getAttribute("aria-label")??node.tagName,left:node.getBoundingClientRect().left,right:node.getBoundingClientRect().right})));
+        for (const field of fields) assert.ok(field.left >= -1 && field.right <= viewport.width+1, `${viewport.name}: filter ${field.label} stays inside the screen (${field.left}, ${field.right})`);
+      }
       const geometry = await collectGeometry(page);
       assert.equal(geometry.articles.length, 5, `${viewport.name}: exactly one <article> wrapper per fixture listing, never one around the whole grid`);
 
@@ -688,4 +697,39 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     assertNoUnexpectedNoise(handle, { expectedPatchFailures: 1 });
     assert.equal(handle.getExpectedPatchFailures(), 1, "the failed-PATCH scenario must exercise exactly one 500 response");
   });
+  await t.test("F: mobile ranges save, survive reload and clear without horizontal overflow", async (t) => {
+    const handle = await setupWatcherPage(browser, baseUrl);
+    const { page } = handle;
+    t.after(() => Promise.all([page.close(), handle.context.close()]));
+    await page.setViewportSize({width:360,height:800});
+    const openFilters=async()=>{await page.getByText("Filtry",{exact:true}).click();return page.locator("details[open]").filter({has:page.getByText("Filtry",{exact:true})});};
+    let controls=await openFilters();
+    await controls.getByLabel("Cena minimalna (PLN)",{exact:true}).fill("250000");
+    await controls.getByLabel("Cena maksymalna (PLN)",{exact:true}).fill("550000");
+    await controls.getByLabel("Powierzchnia min. (m²)",{exact:true}).fill("35.5");
+    await controls.getByLabel("Powierzchnia maks. (m²)",{exact:true}).fill("65");
+    await controls.getByRole("checkbox",{name:"2",exact:true}).check();
+    await controls.getByRole("checkbox",{name:"3",exact:true}).check();
+    await page.getByRole("button",{name:"Zapisz filtry",exact:true}).click();
+    await page.getByText("Filtry zapisane na tym urządzeniu.",{exact:true}).waitFor();
+    await page.reload({waitUntil:"networkidle"});
+    controls=await openFilters();
+    assert.equal(await controls.getByLabel("Cena minimalna (PLN)",{exact:true}).inputValue(),"250000");
+    assert.equal(await controls.getByLabel("Powierzchnia min. (m²)",{exact:true}).inputValue(),"35.5");
+    assert.equal(await controls.getByLabel("Powierzchnia maks. (m²)",{exact:true}).inputValue(),"65");
+    assert.equal(await controls.getByRole("checkbox",{name:"2",exact:true}).isChecked(),true);
+    assert.equal(await controls.getByRole("checkbox",{name:"3",exact:true}).isChecked(),true);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth),true);
+    await controls.getByLabel("Powierzchnia min. (m²)",{exact:true}).fill("90");
+    await page.getByRole("alert").filter({hasText:"Powierzchnia:"}).waitFor();
+    assert.equal(await page.getByRole("button",{name:"Zapisz filtry",exact:true}).isDisabled(),true);
+    await controls.getByRole("button",{name:"Wyczyść filtry",exact:true}).click();
+    await page.getByRole("button",{name:"Zapisz filtry",exact:true}).click();
+    await page.reload({waitUntil:"networkidle"});
+    controls=await openFilters();
+    assert.equal(await controls.getByLabel("Cena minimalna (PLN)",{exact:true}).inputValue(),"");
+    assert.equal(await controls.getByRole("checkbox",{name:"2",exact:true}).isChecked(),false);
+    assertNoUnexpectedNoise(handle);
+  });
+
 });

@@ -7,9 +7,14 @@ export type FacebookInboxFilters = {
   minFlipScore: number | null; minOpportunityScore: number | null;
   sellerType: "all" | "private" | "agency"; condition: "all" | "renovation" | "ready";
   publishedDays: number | null;
+  minPrice?: number | null; minArea?: number | null; maxArea?: number | null;
+  minFloor?: number | null; maxFloor?: number | null; minProfit?: number | null;
+  roomOptions?: number[]; excludeGroundFloor?: boolean; excludeTopFloor?: boolean;
+  marketType?: "all" | "primary" | "secondary";
+
 };
 
-export const EMPTY_FACEBOOK_INBOX_FILTERS: FacebookInboxFilters = { query: "", neighborhood: "", district: "", group: "", maxPrice: null, maxPricePerSqm: null, rooms: null, minFlipScore: null, minOpportunityScore: null, sellerType: "all", condition: "all", publishedDays: null };
+export const EMPTY_FACEBOOK_INBOX_FILTERS: FacebookInboxFilters = { query: "", neighborhood: "", district: "", group: "", maxPrice: null, maxPricePerSqm: null, rooms: null, minFlipScore: null, minOpportunityScore: null, sellerType: "all", condition: "all", publishedDays: null, minPrice: null, minArea: null, maxArea: null, minFloor: null, maxFloor: null, minProfit: null, roomOptions: [], excludeGroundFloor: false, excludeTopFloor: false, marketType: "all" };
 
 export function filterFacebookInbox(items: FacebookWatcherListing[], status: FacebookWorkflowStatus | "all", filters: FacebookInboxFilters, now = Date.now()): FacebookWatcherListing[] {
   const query = normalize(filters.query);
@@ -19,6 +24,16 @@ export function filterFacebookInbox(items: FacebookWatcherListing[], status: Fac
     if (filters.neighborhood && normalize(item.neighborhood) !== normalize(filters.neighborhood)) return false;
     if (filters.district && normalize(item.district) !== normalize(filters.district)) return false;
     if (filters.group && normalize(item.groupName) !== normalize(filters.group)) return false;
+    if (typeof filters.minPrice === "number" && (item.price === null || item.price < filters.minPrice)) return false;
+    if (typeof filters.minArea === "number" && (item.area === null || item.area < filters.minArea)) return false;
+    if (typeof filters.maxArea === "number" && (item.area === null || item.area > filters.maxArea)) return false;
+    if (typeof filters.minFloor === "number" && (item.floor === null || item.floor < filters.minFloor)) return false;
+    if (typeof filters.maxFloor === "number" && (item.floor === null || item.floor > filters.maxFloor)) return false;
+    if (typeof filters.minProfit === "number" && (item.potentialProfit === null || item.potentialProfit < filters.minProfit)) return false;
+    if (filters.roomOptions?.length && (item.rooms === null || !filters.roomOptions.includes(item.rooms))) return false;
+    if (filters.excludeGroundFloor && (item.floor === null || item.floor === 0)) return false;
+    if (filters.excludeTopFloor && (item.floor === null || item.totalFloors === null || item.floor >= item.totalFloors)) return false;
+    if (filters.marketType && filters.marketType !== "all" && item.marketType !== filters.marketType) return false;
     if (filters.maxPrice !== null && (item.price === null || item.price > filters.maxPrice)) return false;
     if (filters.maxPricePerSqm !== null && (item.pricePerSqm === null || item.pricePerSqm > filters.maxPricePerSqm)) return false;
     if (filters.rooms !== null && item.rooms !== filters.rooms) return false;

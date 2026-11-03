@@ -18,6 +18,20 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Sale, real image transport, duplicate receipts and cleanup boundaries
-        run: node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/collector/facebook-mobile.test.ts features/collector/mobile-jpeg.test.ts features/collector/facebook-import.test.ts features/facebook-watcher/offer-quality.test.ts features/facebook-watcher/saved-cleanup.test.ts features/facebook-watcher/saved-cleanup-route.test.ts features/facebook-watcher/saved-cleanup.rpc.test.ts features/facebook-watcher/history-clear.test.ts features/facebook-watcher/history-summary.integration.test.ts features/facebook-watcher/search-quality.test.ts features/facebook-watcher/facebook-inbox.test.ts
+        run: node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/collector/facebook-mobile.test.ts features/collector/mobile-jpeg.test.ts features/collector/facebook-import.test.ts features/facebook-watcher/offer-quality.test.ts features/facebook-watcher/saved-cleanup.test.ts features/facebook-watcher/saved-cleanup-route.test.ts features/facebook-watcher/saved-cleanup.rpc.test.ts features/facebook-watcher/history-clear.test.ts features/facebook-watcher/history-summary.integration.test.ts features/facebook-watcher/search-quality.test.ts features/facebook-watcher/facebook-inbox.test.ts features/facebook-watcher/saved-inbox-filters.test.ts features/facebook-watcher/group-facebook-reposts.test.ts
       - run: npx tsc --noEmit --incremental false
       - run: npx eslint features/collector/facebook-mobile.ts features/collector/facebook-import.ts features/facebook-watcher/offer-quality.ts features/facebook-watcher/saved-cleanup.ts features/facebook-watcher/components/facebook-watcher-panel.tsx app/api/collector/facebook/mobile/route.ts app/api/facebook-watcher/history/by-saved-date/route.ts
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - name: Watcher mobile layout, saved filters and card interactions
+        run: node --test features/facebook-watcher/components/facebook-watcher-panel.browser.test.cjs
