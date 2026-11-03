@@ -17,7 +17,7 @@ const finderCard = fs.readFileSync(path.join(__dirname, "../../flip-finder/compo
 // rather than some other (possibly stale) list.
 test("the sort dropdown, sortFacebookInbox, and rendered items are the same pipeline", () => {
   assert.match(panel, /const \[sort,setSort\]=useState<FacebookInboxSort>\("newest"\)/, "sort must be real component state, not a constant");
-  assert.match(panel, /const visible=useMemo\(\(\)=>sortFacebookInbox\(filterFacebookInbox\(listings,tab,filters\),sort\),\[filters,listings,sort,tab\]\)/, "visible must be computed by piping the filtered list through sortFacebookInbox with the live sort state, and the memo must depend on `sort`");
+  assert.match(panel, /const visible=useMemo\(\(\)=>groupFacebookReposts\(sortFacebookInbox\(filterFacebookInbox\(listings,tab,filters\),sort\)\),\[filters,listings,sort,tab\]\)/, "visible must be computed by piping the filtered list through sortFacebookInbox with the live sort state, and the memo must depend on `sort`");
   assert.match(panel, /<select aria-label="Sortowanie"[^>]*value=\{sort\} onChange=\{event=>setSort\(event\.target\.value as FacebookInboxSort\)\}>/, "the dropdown must be a controlled input whose onChange writes directly into the sort state");
   assert.match(panel, /\{visible\.map\(item=><InboxItem /, "the rendered list must map over `visible` (the sorted result), not the raw `listings`");
   assert.doesNotMatch(panel, /\{listings\.map\(item=><InboxItem /, "rendering must never bypass sortFacebookInbox by mapping the unsorted listings directly");
