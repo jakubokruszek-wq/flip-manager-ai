@@ -803,7 +803,11 @@ function compareRadarDetailIdentity(source: RadarDetailSource, listing: Property
           : null;
     return id?.replace(/\.html?$/iu, "").toLowerCase() ?? null;
   };
-  const expectedId = source === "adresowo" || source === "allegro_lokalnie" ? null : listing.externalListingId || idFromUrl(requestedUrl);
+  // Morizon historically stored the entire URL slug as externalListingId.
+  // Its canonical redirect can add/change the street without changing mznID.
+  const expectedId = source === "adresowo" || source === "allegro_lokalnie" ? null
+    : source === "morizon" ? idFromUrl(requestedUrl)
+      : listing.externalListingId || idFromUrl(requestedUrl);
   const responseId = idFromUrl(finalUrl);
   if (expectedId && responseId) return expectedId.toLowerCase() === responseId ? "same_listing_id" : "mismatch";
   return "unconfirmed";

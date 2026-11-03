@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { parseRadarOfferDetail } from "./external-source-adapters.ts";
+import test, { mock } from "node:test";
+import { fetchRadarMorizonDetails, parseRadarOfferDetail } from "./external-source-adapters.ts";
+import type { PropertySourceListing } from "@/features/properties/types/property";
 
 // Same reference-pool/propertyData structure as public detail responses from
 // Gratka and Morizon. Recommendations intentionally contain better facts.
@@ -55,4 +56,33 @@ test("malformed and cyclic source pools fail closed", () => {
   for (const content of ["not-json", '[{"propertyData":0}]']) {
     assert.equal(parseRadarOfferDetail("gratka", `<script id="__NUXT_DATA__">${content}</script>`, url).verified, false);
   }
+});
+
+test("Morizon canonical street redirects match the stable mzn number even with legacy full-slug external IDs", async () => {
+  const originalUrl = "https://www.morizon.pl/oferta/sprzedaz-mieszkanie-lodz-50m2-mzn123";
+  const base: PropertySourceListing = {
+    source: "morizon", externalListingId: "sprzedaz-mieszkanie-lodz-50m2-mzn123", originalUrl, normalizedUrl: originalUrl,
+    title: "Mieszkanie na sprzedaż", description: "Skrócony opis.", price: 500000, area: 50, pricePerSqm: 10000,
+    rooms: 2, floor: null, city: "Łódź", district: "Bałuty", locationText: null,
+    buildingType: null, thumbnailUrl: null, ownership: null, images: [], publishedAt: null,
+    rawPayload: { radarSearchScope: "apartment-sale" }, contentHash: "short",
+  };
+  let wrongId = false;
+  const fetched = mock.method(globalThis, "fetch", async () => {
+    const response = new Response(page({ idOnFrontend: "mzn123", url: "/oferta/sprzedaz-mieszkanie-lodz-mokra-50m2-mzn123" }));
+    Object.defineProperty(response, "url", { value: wrongId
+      ? "https://www.morizon.pl/oferta/sprzedaz-mieszkanie-lodz-mokra-50m2-mzn999"
+      : "https://www.morizon.pl/oferta/sprzedaz-mieszkanie-lodz-mokra-50m2-mzn123" });
+    return response;
+  });
+  try {
+    const batches = { purpose: "price_radar" as const, onBatch: async () => {} };
+    const valid = await fetchRadarMorizonDetails([base], undefined, batches);
+    assert.equal(valid.listings[0]?.rawPayload.detailVerified, true);
+    assert.equal((valid.listings[0]?.rawPayload.detailResponse as Record<string, unknown>).identity, "same_listing_id");
+    assert.equal(valid.listings[0]?.externalListingId, base.externalListingId, "canonicalization never changes the saved replay identity");
+    wrongId = true;
+    const wrong = await fetchRadarMorizonDetails([base], undefined, batches);
+    assert.equal(wrong.listings[0]?.rawPayload.detailVerified, false, "a different mznID is still rejected");
+  } finally { fetched.mock.restore(); }
 });
