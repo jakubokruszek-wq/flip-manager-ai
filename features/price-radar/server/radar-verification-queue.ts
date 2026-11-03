@@ -207,12 +207,27 @@ export async function upsertPendingRadarVerificationCandidate(
 export type RadarVerificationQueueRead = { available: boolean; pending: RadarVerificationQueueItem[]; confirmed: RadarVerificationQueueItem[]; rejected: RadarVerificationQueueItem[] };
 
 export async function getRadarVerificationQueue(ownerId: string, supabase: SupabaseClient = createAdminClient()): Promise<RadarVerificationQueueRead> {
-  const { data, error } = await supabase.from("price_radar_verification_queue").select(SELECT).eq("owner_id", ownerId).order("last_seen_at", { ascending: false });
-  if (error) {
-    if (isSchemaUnavailable(error)) return { available: false, pending: [], confirmed: [], rejected: [] };
-    throw new Error("Nie udało się odczytać kolejki weryfikacji Radaru.");
+  // PostgREST caps a single read at 1,000 rows. Confirmed/rejected history
+  // shares this table with pending offers, so a single read silently loses
+  // pending entries once the owner's history grows past that cap.
+  const pageSize = 500;
+  const byId = new Map<string, RadarVerificationQueueItem>();
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase.from("price_radar_verification_queue").select(SELECT)
+      .eq("owner_id", ownerId).order("last_seen_at", { ascending: false }).order("id", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    if (error) {
+      if (isSchemaUnavailable(error)) return { available: false, pending: [], confirmed: [], rejected: [] };
+      throw new Error("Nie udało się odczytać kolejki weryfikacji Radaru.");
+    }
+    const page = Array.isArray(data) ? data : [];
+    for (const row of page) {
+      const item = toQueueItem(row);
+      if (item) byId.set(item.id, item);
+    }
+    if (page.length < pageSize) break;
   }
-  const rows = (Array.isArray(data) ? data : []).map(toQueueItem).filter((item): item is RadarVerificationQueueItem => item !== null);
+  const rows = [...byId.values()];
   return { available: true, pending: rows.filter((item) => item.status === "pending"), confirmed: rows.filter((item) => item.status === "confirmed"), rejected: rows.filter((item) => item.status === "rejected") };
 }
 
