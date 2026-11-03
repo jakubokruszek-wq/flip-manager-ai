@@ -10,37 +10,28 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     permissions:
-      actions: write
+      actions: read
       contents: write
     steps:
-      - name: Clear only failed native reports for the same-run retry
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for artifact in 13229971956 13228432798; do
-            gh api repos/jakubokruszek-wq/flip-manager-ai/actions/artifacts/$artifact > report.json
-            jq -e '.workflow_run.id == 41630040415 and (.name == "gecko-poc-instrumented-reports-548" or .name == "gecko-poc-offline-ocr-reports-548")' report.json
-            gh api --method DELETE repos/jakubokruszek-wq/flip-manager-ai/actions/artifacts/$artifact
-          done
       - name: Require full regression of exact application source
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh run watch 41630040415 --repo jakubokruszek-wq/flip-manager-ai --exit-status --interval 45
-          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41630040415 > run.json
-          jq -e '.head_sha == "5da49fcfa0412890c71a6cf118f993d23d4b14ae" and .conclusion == "success"' run.json
+          gh run watch 41640492362 --repo jakubokruszek-wq/flip-manager-ai --exit-status --interval 45
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41640492362 > run.json
+          jq -e '.head_sha == "87beb4ed71ca9f7a7a19b42278baf69d353f8a23" and .conclusion == "success"' run.json
       - uses: actions/download-artifact@v4
         with:
-          name: gecko-poc-instrumented-reports-548
+          name: gecko-poc-instrumented-reports-552
           repository: jakubokruszek-wq/flip-manager-ai
-          run-id: 41630040415
+          run-id: 41640492362
           github-token: ${{ github.token }}
           path: native
       - uses: actions/download-artifact@v4
         with:
-          name: gecko-poc-unit-reports-548
+          name: gecko-poc-unit-reports-552
           repository: jakubokruszek-wq/flip-manager-ai
-          run-id: 41630040415
+          run-id: 41640492362
           github-token: ${{ github.token }}
           path: unit
       - name: Verify actual reports and prepare synthetic screenshot for visual review
