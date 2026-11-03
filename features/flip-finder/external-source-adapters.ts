@@ -672,7 +672,7 @@ function parseOtodomRadarDetail(html: string): ParsedRadarPortalDetail {
   const category = isRecord(ad.adCategory) ? ad.adCategory : {};
   const addressValue = atPath(ad, ["location", "address"]);
   const unifiedAddressValue = atPath(unified, ["location", "address"]);
-  const address = isRecord(addressValue) ? addressValue : isRecord(unifiedAddressValue) ? unifiedAddressValue : {};
+  const address = { ...(isRecord(unifiedAddressValue) ? unifiedAddressValue : {}), ...(isRecord(addressValue) ? addressValue : {}) };
   const street = nestedName(address.street);
   const subdistrict = nestedName(address.subdistrict);
   const namedDistrict = nestedName(address.district);
@@ -680,9 +680,13 @@ function parseOtodomRadarDetail(html: string): ParsedRadarPortalDetail {
   const titleText = [$("title").first().text(), $("h1").first().text(), text(ad, "title"), text(unified, "title")].filter(Boolean).join(" ");
   const description = stripHtml(text(unified, "description") ?? text(ad, "description") ?? "") || null;
   const locationText = [namedCity, namedDistrict, subdistrict, street, $("h1").first().text()].filter(Boolean).join(", ");
+  // Only the portal's own sale-title location segment is a fallback. A
+  // mention of Łódź in advertising text is not evidence of the offer city.
+  const seoLocation = $("title").first().text().match(/(?:mieszkanie|apartament) na sprzedaż\s*[-–—]\s*(.+?)\s*[-–—]\s*\d+\s*(?:•|\||$)/iu)?.[1] ?? "";
   const parsedLocation = parseRadarLocation(`${locationText} ${titleText}`);
-  const city = namedCity ? parseRadarLocation(namedCity).city ?? (/\u0141\u00f3d\u017a/iu.test(namedCity) ? "Łódź" : null) : parsedLocation.city;
-  const district = namedDistrict ? parseRadarLocation(namedDistrict).district ?? resolveKnownRadarDistrict(namedDistrict) : parsedLocation.district;
+  const seoParsedLocation = parseRadarLocation(seoLocation);
+  const city = namedCity ? parseRadarLocation(namedCity).city ?? (/\u0141\u00f3d\u017a/iu.test(namedCity) ? "Łódź" : null) : seoParsedLocation.city ?? parsedLocation.city;
+  const district = namedDistrict ? parseRadarLocation(namedDistrict).district ?? resolveKnownRadarDistrict(namedDistrict) : seoParsedLocation.district ?? parsedLocation.district;
   const marketRaw = text(attributes, "market");
   const propertyType = normalizeDetailLabel(`${text(category, "name") ?? ""} ${text(category, "type") ?? ""}`) === "flat sell" ? "apartment" : null;
   const buildingType = normalizePortalBuildingType(text(attributes, "building_type"), titleText, description);

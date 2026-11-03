@@ -23,12 +23,15 @@ function fakeVerificationDb(initial: Record<string, unknown>[] = []) {
     from(table: string) {
       assert.equal(table, "price_radar_verification_queue");
       const filters: Array<(row: Record<string, unknown>) => boolean> = [];
+      let rangeStart = 0;
+      let rangeEnd = 999;
       const builder: Record<string, unknown> = {
         select: () => builder,
         eq: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return builder; },
         order: () => builder,
+        range: (start: number, end: number) => { rangeStart = start; rangeEnd = end; return builder; },
         maybeSingle: async () => ({ data: rows.find((row) => filters.every((filter) => filter(row))) ?? null, error: null }),
-        then: (resolve: (value: unknown) => unknown) => Promise.resolve({ data: rows.filter((row) => filters.every((filter) => filter(row))), error: null }).then(resolve),
+        then: (resolve: (value: unknown) => unknown) => Promise.resolve({ data: rows.filter((row) => filters.every((filter) => filter(row))).slice(rangeStart, rangeEnd + 1), error: null }).then(resolve),
       };
       return builder;
     },
@@ -236,4 +239,20 @@ test("an AI district hint is stored only with its quote and never as an operator
   assert.equal(savedCandidate.value?.suggested_district, "Bałuty");
   assert.equal(savedCandidate.value?.suggestion_evidence, "Bałuty, Łódź");
   assert.equal(savedCandidate.value?.operator_decision, undefined, "AI cannot approve or resolve a candidate");
+});
+
+ test("queue reads every owner-scoped page beyond the PostgREST row cap", async () => {
+  const db = fakeVerificationDb();
+  const inserted = await upsertPendingRadarVerificationCandidate(db as never, "owner-1", candidate(), { tryConsume: () => true }, async () => null);
+  assert.equal(inserted.ok, true);
+  const template = { ...db.rows[0] };
+  db.rows.length = 0;
+  for (let index = 0; index < 1507; index++) {
+    db.rows.push({ ...template, id: `entry-${index}`, status: index < 1000 ? "rejected" : "pending" });
+  }
+  db.rows.push({ ...template, id: "another-owner", owner_id: "owner-2", status: "pending" });
+  const queue = await getRadarVerificationQueue("owner-1", db as never);
+  assert.equal(queue.pending.length, 507);
+  assert.equal(queue.rejected.length, 1000);
+  assert.ok(!queue.pending.some((item) => item.id === "another-owner"));
 });
