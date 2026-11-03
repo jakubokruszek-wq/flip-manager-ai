@@ -20,7 +20,11 @@ import org.junit.runner.RunWith
 class SavedResultInstrumentedTest {
     private val context get()=InstrumentationRegistry.getInstrumentation().targetContext
     private fun row()=DesktopRow("550000000000099","https://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/posts/550000000000099/","DOM",319000.0,"EXPLICIT_TOTAL",42.42,2,"Polesie","Retkinia",null,"SELL_PROPERTY",true,1)
-    private fun value()=SavedResult(123456789L,listOf(row()),listOf(row().copy(price=310000.0)),emptyList())
+    private fun value():SavedResult {
+        val bitmap=Bitmap.createBitmap(12,12,Bitmap.Config.ARGB_8888).apply{eraseColor(android.graphics.Color.GREEN)}
+        val photo=try{ResultArchive.photo(row().postId,0,false,bitmap)}finally{bitmap.recycle()}
+        return SavedResult(123456789L,listOf(row()),listOf(row().copy(price=310000.0)),listOf(photo))
+    }
     @Before fun before(){ArchiveTestSupport.clear(context)}
     @After fun after(){ArchiveTestSupport.clear(context)}
     @Test fun independentStoreRestoresTypedFieldsOcrAndPhotosWithoutPlaintext(){

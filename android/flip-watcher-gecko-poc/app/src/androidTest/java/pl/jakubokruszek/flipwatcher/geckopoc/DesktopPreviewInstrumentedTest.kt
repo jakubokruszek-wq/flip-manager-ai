@@ -483,6 +483,8 @@ class DesktopPreviewInstrumentedTest {
                 val summary=DesktopSummary.create("DONE",1,DesktopReply("OK","DONE",listOf(row),stats))
                 var stale:android.widget.Button?=null
                 scenario.onActivity{a->
+                    val picture=android.graphics.Bitmap.createBitmap(12,12,android.graphics.Bitmap.Config.ARGB_8888).apply{eraseColor(android.graphics.Color.GREEN)}
+                    assertTrue(a.desktopThumbnails.put(id,0,picture))
                     a.publishDesktop(summary,listOf(row))
                     val root=a.findViewById<android.view.ViewGroup>(android.R.id.content)
                     assertTrue(launched.isEmpty()) // Showing/switching tabs never opens a link.
@@ -519,6 +521,8 @@ class DesktopPreviewInstrumentedTest {
                         val id="550000000000096"
                         val row=DesktopRow(id,"https://www.facebook.com/groups/${PocPolicy.APPROVED_GROUP_ID}/posts/$id/","DOM",319000.0,"EXPLICIT_TOTAL",42.42,2,null,null,null,"SELL_PROPERTY",true,0,"CANDIDATE")
                         val stats=DesktopProtocol.emptyStats().toMutableMap().apply{put("candidates",1);put("verified",1);put("desktop",1)}
+                        val picture=android.graphics.Bitmap.createBitmap(12,12,android.graphics.Bitmap.Config.ARGB_8888).apply{eraseColor(android.graphics.Color.BLUE)}
+                        assertTrue(a.desktopThumbnails.put(id,0,picture))
                         a.publishDesktop(DesktopSummary.create("DONE",1,DesktopReply("OK","DONE",listOf(row),stats)),listOf(row))
                         repeat(2){
                             delay(400);assertTrue(channel.isConnected);assertEquals(generation,channel.connectionGeneration)

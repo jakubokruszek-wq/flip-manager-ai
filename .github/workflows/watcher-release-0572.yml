@@ -17,10 +17,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh run watch 41597583748 --repo jakubokruszek-wq/flip-manager-ai --exit-status --interval 45
-          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41597583748 > run.json
-          jq -e '.head_sha == "3d0555676343d40f778fc4912255000ecca40ab5" and .conclusion == "success"' run.json
-          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41597583748/jobs > jobs.json
+          gh run watch 41603637713 --repo jakubokruszek-wq/flip-manager-ai --exit-status --interval 45
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41603637713 > run.json
+          jq -e '.head_sha == "0fda5a59c3023607932fc6bc3cb57dce21bdb5a4" and .conclusion == "success"' run.json
+          gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/41603637713/jobs > jobs.json
           jq -e '[.jobs[] | select(.name == "Compile, unit tests, APK" or .name == "Isolation, collector-core and adapter tests" or .name == "GeckoView instrumented tests (Android 16 emulator, local HTML)")] | length == 3 and all(.[]; .conclusion == "success")' jobs.json
       - name: Check deployed Manager authentication boundary
         run: |
@@ -31,9 +31,9 @@ jobs:
           jq -e '.code == "PAIRING_REQUIRED"' response.json
       - uses: actions/download-artifact@v4
         with:
-          name: gecko-candidate-arm64-539
+          name: gecko-candidate-arm64-541
           repository: jakubokruszek-wq/flip-manager-ai
-          run-id: 41597583748
+          run-id: 41603637713
           github-token: ${{ github.token }}
           path: tested-apk
       - name: Publish identical tested APK
@@ -41,10 +41,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mv tested-apk/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk flip-watcher-0.5.72-arm64.apk
-          echo '98d51998d14c6430a5f8fdaf1fc3c5e67b1be57dfbd0a8e1de62e2fe086e09b0  flip-watcher-0.5.72-arm64.apk' | sha256sum -c -
+          echo '2c61d784219503b2bec8715703a171f4d8635557bd056082b228c317baeb5085  flip-watcher-0.5.72-arm64.apk' | sha256sum -c -
           unzip -p flip-watcher-0.5.72-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
           cat > release-notes.md <<'NOTES'
-          Android Watcher 0.5.72, ARM64, versionCode 8539. Exact APK from successful complete run 41597583748, application source 3d0555676343d40f778fc4912255000ecca40ab5; not rebuilt for publication.
+          Android Watcher 0.5.72, ARM64, versionCode 8541. Exact APK from successful complete run 41603637713, application source 0fda5a59c3023607932fc6bc3cb57dce21bdb5a4; not rebuilt for publication.
           
           Main offers and automatic Manager uploads require confirmed property sale and at least one real stored post-bound photo. A text graphic counts. Uncertain/no-photo records stay local for review.
           Local cleanup uses a selected saved-date cutoff, preview and confirmation, preserves unknown historical dates and prevents removed queued offers from replaying. Manager has independent saved-date cleanup with CRM/deal protection.
@@ -53,6 +53,6 @@ jobs:
           
           Tested with classifier/transport/SQL regressions and Android emulator fixtures. Private Facebook layout and manufacturer background restrictions still require normal phone operation; emulator tests do not prove every live Facebook variant.
           Install as update; do not uninstall or clear application data. Stable certificate SHA256 878b11e677eb4a62883b0b8709fa19c969926708053a01d47f01b0548fb370a2.
-          APK SHA256 98d51998d14c6430a5f8fdaf1fc3c5e67b1be57dfbd0a8e1de62e2fe086e09b0.
+          APK SHA256 2c61d784219503b2bec8715703a171f4d8635557bd056082b228c317baeb5085.
           NOTES
-          gh release create gecko-poc-0.5.72 flip-watcher-0.5.72-arm64.apk --repo jakubokruszek-wq/flip-manager-ai --target 3d0555676343d40f778fc4912255000ecca40ab5 --title 'Watcher 0.5.72 — property sales with photos and saved-date cleanup' --prerelease --notes-file release-notes.md
+          gh release create gecko-poc-0.5.72 flip-watcher-0.5.72-arm64.apk --repo jakubokruszek-wq/flip-manager-ai --target 0fda5a59c3023607932fc6bc3cb57dce21bdb5a4 --title 'Watcher 0.5.72 — property sales with photos and saved-date cleanup' --prerelease --notes-file release-notes.md
