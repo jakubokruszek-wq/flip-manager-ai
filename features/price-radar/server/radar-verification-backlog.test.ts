@@ -36,3 +36,11 @@ test("backlog reading is bounded even if the database returns a large queue", as
   const result = await readRadarVerificationBacklog(database(Array.from({ length: 1000 }, (_, index) => row(String(index)))) as never, "owner", "gratka");
   assert.equal(result.ids.length, 300);
 });
+
+test("the first 300 already qualified records cannot starve the next pending candidates", async () => {
+  const queue = Array.from({ length: 400 }, (_, index) => row(String(index)));
+  const active = queue.slice(0, 300).map((item) => ({ owner_id: "owner", source: "gratka", status: "active", external_listing_id: item.external_listing_id }));
+  const result = await readRadarVerificationBacklog(database(queue, active) as never, "owner", "gratka");
+  assert.equal(result.ids.length, 100);
+  assert.equal(result.ids[0], "300");
+});

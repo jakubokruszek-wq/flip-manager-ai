@@ -244,6 +244,26 @@ test("claim and continuation checkpoints use the 75-second lease for a 42-second
   assert.ok(leaseCalls.every(({ args }) => args.p_lease_seconds === 75), "every claim and checkpoint must retain the shorter lease window");
 });
 
+test("backlog Retry-After survives portions without another request or a false no-progress failure", async () => {
+  const db = fakeDb({ verificationQueue: [{ id: "queued", owner_id: ownerId, source: "oferty_net", external_listing_id: "123", status: "pending",
+    original_url: "https://www.oferty.net/mieszkanie-na-sprzedaz,123", title: "Mieszkanie na sprzedaż", source_snapshot: {},
+  }] });
+  let requests = 0;
+  const fetched = mock.method(globalThis, "fetch", async () => { requests += 1; return new Response("", { status: 429, headers: { "retry-after": "600" } }); });
+  fakeSourceImpl = async () => { throw new Error("fresh search must wait for the saved backlog Retry-After"); };
+  try {
+    const claim = await claimOrCreateRadarRun(ownerId, ["oferty_net"], db as never);
+    if (claim.kind !== "claimed") throw new Error("expected claimed");
+    let result;
+    for (let portion = 0; portion < 5; portion += 1) result = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
+    assert.equal(requests, 1);
+    assert.equal(result!.status, "running");
+    const checkpoint = db.tables.price_radar_runs[0].checkpoint as Row;
+    assert.equal((checkpoint.progress as Row).waitingReason, "retry_after");
+    assert.equal((checkpoint.sourceStatuses as Row).oferty_net, "pending");
+  } finally { fetched.mock.restore(); }
+});
+
 test("terminal CAPTCHA and HTTP 429 failures are recorded once while pending portals keep advancing", async () => {
   const db = fakeDb();
   const attempts: Record<string, number> = {};

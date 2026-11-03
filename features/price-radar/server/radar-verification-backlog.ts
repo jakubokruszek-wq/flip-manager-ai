@@ -21,10 +21,15 @@ export async function readRadarVerificationBacklog(db: SupabaseClient, ownerId: 
     if (["42P01", "PGRST205"].includes(error.code)) return { ids: [], listings: [] };
     throw new Error("Nie udało się odczytać kolejki automatycznej weryfikacji Radaru.");
   }
-  const rows = (Array.isArray(data) ? data as Row[] : []).slice(0, 300);
-  const active = await activeRadarListingExternalIds(db, ownerId, source, rows.map((row) => String(row.external_listing_id)));
+  const rows = (Array.isArray(data) ? data as Row[] : []).slice(0, fixedIds ? 300 : 1000);
+  const active = new Set<string>();
+  // Keep REST URLs bounded. Filter already qualified rows before taking the
+  // next 300 slots, otherwise old active records could starve the backlog.
+  for (let offset = 0; offset < rows.length; offset += 150) {
+    for (const id of await activeRadarListingExternalIds(db, ownerId, source, rows.slice(offset, offset + 150).map((row) => String(row.external_listing_id)))) active.add(id);
+  }
   const selected = fixedIds ? fixedIds.map((id) => rows.find((row) => row.id === id) ?? { id, status: "missing" })
-    : rows.filter((row) => !active.has(String(row.external_listing_id)));
+    : rows.filter((row) => !active.has(String(row.external_listing_id))).slice(0, 300);
   return {
     ids: selected.map((row) => String(row.id)),
     listings: selected.map((row): PropertySourceListing => {

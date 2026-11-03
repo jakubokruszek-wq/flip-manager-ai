@@ -776,7 +776,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           // and is never counted. Neither is an attempt the portion itself cut
           // short because it started late. Everything else that neither moved
           // the cursor nor increased the counters is a failed attempt.
-          const retryAfterUntil = isYield && reason.reason === "detail_rate_limit" ? pendingRetryAfter(checkpoint.perSourceCursor[sourceId]) : null;
+          const retryAfterUntil = isYield && reason.reason === "detail_rate_limit" ? pendingRetryAfter(effectiveSourceCursor(checkpoint, sourceId)) : null;
           const cutShortByPortion = isYield ? reason.reason === "portion_budget" : controller.signal.aborted;
           const progressed = attemptProgressed();
           const counts = !progressed && retryAfterUntil === null && (hadFairShare || !cutShortByPortion);
@@ -1114,6 +1114,11 @@ function pendingRetryAfter(cursor: unknown, now = Date.now()): string | null {
   return Number.isFinite(until) && until > now ? new Date(until).toISOString() : null;
 }
 
+function effectiveSourceCursor(checkpoint: RadarCheckpoint, source: string): unknown {
+  const backlog = checkpoint.verificationBacklog?.[source];
+  return backlog && !backlog.done ? backlog.cursor : checkpoint.perSourceCursor[source];
+}
+
 function isInitialCursor(cursor: unknown): boolean {
   if (cursor === undefined || cursor === null || cursor === 1) return true;
   return isRecord(cursor) && cursor.page === 1 && cursor.candidateIndex === 0;
@@ -1152,7 +1157,7 @@ function recordPortionDiagnostics(checkpoint: RadarCheckpoint, portionProgressed
   if (!unfinished.length) waitingReason = null;
   else if (!http.length) waitingReason = checkpoint.sourceStatuses.olx === "running" ? "olx_worker" : "next_portion";
   else {
-    const retries = http.map((source) => pendingRetryAfter(checkpoint.perSourceCursor[source]));
+    const retries = http.map((source) => pendingRetryAfter(effectiveSourceCursor(checkpoint, source)));
     if (retries.every((value): value is string => value !== null)) {
       waitingReason = "retry_after";
       waitingUntil = retries.reduce((earliest, value) => Date.parse(value) < Date.parse(earliest) ? value : earliest);
