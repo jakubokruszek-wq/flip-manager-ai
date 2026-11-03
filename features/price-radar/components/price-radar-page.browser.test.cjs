@@ -88,6 +88,7 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   districtQueueState = { available: false, pending: [], assigned: [], rejected: [] };
   districtQueueAssignments.length = 0;
   districtQueueRejections.length = 0;
+  let verificationQueueState={available:true,pending:[],confirmed:[],rejected:[]};
   const port = await freePort();
   const authPort = await freePort();
   const root = path.resolve(__dirname, "../../..");
@@ -157,6 +158,9 @@ test("real Radar page persists settings, separates markets, excludes/restores li
         sources: url.searchParams.getAll("source"),
       };
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(results(queryFilters, excluded)) });
+    }
+    if (url.pathname === "/api/price-radar/verification-queue" && request.method() === "GET") {
+      return route.fulfill({status:200,contentType:"application/json",body:JSON.stringify(verificationQueueState)});
     }
     if (url.pathname === "/api/price-radar/district-queue" && request.method() === "GET") {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(districtQueueState) });
@@ -498,6 +502,22 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   assert.deepEqual(runPosts().at(-1)?.body, { action: "start_new" }, "a terminal run with the old stop marker starts explicitly instead of trying to resume its ID");
   assert.equal(radarRun.id, "radar-new-after-terminal-run", "the explicit start creates a distinct run ID");
   assert.equal(await page.getByText(/The requested Radar run is no longer resumable/u).count(), 0, "starting a new run clears the stale resumability error");
+  const assessedItem=(id,category,priority)=>({
+    id,source:"otodom",externalListingId:id,originalUrl:`https://example.test/${id}`,title:`Ocena standardu ${id}`,status:"pending",firstSeenAt:"2026-11-03T10:00:00Z",lastSeenAt:"2026-11-03T11:00:00Z",decision:null,decisionAt:null,rejectedAt:null,
+    snapshot:{description:"Opis testowy",price:450000,pricePerSqm:9000,area:50,rooms:2,city:"Łódź",district:"Górna",buildingType:"blok",marketType:"secondary",qualityCategory:null,publishedAt:null,sourceUpdatedAt:null,collectedAt:null,sourceHttpStatus:200,finalUrl:null,sourceIdentity:null,confirmedFields:["total_price","area","rooms"],missingFields:["standard"],contradictoryFields:[],fieldEvidence:{},routingReasons:[],suggestedDistrict:null,suggestionEvidence:null,automaticStandardAssessment:{version:"2026-11-03.1",category,priority,label:`Ocena ${category}`,reason:"Ocena opisu nie potwierdza całej oferty."}},
+  });
+  verificationQueueState={available:true,pending:[assessedItem("positive","ready_high_standard",3),assessedItem("planned","needs_work",0),assessedItem("missing","insufficient",1)],confirmed:[],rejected:[]};
+  await page.reload({waitUntil:"networkidle"});
+  await page.getByText("Automatyczna ocena standardu: 3/3 opisów").waitFor();
+  assert.equal(await page.getByRole("heading",{name:"Ocena standardu positive",exact:true}).count(),1);
+  assert.equal(await page.getByRole("heading",{name:"Ocena standardu planned",exact:true}).count(),0,"default view prioritizes finished-standard candidates without deleting planned-work rows");
+  await page.getByRole("button",{name:"Prace planowane / wymagane (1)",exact:true}).click();
+  await page.getByRole("heading",{name:"Ocena standardu planned",exact:true}).waitFor();
+  assert.equal(await page.getByRole("heading",{name:"Ocena standardu positive",exact:true}).count(),0);
+  await page.getByRole("button",{name:"Wszystkie (3)",exact:true}).click();
+  assert.equal(await page.getByRole("heading",{name:/^Ocena standardu /}).count(),3);
+  assert.equal(await page.locator("article").filter({hasText:"Ocena standardu positive"}).getByRole("button",{name:"Potwierdź i dodaj do porównań"}).isDisabled(),true,"automatic text assessment does not silently pre-confirm the operator form");
+
 });
 
 test("an expired nonterminal Radar run resumes automatically in place without a manual click", { timeout: 600_000 }, async (t) => {

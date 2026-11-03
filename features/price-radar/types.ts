@@ -1,3 +1,4 @@
+import type { RadarStandardAssessment } from "./standard-assessment";
 import type { ListingSource } from "@/features/flip-finder";
 import type { MarketType } from "@/features/flip-finder";
 import type { RadarDetailDiagnostic, RadarDetailCursor } from "@/features/flip-finder/source-batches";
@@ -333,6 +334,7 @@ export type RadarVerificationQueueItem = {
   firstSeenAt: string;
   lastSeenAt: string;
   snapshot: {
+    automaticStandardAssessment?: RadarStandardAssessment;
     description: string | null;
     price: number | null;
     pricePerSqm: number | null;

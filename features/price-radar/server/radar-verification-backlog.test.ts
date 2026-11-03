@@ -46,3 +46,14 @@ test("the first 300 already qualified records cannot starve the next pending can
   assert.equal(result.ids.length, 100);
   assert.equal(result.ids[0], "300");
 });
+
+test("finished-standard evidence gets HTTP priority before the cap, while resume keeps fixed identities", async () => {
+  const empty=Array.from({length:300},(_,i)=>row(`empty-${i}`));
+  const promising=row("ready",{source_snapshot:{description:"Mieszkanie po generalnym remoncie. Wysoki standard. Gotowe do zamieszkania."}});
+  const db=database([...empty,promising]);
+  const first=await readRadarVerificationBacklog(db as never,"owner","gratka");
+  assert.equal(first.ids.length,300);assert.equal(first.ids[0],"ready");
+  assert.equal(first.listings[0].rawPayload.detailVerified,false,"priority is not proof of source confirmation");
+  const fixed=await readRadarVerificationBacklog(db as never,"owner","gratka",["empty-0","ready"]);
+  assert.deepEqual(fixed.ids,["empty-0","ready"]);
+});

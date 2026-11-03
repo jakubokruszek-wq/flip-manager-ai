@@ -1,4 +1,5 @@
 import "server-only";
+import { assessRadarSavedStandard } from "../standard-assessment";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PropertySourceListing } from "@/features/properties/types/property";
 import { activeRadarListingExternalIds } from "./persist-radar-listing";
@@ -27,6 +28,13 @@ export async function readRadarVerificationBacklog(db: SupabaseClient, ownerId: 
   // next 300 slots, otherwise old active records could starve the backlog.
   for (let offset = 0; offset < rows.length; offset += 150) {
     for (const id of await activeRadarListingExternalIds(db, ownerId, source, rows.slice(offset, offset + 150).map((row) => String(row.external_listing_id)))) active.add(id);
+  }
+  // A known finished-standard candidate should not spend its HTTP budget
+  // behind hundreds of empty/blocked snapshots. Stable fixed identities keep
+  // this priority order throughout resume; an assessment never bypasses detail.
+  if (!fixedIds) {
+    const priorities=new Map(rows.map(row=>[row,assessRadarSavedStandard(str(row.title),str(record(row.source_snapshot).description)).priority]));
+    rows.sort((a,b)=>priorities.get(b)!-priorities.get(a)!);
   }
   const selected = fixedIds ? fixedIds.map((id) => rows.find((row) => row.id === id) ?? { id, status: "missing" })
     : rows.filter((row) => !active.has(String(row.external_listing_id))).slice(0, 300);

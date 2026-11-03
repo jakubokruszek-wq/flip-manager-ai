@@ -1,3 +1,4 @@
+import { assessRadarSavedStandard } from "../standard-assessment";
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -397,6 +398,7 @@ function toQueueItem(row: Row): RadarVerificationQueueItem | null {
     id, source: source as RadarSource, externalListingId, originalUrl, title: nullableString(row.title), status,
     firstSeenAt, lastSeenAt,
     snapshot: {
+      automaticStandardAssessment: assessRadarSavedStandard(nullableString(row.title),nullableString(snapshot.description)),
       description: nullableString(snapshot.description), price: nullableNumber(snapshot.price), pricePerSqm: nullableNumber(snapshot.pricePerSqm),
       area: nullableNumber(snapshot.area), rooms: nullableNumber(snapshot.rooms), city: nullableString(snapshot.city), district: nullableString(snapshot.district),
       buildingType: nullableString(snapshot.buildingType), marketType: nullableString(snapshot.marketType),
