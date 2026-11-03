@@ -262,6 +262,7 @@ async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode 
     galleryTraceRequestCount += 1;
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
   });
+  await page.route("**/api/alerts", route => route.fulfill({contentType:"application/json",body:JSON.stringify({alerts:[]}),status:200}));
   await page.route("**/api/facebook-watcher/**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/facebook-watcher/listings" && route.request().method() === "GET") {
@@ -425,7 +426,7 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
       if (viewport.width < 768) {
         const filters = page.getByText("Filtry", {exact:true});
         const detail = filters.locator("xpath=ancestor::details");
-        if (!(await detail.getAttribute("open"))) await filters.click();
+        if ((await detail.getAttribute("open")) === null) await filters.click();
         const fields = await detail.locator("input, select, button").evaluateAll(nodes => nodes.map(node => ({label:node.getAttribute("aria-label")??node.tagName,left:node.getBoundingClientRect().left,right:node.getBoundingClientRect().right})));
         for (const field of fields) assert.ok(field.left >= -1 && field.right <= viewport.width+1, `${viewport.name}: filter ${field.label} stays inside the screen (${field.left}, ${field.right})`);
       }
