@@ -112,7 +112,7 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
         val db=writableDatabase;db.beginTransaction()
         try {
             val actual=cleanupPreview(source,before);check(actual==expected){"CLEANUP_CHANGED"}
-            db.execSQL("INSERT OR IGNORE INTO removed_posts(source,post) SELECT source,post FROM outbox WHERE source=? AND state!='deleted' AND saved_at<? AND post IS NOT NULL",arrayOf(source,before))
+            db.execSQL("INSERT OR IGNORE INTO removed_posts(source,post) SELECT source,post FROM outbox WHERE source=? AND state!='deleted' AND saved_at<? AND post IS NOT NULL",arrayOf<Any>(source,before))
             // Keep replay keys/receipts, erase the encrypted business payload and stop retries.
             val values=ContentValues().apply{put("state","deleted");put("body",ByteArray(0))}
             db.update("outbox",values,"source=? AND state!='deleted' AND saved_at<?",arrayOf(source,before.toString()))
