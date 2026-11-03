@@ -32,7 +32,15 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
         // Old frozen bodies have no save date. Preserve them, never manufacture an age.
         db.rawQuery("SELECT id,body FROM outbox",null).use{c->while(c.moveToNext()){
             runCatching{val body=JSONObject(open(c.getString(0),c.getBlob(1)))
-                db.update("outbox",ContentValues().apply{put("source",body.getString("groupId"));put("post",body.getJSONObject("row").getString("postId"))},"id=?",arrayOf(c.getString(0)))}
+                val group=body.getString("groupId")
+                val row=SavedResultCodec.rows(JSONArray().put(body.getJSONObject("row")),group)?.singleOrNull()
+                val ready=row!=null&&OfferQuality.reason(row,body.getJSONArray("photos").length())==null
+                db.update("outbox",ContentValues().apply{
+                    put("source",group);put("post",body.getJSONObject("row").getString("postId"))
+                    // One migration-only replay of the SAME key/body refreshes truthful sale
+                    // provenance on Manager records accepted before this quality gate.
+                    put("state",if(ready)"pending"else"quality_hold");put("next_at",0);put("attempt",0)
+                },"id=?",arrayOf(c.getString(0)))}
         }}
     }
     private fun key():SecretKey = synchronized(KEY_LOCK) {

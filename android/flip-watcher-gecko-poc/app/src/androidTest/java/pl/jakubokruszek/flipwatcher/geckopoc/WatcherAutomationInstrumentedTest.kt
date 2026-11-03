@@ -73,13 +73,14 @@ class WatcherAutomationInstrumentedTest {
         context.deleteDatabase("watcher-outbox-v1.db")
         try {
             val old=WatcherOutbox(context).use{q->
-                q.enqueue(device,group,result());val item=checkNotNull(q.next(device,Long.MAX_VALUE))
+                q.enqueue(device,group,result());val item=checkNotNull(q.next(device,Long.MAX_VALUE));q.acknowledge(item.id,"ack-before-upgrade")
                 q.writableDatabase.execSQL("DROP TABLE removed_posts")
                 for(column in listOf("source","post","saved_at"))q.writableDatabase.execSQL("ALTER TABLE outbox DROP COLUMN $column")
                 q.writableDatabase.version=1;item
             }
             WatcherOutbox(context).use{q->
                 val migrated=checkNotNull(q.next(device,Long.MAX_VALUE));assertEquals(old.id,migrated.id);assertEquals(old.body,migrated.body)
+                q.readableDatabase.rawQuery("SELECT receipt FROM outbox WHERE id=?",arrayOf(old.id)).use{c->assertTrue(c.moveToFirst());assertEquals("ack-before-upgrade",c.getString(0))}
                 val preview=q.cleanupPreview(group.id,System.currentTimeMillis());assertEquals(0,preview.rows);assertEquals(1,preview.unknownDate)
             }
         }finally{context.deleteDatabase("watcher-outbox-v1.db")}

@@ -23,7 +23,10 @@ Manager cleanup is separate and protects CRM/Deal Room/cross-source records.
 
 Queue version 1 has no saved-date field. Migration preserves encrypted frozen
 bodies, keys and receipts, recovers source identity, and leaves dates unknown.
-Unknown-date records are not removed by guessing their age. Facebook login,
+Unknown-date records are not removed by guessing their age. Eligible old snapshots
+are revalidated once with exactly the same frozen body/key to refresh sale
+provenance in Manager; existing receipts remain and no new canonical offer is
+created. Reopening the v2 queue does not repeat that migration replay. Facebook login,
 pairing, schedules and other groups remain intact. Nothing is automatically
 removed without the operator choosing a cutoff and confirming its preview.
 
