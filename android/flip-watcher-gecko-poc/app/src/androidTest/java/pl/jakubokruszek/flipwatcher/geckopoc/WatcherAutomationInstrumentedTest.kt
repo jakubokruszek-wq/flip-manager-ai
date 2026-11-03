@@ -13,9 +13,15 @@ class WatcherAutomationInstrumentedTest {
     private val context:Context=ApplicationProvider.getApplicationContext()
     private val device="12345678-1234-1234-1234-123456789012"
     private val group=WatcherGroups.configured.first()
+    private fun photo(id:String="550000000000091"):SavedPhoto {
+        val bitmap=android.graphics.Bitmap.createBitmap(192,144,android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas=android.graphics.Canvas(bitmap);canvas.drawColor(android.graphics.Color.WHITE)
+        canvas.drawText("SPRZEDAM 42 m2",8f,60f,android.graphics.Paint().apply{textSize=16f})
+        return try{ResultArchive.photo(id,0,false,bitmap)}finally{bitmap.recycle()}
+    }
     private fun result(price:Double=430000.0)=SavedResult(System.currentTimeMillis(),listOf(
         DesktopRow("550000000000091",group.url+"posts/550000000000091/","DOM",price,"EXPLICIT_TOTAL",42.0,2,"Bałuty",null,null,"SELL_PROPERTY",true,0)
-    ),emptyList(),emptyList())
+    ),emptyList(),listOf(photo()))
     @Test fun encryptedQueueSurvivesReopenLostReceiptAndRepeatedScan() {
         context.deleteDatabase("watcher-outbox-v1.db")
         val first=WatcherOutbox(context).use{q->q.enqueue(device,group,result());checkNotNull(q.next(device,Long.MAX_VALUE))}
@@ -30,6 +36,53 @@ class WatcherAutomationInstrumentedTest {
             q.completeScan("2026-10-30/7",group.id);assertTrue(q.scanned("2026-10-30/7",group.id));assertFalse(q.scanned("2026-10-30/15",group.id))
         }
         context.deleteDatabase("watcher-outbox-v1.db")
+    }
+    @Test fun holdMissingPhotoAndNonSaleWithoutDestroyingSnapshots() {
+        context.deleteDatabase("watcher-outbox-v1.db")
+        try {WatcherOutbox(context).use{q->
+            q.enqueue(device,group,result().copy(photos=emptyList()));assertNull(q.next(device,Long.MAX_VALUE))
+            val rental=result().let{it.copy(rows=it.rows.map{r->r.copy(intent="RENT_OFFER")})}
+            q.enqueue(device,group,rental);assertNull(q.next(device,Long.MAX_VALUE))
+            assertTrue(q.status().contains("quality_hold: 2"))
+            q.enqueue(device,group,result());val valid=checkNotNull(q.next(device,Long.MAX_VALUE))
+            assertEquals(1,org.json.JSONObject(valid.body).getJSONArray("photos").length())
+        }}finally{context.deleteDatabase("watcher-outbox-v1.db")}
+    }
+    @Test fun savedDateCleanupPreservesUnknownDatesAndReceiptsAndDoesNotResurrectPosts() {
+        context.deleteDatabase("watcher-outbox-v1.db")
+        val before=System.currentTimeMillis()-30L*86400000
+        try {WatcherOutbox(context).use{q->
+            q.enqueue(device,group,result().copy(savedAt=before-1))
+            val old=checkNotNull(q.next(device,Long.MAX_VALUE));q.acknowledge(old.id,"ack-keep")
+            val fresh=result().let{r->val id="550000000000092";r.copy(savedAt=before,rows=r.rows.map{it.copy(postId=id,permalink=group.url+"posts/$id/")},photos=listOf(photo(id)))}
+            q.enqueue(device,group,fresh)
+            val unknown=result().let{r->val id="550000000000093";r.copy(rows=r.rows.map{it.copy(postId=id,permalink=group.url+"posts/$id/")},photos=listOf(photo(id)))}
+            q.enqueue(device,group,unknown)
+            q.writableDatabase.execSQL("UPDATE outbox SET saved_at=NULL WHERE post='550000000000093'")
+            val preview=q.cleanupPreview(group.id,before)
+            assertEquals(1,preview.rows);assertEquals(1,preview.unknownDate);assertEquals(0,preview.pending)
+            q.cleanup(group.id,before,preview)
+            q.enqueue(device,group,result(440000.0));q.retry()
+            q.readableDatabase.rawQuery("SELECT state,receipt,length(body) FROM outbox WHERE id=?",arrayOf(old.id)).use{c->assertTrue(c.moveToFirst());assertEquals("deleted",c.getString(0));assertEquals("ack-keep",c.getString(1));assertEquals(0,c.getInt(2))}
+            assertEquals(0,q.cleanupPreview(group.id,before).rows)
+            assertEquals(1,q.cleanupPreview(group.id,before).unknownDate)
+            q.readableDatabase.rawQuery("SELECT COUNT(*) FROM outbox",null).use{c->assertTrue(c.moveToFirst());assertEquals(3,c.getInt(0))}
+        }}finally{context.deleteDatabase("watcher-outbox-v1.db")}
+    }
+    @Test fun versionOneMigrationPreservesFrozenBytesAndLeavesUnknownDatesUnknown(){
+        context.deleteDatabase("watcher-outbox-v1.db")
+        try {
+            val old=WatcherOutbox(context).use{q->
+                q.enqueue(device,group,result());val item=checkNotNull(q.next(device,Long.MAX_VALUE))
+                q.writableDatabase.execSQL("DROP TABLE removed_posts")
+                for(column in listOf("source","post","saved_at"))q.writableDatabase.execSQL("ALTER TABLE outbox DROP COLUMN $column")
+                q.writableDatabase.version=1;item
+            }
+            WatcherOutbox(context).use{q->
+                val migrated=checkNotNull(q.next(device,Long.MAX_VALUE));assertEquals(old.id,migrated.id);assertEquals(old.body,migrated.body)
+                val preview=q.cleanupPreview(group.id,System.currentTimeMillis());assertEquals(0,preview.rows);assertEquals(1,preview.unknownDate)
+            }
+        }finally{context.deleteDatabase("watcher-outbox-v1.db")}
     }
     @Test fun actualBackgroundRendererReadsExactRowsAndBoundPhotoWithoutActivity()=runBlocking {
         val path="/groups/$FIXTURE_GROUP_ID/"
@@ -75,7 +128,7 @@ class WatcherAutomationInstrumentedTest {
             WatcherOutbox(context).use { q ->
                 repeat(31){index->val post=(550000000000100L+index).toString()
                     val row=result().rows.single().copy(postId=post,permalink=group.url+"posts/$post/")
-                    q.enqueue(device,group,result().copy(rows=listOf(row)))
+                    q.enqueue(device,group,result().copy(rows=listOf(row),photos=listOf(photo(post))))
                 }
             }
             assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork())

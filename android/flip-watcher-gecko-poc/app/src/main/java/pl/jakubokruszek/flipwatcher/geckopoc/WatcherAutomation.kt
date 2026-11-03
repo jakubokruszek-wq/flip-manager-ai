@@ -112,6 +112,12 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                 if(!WatcherAutomation.enabled(context))return
                                 if(remaining()<30_000){budgetReached=true;return}
                                 val item=queue.next(credentials.deviceId,System.currentTimeMillis())?:return
+                                val held=runCatching {
+                                    val body=org.json.JSONObject(item.body);val group=body.getString("groupId")
+                                    val row=SavedResultCodec.rows(org.json.JSONArray().put(body.getJSONObject("row")),group)?.singleOrNull()?:error("QUALITY_INVALID")
+                                    OfferQuality.reason(row,body.getJSONArray("photos").length())
+                                }.getOrElse{"QUALITY_INVALID"}
+                                if(held!=null){queue.hold(item,held);return@repeat}
                                 try{val receipt=send(credentials,item);queue.acknowledge(item.id,receipt);queue.log("UPLOAD_ACK")}
                                 catch(e:WatcherUpload.HttpFailure){
                                     queue.defer(item,e.status in 400..499&&e.status !in setOf(408,429))
