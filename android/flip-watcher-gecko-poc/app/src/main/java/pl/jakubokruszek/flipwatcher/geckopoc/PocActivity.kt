@@ -244,7 +244,10 @@ class PocActivity : ComponentActivity() {
                         val window=AutomationPolicy.current(java.time.Instant.now(),java.time.ZoneId.systemDefault(),WatcherAutomation.schedule(this@PocActivity))
                         val prefs=WatcherAutomation.preferences(this@PocActivity)
                         val pending=enabled&&!state.active&&state.started<window.at.toEpochMilli()&&window.at.toEpochMilli()>=prefs.getLong("schedule_since",0)&&prefs.getString("completed_slot",null)!=window.key
-                        (if(pending)"Bieżący skan oczekuje na uruchomienie"else ScanStatusText.title(state,enabled,System.currentTimeMillis(),null))+"\n"+(if(state.total>0)"Grupy ${state.done}/${state.total} • zdjęcia ${state.photos}"else if(enabled)"Następne okno: $next"else "Dotknij, aby sprawdzić stan")+" • Podgląd"
+                        (if(!enabled)"Automat wyłączony"
+                        else if(state.total>0)"Automat ${state.done}/${state.total}: "+ScanStatusText.title(state,true,System.currentTimeMillis(),null)
+                        else if(pending)"Automat: skan oczekuje"
+                        else "Automat: "+ScanStatusText.title(state,true,System.currentTimeMillis(),null))+" • Podgląd"
                     }.getOrDefault("Automat: nie udało się odczytać stanu • Podgląd")
                 }
                 automationSummary.text=text
@@ -1807,8 +1810,9 @@ class PocActivity : ComponentActivity() {
             setBackgroundColor(Color.parseColor("#FAFAFC"))
             addView(banner)
             automationSummary=TextView(this@PocActivity).apply{
-                tag="poc.automation.summary";text="Automat — podgląd postępu";textSize=13f;maxLines=2
-                setPadding((10*dp).toInt(),(6*dp).toInt(),(10*dp).toInt(),(6*dp).toInt())
+                tag="poc.automation.summary";text="Automat — podgląd postępu";textSize=12f;maxLines=1
+                includeFontPadding=false;ellipsize=android.text.TextUtils.TruncateAt.END
+                setPadding((10*dp).toInt(),dp.toInt(),(10*dp).toInt(),dp.toInt())
                 setBackgroundColor(Color.parseColor("#E8F1FA"));isClickable=true;isFocusable=true
                 setOnClickListener{startActivity(Intent(this@PocActivity,ScanStatusActivity::class.java))}
             }
