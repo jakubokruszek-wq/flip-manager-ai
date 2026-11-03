@@ -230,9 +230,29 @@ class PocActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    override fun onResume(){super.onResume();WatcherAutomation.uiVisible=true;if(!reviewWorking())runCatching{session?.setActive(true)};window.decorView.post{showSavedResult();showPendingPhotosReport();showPendingReviewReport();showPendingOcrReport();showPendingWatcherResult()}}
+    private lateinit var automationSummary:TextView
+    private var automationLiveJob:Job?=null
+    private fun monitorAutomation(){
+        automationLiveJob?.cancel()
+        automationLiveJob=lifecycleScope.launch{
+            while(true){
+                val text=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){
+                    runCatching{
+                        val state=ScanStatus.read(this@PocActivity)
+                        val enabled=WatcherAutomation.enabled(this@PocActivity)
+                        val next=AutomationPolicy.next(java.time.Instant.now(),java.time.ZoneId.systemDefault(),WatcherAutomation.schedule(this@PocActivity)).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("dd.MM HH:mm"))
+                        ScanStatusText.title(state,enabled,System.currentTimeMillis(),null)+"\n"+(if(state.total>0)"Grupy ${state.done}/${state.total} • zdjęcia ${state.photos}"else if(enabled)"Następne okno: $next"else "Dotknij, aby sprawdzić stan")+" • Podgląd"
+                    }.getOrDefault("Automat: nie udało się odczytać stanu • Podgląd")
+                }
+                automationSummary.text=text
+                delay(2_000)
+            }
+        }
+    }
+    override fun onResume(){super.onResume();monitorAutomation();WatcherAutomation.uiVisible=true;if(!reviewWorking())runCatching{session?.setActive(true)};window.decorView.post{showSavedResult();showPendingPhotosReport();showPendingReviewReport();showPendingOcrReport();showPendingWatcherResult()}}
 
     override fun onPause() {
+        automationLiveJob?.cancel();automationLiveJob=null
         automationStatusDialog?.dismiss();automationScheduleDialog?.dismiss();automationTimeDialog?.dismiss()
         ocrConsentDialog?.dismiss();ocrConsentDialog=null;cancelOcr("PAUSED")
         reviewConsentDialog?.dismiss();reviewConsentDialog=null;cancelReview("PAUSED")
@@ -998,11 +1018,12 @@ class PocActivity : ComponentActivity() {
                         output.text="Automat włączony. Po opuszczeniu aplikacji może wykonać zaległe okno. Godziny i dziennik są w panelu automatu."
                     }
                 }.create()
+            actions.addView(android.widget.Button(this@PocActivity).apply{text="Podgląd postępu na żywo";tag="automation.live.open";setOnClickListener{dialog.dismiss();startActivity(Intent(this@PocActivity,ScanStatusActivity::class.java))}})
             actions.addView(android.widget.Button(this@PocActivity).apply{text="Usuń zapisane przed datą…";tag="automation.cleanup";setOnClickListener{dialog.dismiss();askSavedCleanup()}})
             actions.addView(android.widget.Button(this@PocActivity).apply{text="Godziny skanów";tag="automation.edit";setOnClickListener{dialog.dismiss();editAutomationSchedule()}})
             actions.addView(android.widget.Button(this@PocActivity).apply{
                 text="Skan teraz w tle";tag="automation.scan.now";isEnabled=enabled
-                setOnClickListener{closeSession();WatcherAutomation.requestScan(this@PocActivity);dialog.dismiss();output.text="Skan zlecony. Przejdź na ekran główny telefonu. Postęp i błędy znajdziesz w panelu automatu."}
+                setOnClickListener{closeSession();WatcherAutomation.requestScan(this@PocActivity);dialog.dismiss();output.text="Skan zlecony. Przejdź na ekran główny telefonu. Postęp i powody oczekiwania znajdziesz w Podglądzie na żywo oraz powiadomieniu."}
             })
             actions.addView(android.widget.Button(this@PocActivity).apply{
                 text="Ustawienia Androida";setOnClickListener{startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:$packageName")))}
@@ -1782,6 +1803,13 @@ class PocActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#FAFAFC"))
             addView(banner)
+            automationSummary=TextView(this@PocActivity).apply{
+                tag="poc.automation.summary";text="Automat — podgląd postępu";textSize=13f;maxLines=2
+                setPadding((10*dp).toInt(),(6*dp).toInt(),(10*dp).toInt(),(6*dp).toInt())
+                setBackgroundColor(Color.parseColor("#E8F1FA"));isClickable=true;isFocusable=true
+                setOnClickListener{startActivity(Intent(this@PocActivity,ScanStatusActivity::class.java))}
+            }
+            addView(automationSummary)
             addView(row(
                 button("open", "Otwórz sesję") { if(ocrBusy)cancelOcr("CANCELLED") else if(reviewClosing)Unit else if(reviewBusy)cancelReview("CANCELLED") else if(desktopBusy)finishDesktop("CANCELLED",show=false) else if (session == null) askConsentAndOpen() else closeSession() },
                 button("group", "Otwórz grupę") { load(PocPolicy.APPROVED_GROUP_URL, login = false) },

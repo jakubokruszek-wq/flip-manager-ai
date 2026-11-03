@@ -1068,7 +1068,8 @@ class GeckoFixtureTest {
                 browserHeight=browser.height
                 Log.i("GeckoPocTest","POC_VIEWPORT browser=${browser.height} usable=$usable ratio=${browser.height.toDouble()/usable}")
                 assertTrue("browser too small: ${browser.height}/$usable",usable>0 && browser.height>=usable*0.70)
-                assertEquals(3,root.childCount)
+                assertEquals(4,root.childCount)
+                assertNotNull(root.findViewWithTag<android.view.View>("poc.automation.summary"))
                 assertNull(root.findViewWithTag<android.view.View>("poc.tool.scan"))
                 assertFalse(activity.diagnosticsDialog!!.isShowing)
                 root.findViewWithTag<android.widget.Button>("poc.tool.tools").performClick()

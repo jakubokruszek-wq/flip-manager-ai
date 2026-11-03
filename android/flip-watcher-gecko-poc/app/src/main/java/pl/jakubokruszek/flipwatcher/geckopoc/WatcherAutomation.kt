@@ -9,6 +9,10 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.Job
 import java.time.Instant
 import java.time.ZoneId
 import java.util.concurrent.TimeUnit
@@ -46,6 +50,7 @@ object WatcherAutomation {
             manager.enqueueUniquePeriodicWork("watcher-calendar-v1",ExistingPeriodicWorkPolicy.KEEP,work)
             scheduleNext(context);retry(context)
         }else{
+            ScanStatus.quiet(context)
             manager.cancelUniqueWork("watcher-calendar-v1");manager.cancelUniqueWork("watcher-retry-v1")
             manager.cancelUniqueWork("watcher-background-kick-v2");manager.cancelAllWorkByTag(WINDOW_TAG)
         }
@@ -64,6 +69,7 @@ object WatcherAutomation {
     fun requestScan(context:Context){
         check(enabled(context)){"AUTOMATION_DISABLED"}
         check(preferences(context).edit().putString("requested_scan",java.util.UUID.randomUUID().toString()).commit())
+        ScanStatus.request(context)
         retry(context)
     }
     fun errorCode(error:Exception):String = when(error.javaClass.simpleName){
@@ -80,6 +86,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
     internal open fun credentials(context:Context)=WatcherLink.load(context)
     internal open fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=WatcherUpload.send(credentials,item)
     internal open fun groups(credentials:WatcherLink.Credentials)=WatcherLink.groups(credentials,verifyDevice=true)
+    internal open suspend fun scan(group:WatcherGroup,progress:(String)->Unit)=BackgroundWatcherScan(applicationContext).run(group,{!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(applicationContext)},progress)
     override suspend fun doWork():Result {
         // A duplicate calendar/kick must not spend its job budget waiting behind another scan.
         if(!WatcherAutomation.lock.tryLock())return Result.success()
@@ -90,12 +97,14 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
         if(!BuildConfig.LIVE_UPLOAD_ENABLED||!WatcherAutomation.enabled(context))return Result.success()
         return withContext(Dispatchers.IO){
             WatcherOutbox(context).use { queue ->
+                val run=id.toString();var begun=false;var ticker:Job?=null
+                fun begin(){if(!begun){ScanStatus.begin(context,run);begun=true;ticker=launch{while(isActive){ScanStatus.beat(context,run);delay(5_000)}}}}
+                var budgetReached=false;var retryNeeded=false;var lastIssue=""
                 try {
                     // Ordinary WorkManager jobs need no background-started foreground service.
                     // Stay below the ten-minute job limit and resume from durable group receipts.
                     val deadline=android.os.SystemClock.elapsedRealtime()+8*60*1000L
                     fun remaining()=deadline-android.os.SystemClock.elapsedRealtime()
-                    var budgetReached=false
                     withTimeout(9*60*1000L){
                         val credentials=credentials(context)?:error("PAIRING_REQUIRED")
                         val prefs=WatcherAutomation.preferences(context)
@@ -104,8 +113,9 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                         val slot=if(requested==null)window.key else "manual/"+requested
                         val scheduleDue=requested!=null||window.at.toEpochMilli()>=prefs.getLong("schedule_since",0)
                         val alreadyCompleted=requested==null&&prefs.getString("completed_slot",null)==slot
-                        if(!scheduleDue&&!queue.hasDue(credentials.deviceId,System.currentTimeMillis()))return@withTimeout
-                        if(alreadyCompleted&&!queue.hasDue(credentials.deviceId,System.currentTimeMillis()))return@withTimeout
+                        if(!scheduleDue&&!queue.hasDue(credentials.deviceId,System.currentTimeMillis())){ScanStatus.checked(context,"WINDOW_NOT_DUE");return@withTimeout}
+                        if(alreadyCompleted&&!queue.hasDue(credentials.deviceId,System.currentTimeMillis())){ScanStatus.checked(context,"SLOT_COMPLETED");return@withTimeout}
+                        begin()
                         suspend fun flush(){
                             repeat(220){
                                 currentCoroutineContext().ensureActive()
@@ -118,24 +128,26 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                     OfferQuality.reason(row,body.getJSONArray("photos").length())
                                 }.getOrElse{"QUALITY_INVALID"}
                                 if(held!=null){queue.hold(item,held);return@repeat}
-                                try{val receipt=send(credentials,item);queue.acknowledge(item.id,receipt);queue.log("UPLOAD_ACK")}
+                                ScanStatus.update(context,run){it.copy(phase="UPLOADING")}
+                                try{val receipt=send(credentials,item);queue.acknowledge(item.id,receipt);queue.log("UPLOAD_ACK");ScanStatus.update(context,run){it.copy(uploads=it.uploads+1)}}
                                 catch(e:WatcherUpload.HttpFailure){
                                     queue.defer(item,e.status in 400..499&&e.status !in setOf(408,429))
-                                    queue.log("UPLOAD_HTTP_"+e.status)
+                                    lastIssue="UPLOAD_HTTP_"+e.status;queue.log(lastIssue)
                                     if(e.status in setOf(401,403))throw e
                                 }catch(e:CancellationException){throw e}
-                                catch(_:Exception){queue.defer(item);queue.log("UPLOAD_RETRY");return}
+                                catch(_:Exception){queue.defer(item);lastIssue="UPLOAD_RETRY";queue.log(lastIssue);return}
                             }
                         }
                         flush()
                         // Uploads use frozen snapshots and do not own the browser: drain even with UI visible.
-                        if(WatcherAutomation.uiVisible){queue.log("WAITING_FOR_BACKGROUND");return@withTimeout}
-                        if(alreadyCompleted||!scheduleDue||budgetReached)return@withTimeout
+                        if(alreadyCompleted||!scheduleDue||budgetReached){ScanStatus.finish(context,run,if(budgetReached)"RETRY"else"UPLOAD_DONE",if(budgetReached)"BATCH_CONTINUE"else lastIssue);return@withTimeout}
+                        if(WatcherAutomation.uiVisible){queue.log("WAITING_FOR_BACKGROUND");ScanStatus.finish(context,run,"WAITING_UI","WAITING_FOR_BACKGROUND");return@withTimeout}
                         val groups=groups(credentials)
                         // Resume after the last attempted source if a slow group exhausted the worker budget.
                         val cursor=groups.indexOfFirst{it.id==prefs.getString("last_attempted_source",null)}
                         val ordered=if(cursor<0)groups else groups.drop(cursor+1)+groups.take(cursor+1)
-                        for(group in ordered){
+                        ScanStatus.update(context,run){it.copy(total=groups.size,done=groups.count{g->queue.scanned(slot,g.id)})}
+                        for((index,group) in ordered.withIndex()){
                             currentCoroutineContext().ensureActive()
                             if(WatcherAutomation.uiVisible||!WatcherAutomation.enabled(context))break
                             if(queue.scanned(slot,group.id))continue
@@ -143,8 +155,10 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             queue.log("GROUP_"+(WatcherGroups.configured.indexOfFirst{it.id==group.id}+1))
                             check(prefs.edit().putString("last_attempted_source",group.id).commit())
                             queue.log("SCAN_STARTED")
+                            ScanStatus.update(context,run){it.copy(phase="LOADING",group=group.name,position=index+1,reason="")}
                             try {
-                            val scanned=BackgroundWatcherScan(context).run(group){!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(context)}
+                            val scanned=scan(group){phase->ScanStatus.update(context,run){it.copy(phase=phase)}}
+                            ScanStatus.update(context,run){it.copy(phase="SAVING")}
                             val offers=scanned.rows.filter{DesktopSummary.eligible(it)||DesktopPresentation.reviewable(it)}
                             val ids=offers.map{it.postId}.toSet()
                             val result=scanned.copy(rows=offers,photos=scanned.photos.filter{it.postId in ids})
@@ -156,26 +170,34 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             queue.completeScan(slot,group.id)
                             if(requested!=null)queue.completeScan(window.key,group.id)
                             queue.log("SCAN_SAVED",result.rows.size)
+                            ScanStatus.update(context,run){it.copy(done=groups.count{g->queue.scanned(slot,g.id)},posts=it.posts+result.rows.size,photos=it.photos+result.photos.size)}
                             flush()
                             }catch(e:CancellationException){throw e}
                             catch(e:Exception){
                                 if(e is WatcherUpload.HttpFailure&&e.status in setOf(401,403))throw e
-                                queue.log(WatcherAutomation.errorCode(e))
+                                lastIssue=if(WatcherAutomation.uiVisible)"WAITING_FOR_BACKGROUND"else WatcherAutomation.errorCode(e)
+                                queue.log(lastIssue)
+                                ScanStatus.update(context,run){it.copy(phase="PREPARING",reason=lastIssue)}
                                 // A single unavailable group cannot starve every later source.
                                 if(e.message in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA"))break
                             }
                         }
+                        val allDone=groups.isNotEmpty()&&groups.all{queue.scanned(slot,it.id)}
                         if(!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(context)){
-                            if(groups.isEmpty())queue.log("NO_ACTIVE_GROUPS")
-                            if(groups.all{queue.scanned(window.key,it.id)})check(prefs.edit().putString("completed_slot",window.key).commit())
-                            if(!budgetReached&&requested!=null&&prefs.getString("requested_scan",null)==requested)
+                            if(groups.isEmpty()){lastIssue="NO_ACTIVE_GROUPS";queue.log(lastIssue)}
+                            if(groups.isNotEmpty()&&groups.all{queue.scanned(window.key,it.id)})check(prefs.edit().putString("completed_slot",window.key).commit())
+                            if(allDone&&requested!=null&&prefs.getString("requested_scan",null)==requested)
                                 check(prefs.edit().remove("requested_scan").commit())
                         }
+                        retryNeeded=!allDone&&!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(context)&&groups.isNotEmpty()&&lastIssue !in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA")
+                        val reason=when{!WatcherAutomation.enabled(context)->"AUTOMATION_DISABLED";WatcherAutomation.uiVisible->"WAITING_FOR_BACKGROUND";budgetReached->"BATCH_CONTINUE";else->lastIssue}
+                        val phase=when{!WatcherAutomation.enabled(context)->"ERROR";allDone->"DONE";WatcherAutomation.uiVisible->"WAITING_UI";budgetReached||retryNeeded->"RETRY";else->"PARTIAL"}
+                        ScanStatus.finish(context,run,phase,reason)
                     }
-                    if(budgetReached){queue.log("BATCH_CONTINUE");Result.retry()}else Result.success()
-                }catch(e:CancellationException){queue.log("INTERRUPTED");throw e}
-                catch(e:Exception){queue.log(WatcherAutomation.errorCode(e));Result.retry()}
-                finally{runCatching{WatcherAutomation.scheduleNext(context)}}
+                    if(budgetReached||retryNeeded){if(budgetReached)queue.log("BATCH_CONTINUE");Result.retry()}else Result.success()
+                }catch(e:CancellationException){queue.log("INTERRUPTED");if(begun)ScanStatus.finish(context,run,"ERROR","INTERRUPTED");throw e}
+                catch(e:Exception){val reason=if(e is WatcherUpload.HttpFailure)"UPLOAD_HTTP_"+e.status else WatcherAutomation.errorCode(e);queue.log(reason);begin();ScanStatus.finish(context,run,"ERROR",reason);Result.retry()}
+                finally{ticker?.cancel();runCatching{WatcherAutomation.scheduleNext(context)}}
             }
         }
     }
