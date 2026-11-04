@@ -53,11 +53,13 @@ async function upsertListing(supabase: ReturnType<typeof createAdminClient>, pay
   async function savedMobile(id: string): Promise<{ id: string; status: "updated" }> {
     // Add mobile evidence conservatively: never clear richer existing text/photos,
     // and persist photos before collector_imports is marked imported.
-    const previous = await supabase.from("listings").select("price,area,rooms,address,images").eq("id", id).eq("source", "facebook").single();
+    const previous = await supabase.from("listings").select("price,price_per_sqm,area,rooms,address,images,description").eq("id", id).eq("source", "facebook").single();
     if (previous.error || !previous.data) throw new Error("MOBILE_EXISTING_RETRY");
     const row = previous.data;
     const priorImages = Array.isArray(row.images) ? row.images.filter((v: unknown): v is string => typeof v === "string") : [];
-    const values = { price: row.price ?? payload.price, area: row.area ?? payload.area, rooms: row.rooms ?? payload.rooms,
+    const effectivePrice = row.price ?? payload.price, effectiveArea = row.area ?? payload.area;
+    const values = { price_per_sqm: row.price_per_sqm ?? (effectivePrice && effectiveArea ? Math.round(effectivePrice / effectiveArea * 100) / 100 : null), price: row.price ?? payload.price, area: row.area ?? payload.area, rooms: row.rooms ?? payload.rooms,
+      ...(!(typeof row.description === "string" && row.description.trim()) && payload.content ? {description: payload.content} : {}),
       address: row.address ?? payload.location, images: [...new Set([...priorImages, ...payload.imageUrls])].slice(0, 20), last_seen_at: new Date().toISOString() };
     const saved = await supabase.from("listings").update(values).eq("id", id).eq("source", "facebook").select("id").single();
     if (saved.error || !saved.data) throw new Error("MOBILE_EXISTING_RETRY");

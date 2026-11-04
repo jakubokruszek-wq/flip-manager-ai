@@ -6,6 +6,9 @@ type QueryResult = { data: unknown; error: null | { message: string } };
 const state = {
   listingUpsertCalls: 0,
   mobile: false,
+  priorDescription: null as string | null,
+  priorPrice: 439000 as number | null,
+  priorArea: 50,
   listingUpdates: [] as Array<Record<string, unknown>>,
   metadataUpsertPayloads: [] as Array<Record<string, unknown>>,
   reconciliationInputs: [] as Array<Record<string, unknown>>,
@@ -43,7 +46,7 @@ class Query {
   }
 
   private result(terminal: string): QueryResult {
-    if (state.mobile && this.table === "listings" && this.operation === "select") return { data: { id: "legacy-listing", price: 439000, area: 50, rooms: 2, address: "Existing address", images: ["https://storage.test/original.jpg"] }, error: null };
+    if (state.mobile && this.table === "listings" && this.operation === "select") return { data: { id: "legacy-listing", price: state.priorPrice, area: state.priorArea, rooms: 2, address: "Existing address", description: state.priorDescription, images: ["https://storage.test/original.jpg"] }, error: null };
     if (state.mobile && this.table === "listings" && this.operation === "update") return { data: { id: "legacy-listing" }, error: null };
     if (this.table === "collector_imports" && this.operation === "select") return { data: null, error: null };
     if (this.table === "collector_imports" && this.operation === "insert" && terminal === "single") return { data: { id: "import-1", listing_id: null, status: "received" }, error: null };
@@ -121,4 +124,25 @@ test("validated Android sale evidence is stored as a classifier sidecar, without
   assert.equal(metadata.androidSaleConfirmed,true);assert.equal(metadata.listingIntent,"SELL_PROPERTY");
   assert.equal(metadata.intentSource,"ANDROID_TYPED_CLASSIFIER");assert.equal("postText" in metadata,false);
  }finally{state.mobile=false;}
+});
+
+test("Android source text fills an empty description while old packets and later short text preserve existing data",async()=>{
+ state.mobile=true;
+ try{
+  const payload={sourcePostUrl:"https://www.facebook.com/groups/new-route/posts/4486483384955652/",title:"Oferta z Facebooka",price:339000,area:42.42,rooms:2,imageUrls:["https://storage.test/new.jpg"]};
+  for(const [previous,incoming,expected] of [[null,"NA SPRZEDAŻ: 339.000 do negocjacji","NA SPRZEDAŻ: 339.000 do negocjacji"],["Pełny zachowany opis",null,"Pełny zachowany opis"],["Pełny zachowany opis","krótki opis","Pełny zachowany opis"]]){
+   state.priorDescription=previous;state.listingUpdates=[];
+   await importFacebookCollectorPayload("device-1","text-test-"+String(previous)+String(incoming),{...payload,content:incoming},{mobileSnapshot:true,mobileSaleConfirmed:true});
+   assert.equal(state.listingUpdates.at(-1)?.description ?? previous,expected);
+   assert.equal(state.listingUpdates.at(-1)?.price,439000);
+  }
+ }finally{state.mobile=false;state.priorDescription=null;}
+});
+
+test("late Android price fills both asking price and unit price without losing description",async()=>{
+ state.mobile=true;state.priorPrice=null;state.priorArea=42.42;state.priorDescription="Zachowany opis";state.listingUpdates=[];
+ try{
+  await importFacebookCollectorPayload("device-1","retkinia-price",{sourcePostUrl:"https://www.facebook.com/groups/new-route/posts/4486483384955652/",title:"Oferta z Facebooka",content:null,price:339000,area:42.42,rooms:2,imageUrls:["https://storage.test/new.jpg"]},{mobileSnapshot:true,mobileSaleConfirmed:true});
+  assert.equal(state.listingUpdates.at(-1)?.price,339000);assert.equal(state.listingUpdates.at(-1)?.price_per_sqm,7991.51);assert.equal("description" in state.listingUpdates.at(-1)!,false);
+ }finally{state.mobile=false;state.priorPrice=439000;state.priorArea=50;state.priorDescription=null;}
 });

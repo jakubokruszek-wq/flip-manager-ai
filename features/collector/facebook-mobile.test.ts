@@ -82,3 +82,13 @@ test("previously removed posts stop before storing photos or retrying import",as
   upload:async()=>{writes++;return [];},importPost:async()=>{writes++;return {listingId:listing,status:"created"};}});
  assert.equal((await handler(request())).status,410);assert.equal(writes,0);
 });
+
+test("v2 carries only bounded source post text while v1 remains unchanged and bytes stay signed",async()=>{
+ const text="NA SPRZEDAŻ:\nRetkinia ul. Kostki Napierskiego 7\n2 pokoje 42.42m2\n339.000 do negocjacji";
+ const j={...snapshot(),version:2,postText:text};const packet=frozen(j);
+ assert.equal(parseMobilePost(packet.raw,device,packet.key).postText,text);
+ const v1=frozen();assert.equal(parseMobilePost(v1.raw,device,v1.key).postText,null);
+ assert.throws(()=>parseMobilePost(packet.raw.replace('339.000','349.000'),device,packet.key));
+ for(const postText of [null,'','x'.repeat(12001),'bad\u0000text']){const invalid=frozen({...j,postText} as typeof j);assert.throws(()=>parseMobilePost(invalid.raw,device,invalid.key));}
+ const extra=frozen({...j,untrusted:'extra'} as typeof j);assert.throws(()=>parseMobilePost(extra.raw,device,extra.key));
+});
