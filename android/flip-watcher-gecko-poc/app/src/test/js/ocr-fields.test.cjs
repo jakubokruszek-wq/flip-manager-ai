@@ -18,7 +18,7 @@ test('multiple image conflicts are kept unresolved instead of silently selecting
  const r=read(['Sprzedam mieszkanie 45m2 za 260000 zł','Sprzedam mieszkanie 45m2 za 900000 zł']);assert.equal(r.rows[0].price,null);assert.equal(r.rows[0].priceSource,'NONE');
 });
 test('new consent exact ID group nonce and bounded texts precede projection',()=>{
- for(const change of [{consent:false},{groupId:'foreign'},{postId:'guessed'},{nonce:'old'},{texts:[]},{texts:['x'.repeat(12001)]},{texts:['x'.repeat(9000),'x'.repeat(9000),'x'.repeat(9000)]}])assert.equal(ocr.create().project({...message(['Sprzedam mieszkanie 42m2 za 319000 zł']),...change},core,f,p).status,'STOP');
+ for(const change of [{consent:false},{groupId:'../foreign'},{postId:'guessed'},{nonce:'old'},{texts:[]},{texts:['x'.repeat(12001)]},{texts:['x'.repeat(9000),'x'.repeat(9000),'x'.repeat(9000)]}])assert.equal(ocr.create().project({...message(['Sprzedam mieszkanie 42m2 za 319000 zł']),...change},core,f,p).status,'STOP');
  const reader=ocr.create();assert.equal(read(['Sprzedam mieszkanie 42m2 za 319000 zł'],reader).status,'OK');assert.equal(read(['Sprzedam mieszkanie 42m2 za 319000 zł'],reader).status,'STOP');
 });
 
