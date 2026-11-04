@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { hasAcceptedRadarStandard } from "../accepted-standard";
 import { apiFetch } from "@/lib/api-fetch";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
@@ -442,7 +441,7 @@ export function PriceRadarPage() {
   // already applies before averaging. A listing kept visible only pending
   // manual verification is a review candidate, never a qualified comparison,
   // so it gets its own section/count instead of inflating this one.
-  const sampleListings = useMemo(() => (data?.listings ?? []).filter((listing) => hasAcceptedRadarStandard(listing)), [data]);
+  const sampleListings = useMemo(() => (data?.listings ?? []).filter((listing) => (listing.verificationIssues?.length ?? 0) === 0), [data]);
   const visibleSources = activeSourceIds.length ? SOURCE_OPTIONS.filter((option) => activeSourceIds.includes(option.value)) : [];
 
   return (
@@ -665,7 +664,7 @@ export function PriceRadarPage() {
         ))}
       </section>
 
-      <p className="text-sm text-muted-foreground">Radar działa automatycznie. Pokazujemy wyłącznie oferty z potwierdzonym standardem i wymaganymi danymi; niepewne przypadki są odrzucane z wyników.</p>
+      <p className="text-sm text-muted-foreground">Radar zachowuje wcześniej zaakceptowane oferty. Nowe potwierdzone oferty automatycznie powiększają próbę i aktualizują średnią; niepewne nowe ogłoszenia są odrzucane.</p>
 
       <section aria-label="Oferty w próbie" className="space-y-3">
         <h2 className="text-lg font-semibold">Oferty w próbie ({sampleListings.length})</h2>

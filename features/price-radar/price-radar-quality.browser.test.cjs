@@ -99,7 +99,7 @@ test("Radar separates A/B samples, persists the optional price filter, and keeps
   let verificationQueue = { available: true, pending: [verificationCandidate], confirmed: [], rejected: [] };
   const listing = (id, pricePerSqm, qualityCategory, renovationStatus) => ({
     id, source: "oferty_net", externalListingId: id, originalUrl: `https://www.oferty.net/${id}`, normalizedUrl: `https://www.oferty.net/${id}`,
-    title: id === "fresh-a" ? "Łanowa · świeży remont" : "Elsnera · wysoki standard", description: id === "fresh-a" ? "Świeżo po generalnym remoncie, gotowe do zamieszkania." : "W pełni wykończone, wysoki standard, gotowe do zamieszkania.",
+    title: id === "fresh-a" ? "Łanowa · świeży remont" : "Elsnera · wysoki standard", description: null,
     price: pricePerSqm * 45, area: 45, pricePerSqm, rooms: 2, city: "Łódź", district: "Bałuty", buildingType: "blok", marketType: "secondary",
     renovationStatus, qualityCategory, contentHash: id, firstSeenAt: "2026-10-10T12:00:00Z", lastSeenAt: "2026-10-10T12:00:00Z",
     publishedAt: null, sourceUpdatedAt: null, collectedAt: "2026-10-10T12:00:00Z", crossSourceIdentity: null, crossSourceAlternates: [],

@@ -24,3 +24,29 @@ test("different facts or operator workflow remain separate even with a reused ph
 test("arbitrary image filenames, shared placeholders and missing parameters cannot group offers",()=>{
   for(const patch of [{images:["https://cdn.test/same.jpg"]},{images:[]},{price:null},{area:null}]) assert.equal(groupFacebookReposts([item("123456",patch),item("234567",patch)]).length,2);
 });
+
+test("three groups with recompressed photos and identical detailed own text render once with all source links",()=>{
+  const description="Sprzedam bezpośrednio mieszkanie na Bałutach przy ulicy Rojnej w Łodzi. Dwa ustawne pokoje, oddzielna kuchnia, balkon i piwnica. Lokal dostępny od zaraz, po generalnym remoncie instalacji, podłóg oraz ścian. Cena obejmuje całe wyposażenie widoczne na zdjęciach.";
+  const posts=["123456","234567","345678"].map((id,i)=>item(id,{description:i===1?description.replaceAll(" ","  "):description,street:"Rojna",images:[image(id,String(i+1).repeat(64))]}));
+  const before=structuredClone(posts);
+  const grouped=groupFacebookReposts(posts);
+  assert.equal(grouped.length,1);
+  assert.equal(grouped[0].relatedPosts?.length,3);
+  assert.deepEqual(grouped[0].relatedPosts?.map(p=>p.groupName),posts.map(p=>p.groupName));
+  assert.deepEqual(posts,before,"source offers and group links remain unchanged");
+  assert.deepEqual(grouped[0].images,posts[0].images,"photos remain bound to their own post");
+  assert.equal(groupFacebookReposts([posts[0],{...posts[1],rooms:3}]).length,2);
+  assert.equal(groupFacebookReposts([posts[0],{...posts[1],description:description+" Inna oferta."}]).length,2);
+});
+
+test("every member's photograph participates in detecting another publication",()=>{
+  const a=item("123456");
+  const b=item("234567",{images:[image("234567"),image("234567","b".repeat(64))]});
+  const c=item("345678",{images:[image("345678","b".repeat(64))]});
+  assert.equal(groupFacebookReposts([a,b,c])[0].relatedPosts?.length,3);
+});
+
+test("short shared boilerplate and unknown location cannot join distinct homes",()=>{
+  const description="Sprzedam mieszkanie. Zapraszam do kontaktu.";
+  assert.equal(groupFacebookReposts([item("123456",{description}),item("234567",{description,images:[]})]).length,2);
+});

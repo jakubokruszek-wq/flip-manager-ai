@@ -3,14 +3,18 @@ import type { FacebookWatcherListing } from "./types";
 /** Group the view only. Different post IDs and every source record remain intact. */
 export function groupFacebookReposts(records: FacebookWatcherListing[]): FacebookWatcherListing[] {
   const groups: FacebookWatcherListing[] = [];
+  const members = new Map<FacebookWatcherListing, FacebookWatcherListing[]>();
   for (const item of records) {
-    const hashes = mobilePhotoHashes(item.images);
-    const target = groups.find(candidate => compatible(candidate, item) && mobilePhotoHashes(candidate.images).some(hash => hashes.includes(hash)));
-    if (!target) { groups.push({ ...item }); continue; }
+    const target = groups.find(candidate => {
+      const previous = members.get(candidate)!;
+      return previous.every(member => compatible(member,item)) && previous.some(member => sameEvidence(member,item));
+    });
+    if (!target) { const copy={ ...item }; groups.push(copy); members.set(copy,[item]); continue; }
     const publications = [...(target.relatedPosts ?? [publication(target)]), publication(item)];
     // Keep the first result in the requested sort order; never combine photos
     // bound to separate posts or propagate a workflow decision across them.
     target.relatedPosts = publications;
+    members.get(target)!.push(item);
   }
   return groups;
 }
@@ -39,4 +43,16 @@ function mobilePhotoHashes(images: string[]): string[] {
       return match ? [`${url.origin}:${match[1]}`] : [];
     } catch { return []; }
   });
+}
+
+/** Exact repeated own text + matching property facts can identify reposts
+ * even when Facebook recompresses photographs into different byte hashes. */
+function sameEvidence(a: FacebookWatcherListing,b: FacebookWatcherListing): boolean {
+  const hashes=mobilePhotoHashes(a.images);
+  if(mobilePhotoHashes(b.images).some(hash=>hashes.includes(hash))) return true;
+  const text=(value:string|null)=>value?.normalize("NFKC").toLocaleLowerCase("pl").replace(/\s+/gu," ").trim()??"";
+  const own=text(a.description);
+  if(own.length<120 || own.split(" ").length<20 || own!==text(b.description)) return false;
+  return Boolean(a.city && b.city && text(a.city)===text(b.city) && a.rooms && a.rooms===b.rooms &&
+    (["street","neighborhood","district"] as const).some(key=>a[key] && b[key] && text(a[key])===text(b[key])));
 }

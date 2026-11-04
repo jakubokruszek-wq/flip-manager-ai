@@ -1624,18 +1624,19 @@ test("every unfinished portal gets processing time even when all of them have mu
   for (const source of sources) assert.ok(progress.metrics.sources[source]!.fetched >= 1, `${source} made progress`);
 });
 
-test("automatic Radar hides a previously accepted snapshot after lost proof and restores it only after fresh confirmation", async()=>{
+test("automatic Radar preserves accepted sample facts through an incomplete reread and updates after fresh confirmation", async()=>{
   const db=fakeDb();
   const good=qualifyingListing("automatic-proof-cycle","domiporta");
   const uncertain={...good,description:"Dane wymagają sprawdzenia.",rawPayload:{detailVerified:false}};
   const filters={districts:["Bałuty"],market:"both" as const,areaMin:null,areaMax:null,rooms:[],sources:[],minPricePerSqm:null};
-  for(const [input,expected] of [[good,1],[uncertain,0],[good,1]] as const){
+  for(const [input,expected] of [[good,1],[uncertain,1],[good,1]] as const){
     fakeSourceImpl=async()=>({listings:[input],warnings:[],fetched:1});
     const claim=await claimOrCreateRadarRun(ownerId,["domiporta"],db as never);
     if(claim.kind!=="claimed")throw new Error("expected a new owned run");
     await runRadarCollectionPortion({runId:claim.run.id,ownerId,leaseToken:claim.run.leaseToken!},db as never);
     const read=await getRadarResults(ownerId,filters,db as never);
     assert.equal(read.listings.length,expected);
+    assert.equal(read.listings[0]?.description,good.description,"an incomplete reread never overwrites accepted evidence");
     assert.equal(db.tables.price_radar_verification_queue.length,0);
     assert.equal(db.tables.price_radar_district_queue.length,0);
   }

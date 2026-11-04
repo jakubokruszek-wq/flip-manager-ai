@@ -199,8 +199,16 @@ test("archived OLX rows stay in the table but are no longer listings, samples or
   assert.ok(payload.stats.every((group) => group.averagePricePerSqm === null || group.averagePricePerSqm < 19_000), "nor of any average");
 });
 
-test("stored category labels with no current text proof never enter cards or statistics",async()=>{
-  currentDb=fakeDb([row({id:"good"}),row({id:"unknown",external_listing_id:"unknown",description:null}),row({id:"future",external_listing_id:"future",description:"Wysoki standard pod klucz. Planowane zakończenie remontu w listopadzie."})]);
-  const payload=await getRadarResults(OWNER,baseFilters,currentDb as never);
-  assert.deepEqual(payload.listings.map(item=>item.id),["good"]);assert.equal(payload.stats[0]?.sampleSize,1);
+test("accepted historical samples survive stricter new criteria and new offers grow the same average",async()=>{
+  const historical=Array.from({length:25},(_,i)=>row({id:`old-${i}`,external_listing_id:`old-${i}`,original_url:`https://domiporta.pl/old-${i}`,description:null,price_per_sqm:10200,raw_payload:{identityVerificationIssues:["qualification"]}}));
+  currentDb=fakeDb(historical);
+  const before=await getRadarResults(OWNER,baseFilters,currentDb as never);
+  assert.equal(before.stats[0]?.sampleSize,25);
+  assert.equal(before.stats[0]?.averagePricePerSqm,10200);
+  const added=Array.from({length:3},(_,i)=>row({id:`new-${i}`,external_listing_id:`new-${i}`,original_url:`https://domiporta.pl/new-${i}`,price_per_sqm:12000}));
+  currentDb=fakeDb([...historical,...added]);
+  const after=await getRadarResults(OWNER,baseFilters,currentDb as never);
+  assert.equal(after.listings.length,28);
+  assert.equal(after.stats[0]?.sampleSize,28);
+  assert.equal(after.stats[0]?.averagePricePerSqm,(25*10200+3*12000)/28);
 });

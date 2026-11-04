@@ -1,5 +1,4 @@
 import "server-only";
-import { hasAcceptedRadarStandard } from "../accepted-standard";
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { dedupeByListingIdentity } from "@/features/listing-identity";
@@ -49,7 +48,7 @@ export async function getRadarResults(ownerId: string, filters: RadarFilters, su
 
   // OLX left Radar: archived OLX rows stay in the table (history) but are no
   // longer current listings, samples or part of any average.
-  const allListings = rows.map(toRadarListing).filter((listing): listing is RadarListing => listing !== null && listing.source !== "olx" && hasAcceptedRadarStandard(listing));
+  const allListings = rows.map(toRadarListing).filter((listing): listing is RadarListing => listing !== null && listing.source !== "olx" && (listing.verificationIssues?.length ?? 0) === 0);
   // Within one portal: the same proven identity resolution Finder/Watcher
   // use (confirmed externalListingId/URL). Its keys are source-prefixed, so
   // this alone never merges across different portals.
@@ -168,7 +167,7 @@ function toRadarListing(row: Row): RadarListing | null {
     ? rawPayload.detailContradictions.filter((field): field is string => typeof field === "string")
     : [];
   const identityContradictions = Array.isArray(rawPayload.identityVerificationIssues)
-    ? rawPayload.identityVerificationIssues.filter((field): field is string => typeof field === "string")
+    ? rawPayload.identityVerificationIssues.filter((field): field is string => typeof field === "string" && field !== "qualification")
     : [];
   const detectedContradictions = findRadarOwnListingConflicts({
     area,

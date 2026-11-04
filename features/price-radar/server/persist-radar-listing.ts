@@ -59,7 +59,7 @@ export async function markExistingRadarListingForReview(
   identity: { source: string; externalListingId: string; issueFields: readonly string[] },
   signal?: AbortSignal,
 ): Promise<string | null> {
-  const issueFields = [...new Set(identity.issueFields.filter((field) => ["area", "rooms", "floor", "location", "qualification"].includes(field)))];
+  const issueFields = [...new Set(identity.issueFields.filter((field) => ["area", "rooms", "floor", "location"].includes(field)))];
   if (!issueFields.length) return null;
   let query = supabase.from("price_radar_listings")
     .select("id,owner_id,source,external_listing_id,original_url,normalized_url,title,description,price,area,price_per_sqm,rooms,city,district,building_type,market_type,renovation_status,content_hash,published_at,source_updated_at,cross_source_identity,raw_payload,status,excluded_at,excluded_reason")
