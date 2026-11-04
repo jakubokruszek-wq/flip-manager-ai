@@ -431,7 +431,16 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
         const fields = await detail.locator("input, select, button").evaluateAll(nodes => nodes.map(node => ({label:node.getAttribute("aria-label")??node.tagName,left:node.getBoundingClientRect().left,right:node.getBoundingClientRect().right})));
         for (const field of fields) assert.ok(field.left >= -1 && field.right <= viewport.width+1, `${viewport.name}: filter ${field.label} stays inside the screen (${field.left}, ${field.right})`);
       }
-      const geometry = await collectGeometry(page);
+      const tabs=page.getByRole("navigation",{name:"Status ofert Facebook"});
+      await tabs.getByRole("button",{name:/^Wszystkie/}).click();
+      await page.locator(`#facebook-inbox-${NORMAL_ID}`).waitFor({state:"visible"});
+      const activeGeometry=await collectGeometry(page);
+      assert.equal(activeGeometry.articles.length,3,"default inbox must hide manually rejected cards");
+      await tabs.getByRole("button",{name:/^Odrzucone/}).click();
+      await page.locator(`#facebook-inbox-${REJECTED_ID}`).waitFor({state:"visible"});
+      const rejectedGeometry=await collectGeometry(page);
+      assert.equal(rejectedGeometry.articles.length,2,"rejected cards remain available for restoration");
+      const geometry={...activeGeometry,articles:[...activeGeometry.articles,...rejectedGeometry.articles]};
       assert.equal(geometry.articles.length, 5, `${viewport.name}: exactly one <article> wrapper per fixture listing, never one around the whole grid`);
 
       // Document-level: never any horizontal overflow, at any viewport.
@@ -559,6 +568,8 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     const successfulRequest = await successfulPatch;
     assert.deepEqual(successfulRequest.body, { status: "interesting" }, `clicking Interesująca at 390px must fire the exact workflow update; server output: ${output}`);
     assert.deepEqual(await successfulRequest.response, { status: 200 }, "the workflow PATCH must complete successfully");
+    await maxActionsArticleLocator.waitFor({state:"hidden"});
+    await page.getByRole("navigation",{name:"Status ofert Facebook"}).getByRole("button",{name:/^Okazje/}).click();
     const maxStatusBadge = maxActionsArticleLocator.locator("span").filter({ hasText: "Interesująca" }).first();
     // Under the full serial browser suite React may commit the successful
     // workflow response after Chromium has already observed the PATCH. Keep
@@ -699,7 +710,7 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     assert.equal(handle.getExpectedPatchFailures(), 1, "the failed-PATCH scenario must exercise exactly one 500 response");
   });
   await t.test("F: mobile ranges save, survive reload and clear without horizontal overflow", async (t) => {
-    const handle = await setupWatcherPage(browser, baseUrl);
+    const handle = await setupWatcherPage(browser, baseUrl,{listingsPayload:()=>({listings:freshListingsPayload().listings.map(item=>item.listingId===MAX_ACTIONS_ID?{...item,workflowStatus:"review"}:item)})});
     const { page } = handle;
     t.after(() => Promise.all([page.close(), handle.context.close()]));
     await page.setViewportSize({width:360,height:800});
@@ -796,6 +807,21 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(),1);
     for(let i=0;i<2;i++)assert.equal(await page.locator(`a[href="https://www.facebook.com/groups/group${i+1}/posts/123456789/"]`).count()>=1,true);
     assertNoUnexpectedNoise(handle);
+  });
+
+  await t.test("K: rejecting a card removes it immediately and restoring moves it back to the main inbox",async(t)=>{
+    const handle=await setupWatcherPage(browser,baseUrl);const {page}=handle;
+    t.after(()=>Promise.all([page.close(),handle.context.close()]));
+    const tabs=page.getByRole("navigation",{name:"Status ofert Facebook"});
+    const card=page.locator(`#facebook-inbox-${NORMAL_ID}`);
+    await card.getByRole("button",{name:"Odrzuć",exact:true}).click();
+    await card.waitFor({state:"hidden"});
+    assert.deepEqual(handle.patchRequests[0].body,{status:"rejected"});
+    await tabs.getByRole("button",{name:/^Odrzucone/}).click();await card.waitFor({state:"visible"});
+    await card.getByRole("button",{name:"Przywróć",exact:true}).click();await card.waitFor({state:"hidden"});
+    await tabs.getByRole("button",{name:/^Wszystkie/}).click();await card.waitFor({state:"visible"});
+    assert.deepEqual(handle.patchRequests[1].body,{status:"review"});
+    assertNoUnexpectedNoise(handle,{expectedPatchFailures:0});
   });
 
 });
