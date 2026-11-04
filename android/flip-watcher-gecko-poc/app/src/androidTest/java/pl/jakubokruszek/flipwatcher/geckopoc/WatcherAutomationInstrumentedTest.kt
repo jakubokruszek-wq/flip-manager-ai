@@ -96,6 +96,18 @@ class WatcherAutomationInstrumentedTest {
             assertTrue(saved.photos.all{p->saved.rows.any{it.postId==p.postId}&&p.jpeg.isNotEmpty()})
         }finally{server.close()}
     }
+    @Test fun backgroundCollectsColouredPostAndAutomaticallyReadsImageOnlyOffer()=runBlocking {
+        val path="/groups/$FIXTURE_GROUP_ID/"
+        val server=LoopbackFixtureServer(pages=mapOf(path to "desktop-text-posters")){name->runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}
+        try {
+            val saved=BackgroundWatcherScan(context).runFixture("http://127.0.0.1:${server.port}$path"){true}
+            for(id in listOf("1655103482946823","1655103482946824")){
+                val row=checkNotNull(saved.rows.find{it.postId==id})
+                assertEquals("SELL_PROPERTY",row.intent);assertEquals(368000.0,row.price);assertEquals(62.4,row.area);assertNull(row.rooms)
+                assertNull("Both own message graphics and image-only ads must have actual stored pixels",OfferQuality.reason(row,saved.photos.count{it.postId==id}))
+            }
+        }finally{server.close()}
+    }
     @Test fun workerDrains31QueuedOffersWhileUiVisibleAndReplaysLostReceiptWithoutDuplicates()=runBlocking {
         context.deleteDatabase("watcher-outbox-v1.db")
         val prefs=WatcherAutomation.preferences(context)

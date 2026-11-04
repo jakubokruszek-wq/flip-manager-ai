@@ -47,10 +47,10 @@ data class OcrSummary(val reason:String,val selected:Int,val images:Int,val text
  }.getOrNull()}
 }
 object OcrProtocol{
- fun parse(j:JSONObject?,nonce:String,id:String):DesktopRow?{
+ fun parse(j:JSONObject?,nonce:String,id:String,group:String=PocPolicy.APPROVED_GROUP_ID):DesktopRow?{
   if(j?.optString("type")!="ocrFieldsResult")return null
   val common=JSONObject(j.toString()).put("type","desktopPreviewResult")
-  val r=DesktopProtocol.parse(common,nonce)?:return null
+  val r=DesktopProtocol.parse(common,nonce,group)?:return null
   return r.rows.singleOrNull()?.takeIf{r.status=="OK"&&it.postId==id}
  }
 }

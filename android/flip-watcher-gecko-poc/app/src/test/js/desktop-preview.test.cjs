@@ -157,3 +157,15 @@ test('bare M3 area is sale-scoped and never interprets a distance or conflicting
  for(const text of ['Sprzedam M3 200m do przystanku 355 tys','Sprzedam M3 200m od tramwaju 355 tys','Sprzedam M3 40m i M3 50m 355 tys','M3 40m 355 tys','Sprzedam M3 9m 355 tys','Sprzedam M3 301m 355 tys'])assert.equal(fields.previewFields({postText:text}).area,null,text);
  const explicit=fields.previewFields({postText:'Sprzedam M3 40m. Powierzchnia 44m2. Cena 355 tys'});assert.equal(explicit.area,44);
 });
+
+test('coloured text crop is limited to own exact message panel, not UI comments or foreign cards',()=>{
+ const text='Łódź 62,4M2 - 3 piętro balkon do remontu niski blok. Cena 368K';
+ let rejected=false,changed=false,transparent=false;
+ const doc={defaultView:{getComputedStyle:()=>({fontSize:'30px',backgroundImage:transparent?'none':'linear-gradient(pink,cyan)',backgroundColor:'rgba(0, 0, 0, 0)'})}};
+ const card={ownerDocument:doc,querySelectorAll:()=>[n]};
+ const n={ownerDocument:doc,innerText:text,isConnected:true,matches:()=>true,contains:x=>x===n,getBoundingClientRect:()=>({width:600,height:250}),closest:selector=>selector==='[role="article"],article'?(changed?{}:card):rejected?{}:null};
+ const result=preview.textPosterNodes(card,'1655103482946823');assert.equal(result.length,1);assert(result[0].ready());assert.equal(result[0].item.posterKey,'poster:1655103482946823');
+ rejected=true;assert(!result[0].ready());assert.equal(preview.textPosterNodes(card,'1655103482946823').length,0);rejected=false;
+ changed=true;assert(!result[0].ready());changed=false;transparent=true;assert.equal(preview.textPosterNodes(card,'1655103482946823').length,0);transparent=false;
+ n.innerText='63 metry od przystanku';assert.equal(preview.textPosterNodes(card,'1655103482946823').length,0);assert.equal(preview.textPosterNodes(card,null).length,0);
+});

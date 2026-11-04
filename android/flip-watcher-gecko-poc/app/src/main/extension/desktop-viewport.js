@@ -190,7 +190,7 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null,
    if((fromNetwork||item.networkRequired)&&identity(item,owners)!==id){count('photoIdentityRejected');continue;}
    if(node.tagName==='IMG'&&(node.complete!==true||node.naturalWidth<1)){count('photoUnready');continue;}
    const needsNetwork=fromNetwork||item.networkRequired;
-   const key=item.mediaId||item.url;if(!key)continue;
+   const key=item.mediaId||item.url||item.posterKey;if(!key)continue;
    if(media.get(key)?.done||keys.includes(media.get(key))){count('photoAlreadyDone');continue;}
    const r=node.getBoundingClientRect(),x=Math.max(0,r.left-left),y=Math.max(0,r.top-top),right=Math.min(width,r.right-left),bottom=Math.min(height,r.bottom-top);
    if(right-x<60||bottom-y<60||(right-x)*(bottom-y)<r.width*r.height*.6){count('photoGeometryRejected');continue;}

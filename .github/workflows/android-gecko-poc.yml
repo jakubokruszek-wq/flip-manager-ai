@@ -500,9 +500,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  publish-tested-0574:
-    name: Publish tested Android 0.5.74
-    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-dynamic-groups'
+  publish-tested-0575:
+    name: Publish tested Android 0.5.75
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-poster-offers'
     needs: [guard, build, instrumented, verified-apk]
     runs-on: ubuntu-22.04
     permissions:
@@ -519,21 +519,21 @@ jobs:
           set -euo pipefail
           apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
           test -n "$apk_path" && test -f "$apk_path"
-          cp "$apk_path" flip-watcher-0.5.74-arm64.apk
-          unzip -p flip-watcher-0.5.74-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.74")process.exit(1)})'
-          unzip -p flip-watcher-0.5.74-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
-          sha256sum flip-watcher-0.5.74-arm64.apk > SHA256SUMS
+          cp "$apk_path" flip-watcher-0.5.75-arm64.apk
+          unzip -p flip-watcher-0.5.75-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.75")process.exit(1)})'
+          unzip -p flip-watcher-0.5.75-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
+          sha256sum flip-watcher-0.5.75-arm64.apk > SHA256SUMS
           cat > release-notes.md <<'NOTES'
-          Android 0.5.74 naprawia zatrzymywanie automatu po dodaniu nowej grupy w Managerze.
+          Android 0.5.75 dodaje automatyczne rozpoznawanie ofert zapisanych na grafikach.
 
-          - Aktywne grupy są pobierane ze sprawdzanej konfiguracji Managera; nowa grupa nie wymaga kolejnego wpisania ID w APK.
-          - Obsługuje FLIPERZY POLSKA (297408205383031), również w automacie działającym w tle.
-          - Zachowuje właściwe ID grupy i posta przy odczycie oraz oddzielne archiwa.
-          - Nieprawidłowa konfiguracja ma osobny komunikat zamiast ogólnego AUTOMATION_ERROR.
+          - Automatyczny lokalny OCR już przypisanych wycinków zdjęć; model w aplikacji, bez płatnej usługi.
+          - Facebookowe posty z tekstem na kolorowym tle zapisują własną grafikę jako zdjęcie oferty.
+          - Konkretna cena, metraż i niezależne cechy mieszkania pozwalają rozpoznać ofertę bez słowa „sprzedam”.
+          - Zachowane wykluczenia najmu, kupujących, usług i obcych miejscowości oraz przypisanie obrazu do dokładnego posta.
+          - OCR uzupełnia braki; nie nadpisuje sprzecznych danych tekstowych ani nie zgaduje liczby pokoi.
+          - Podgląd automatu pokazuje etap odczytu tekstu ze zdjęć.
 
-          Serwer zachowuje zgodność z 0.5.73: nowa grupa nie zatrzymuje starszej aplikacji, ale jej skanowanie wymaga 0.5.74.
-          Instaluj jako aktualizację. Nie odinstalowuj poprzedniej wersji: ta sama tożsamość i klucz podpisu zachowują bazę, kolejkę i logowanie.
-
-          Opublikowano wyłącznie APK po testach parsera, kontraktu importu, JVM i emulatora Androida oraz kontroli podpisu. Testy emulatora korzystają z lokalnych stron testowych; dostęp do grup na telefonie zależy od sesji Facebooka.
+          Instaluj jako aktualizację, bez odinstalowywania poprzedniej aplikacji. Baza, kolejka i logowanie pozostają zachowane.
+          APK jest publikowany po pełnych testach parsera, importu, JVM i emulatora Androida. Testy korzystają z lokalnych stron; nie potwierdzają pobrania konkretnego posta z prywatnej sesji Facebooka na telefonie.
           NOTES
-          gh release create gecko-poc-0.5.74 flip-watcher-0.5.74-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.74 — grupy dodawane zdalnie i naprawa startu automatu' --prerelease --notes-file release-notes.md
+          gh release create gecko-poc-0.5.75 flip-watcher-0.5.75-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.75 — automatyczny OCR ofert na grafikach' --prerelease --notes-file release-notes.md

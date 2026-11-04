@@ -26,7 +26,7 @@ class BackgroundWatcherScan(private val context:Context) {
         return runTarget(WatcherGroup(FIXTURE_GROUP_ID,"Fixture"),target,true,alive)
     }
     private suspend fun runTarget(group:WatcherGroup,target:String,fixture:Boolean,alive:()->Boolean,progress:(String)->Unit={}):SavedResult=withContext(Dispatchers.Main){
-        withTimeout(if(fixture)300_000 else 110_000){
+        withTimeout(if(fixture)300_000 else 180_000){
             check(alive())
             val browser=GeckoSession()
             val images=DesktopThumbnails()
@@ -78,7 +78,12 @@ class BackgroundWatcherScan(private val context:Context) {
                 channel.viewportBridge=DesktopViewportBridge(checkNotNull(surface),nonce,images,{live()&&trial.active&&trial.phase==DesktopTrial.Phase.READING})
                 val result=DesktopSessionPreview.run(browser,channel,trial,nonce,actualTarget,{current},{pageReady&&live()},fastScroll=true,fixture=fixture,groupId=group.id,alive=::live)
                 check(live()&&result.reason=="DONE"){stopReason?:"SCAN_"+result.reason}
-                val rows=checkNotNull(result.reply).rows
+                val sourceRows=checkNotNull(result.reply).rows
+                val rows=BackgroundPosterOcr.run(sourceRows,::live,{images.ocrRows(it).size},
+                    read={id,slot->images.ocrRows(id).getOrNull(slot)?.copy(Bitmap.Config.ARGB_8888,false)?.let{LocalOcr.readOwned(it)}},
+                    project={id,texts->GeckoHost.background.ocrFields(id,texts,true,group.id)},
+                    now={android.os.SystemClock.elapsedRealtime()},progress=progress)
+                check(live()){stopReason?:"CANCELLED"}
                 val photos=rows.flatMap{row->images.rows(row.postId).mapIndexed{slot,b->ResultArchive.photo(row.postId,slot,false,b)}}
                 SavedResult(System.currentTimeMillis(),rows,emptyList(),photos)
             }finally {

@@ -26,3 +26,14 @@ test('actual offline recognizer transcription accepts romanized zl without guess
  const text='Sprzedam mieszkanie\n45,8 m2\n260 000 zl\n2 pokoje';const r=read([text]);assert.equal(r.rows[0].price,260000);assert.equal(r.rows[0].area,45.8);assert.equal(r.rows[0].rooms,2);assert.equal(r.rows[0].priceSource,'EXPLICIT_TOTAL');
  assert.equal(read([text.replace(' zl',' z1')]).rows[0].price,null);
 });
+
+const poster='ŁÓDŹ (ul.Łagiewnicka/Goplańska) 62,4M2 - 3/3piętro z balkonem - do remontu, niski blok z 2000r. Cena 368K - chętni?';
+test('actual graphic offer without sprzedam qualifies from explicit price area and residential facts',()=>{
+ const r=ocr.create().project({...message([poster]),groupId:'297408205383031',postId:'1655103482946823'},core,f,p).rows[0];
+ assert.equal(r.intent,'SELL_PROPERTY');assert.equal(r.usable,true);assert.equal(r.price,368000);assert.equal(r.area,62.4);assert.equal(r.rooms,null);assert(r.permalink.includes('/297408205383031/posts/1655103482946823/'));
+});
+test('implicit poster sale never accepts buyers rentals services comparisons foreign cities or missing total price',()=>{
+ for(const text of ['Szukam mieszkania. '+poster,'Kupię mieszkanie. '+poster,'Do wynajęcia mieszkanie. '+poster,'Wykonujemy remonty mieszkań. '+poster,'Przykładowa wycena: '+poster,poster.replace('ŁÓDŹ','Warszawa'),poster.replace('Cena 368K','Cena do ustalenia')]){
+  const row=read([text]).rows[0];assert(!(row.intent==='SELL_PROPERTY'&&row.usable),text);
+ }
+});

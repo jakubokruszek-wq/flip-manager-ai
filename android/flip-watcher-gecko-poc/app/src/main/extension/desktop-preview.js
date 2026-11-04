@@ -115,6 +115,25 @@ function photoAnchorHref(anchor){
   return typeof raw==='string'&&raw.length>0&&raw.length<=8192?new URL(raw,anchor.ownerDocument?.baseURI).href:null;
  }catch{return null;}
 }
+// Facebook coloured text posts are rendered content, often without any IMG.
+// Only the own message panel inside an exactly identified article may be cropped.
+function textPosterNodes(card,postId){
+ if(!/^\d{5,30}$/.test(postId||''))return[];
+ const doc=card.ownerDocument,w=doc?.defaultView,result=[];
+ if(!w?.getComputedStyle)return result;
+ for(const n of Array.from(card.querySelectorAll('[style*="background"],[data-ad-preview="message"],[data-ad-comet-preview="message"]')).slice(0,100)){
+  const own=()=>n.closest('[role="article"],article')===card&&!n.closest('[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],video,form,header,nav,[role="button"]');
+  if(!own())continue;
+  const message=n.matches?.('[data-ad-preview="message"],[data-ad-comet-preview="message"]')?n:n.querySelector?.('[data-ad-preview="message"],[data-ad-comet-preview="message"]')||n.closest('[data-ad-preview="message"],[data-ad-comet-preview="message"]');
+  if(!message||message.closest('[role="article"],article')!==card)continue;
+  const source=()=>n.innerText?.trim()||'',text=source(),style=w.getComputedStyle(n),rect=n.getBoundingClientRect();
+  const painted=()=>{const s=w.getComputedStyle(n);return s.backgroundImage&&s.backgroundImage!=='none'||s.backgroundColor&&!['transparent','rgba(0, 0, 0, 0)'].includes(s.backgroundColor);};
+  if(!painted()||rect.width<200||rect.height<120||Number.parseFloat(style.fontSize)<18||text.length<25||text.length>2000||text!==(message.innerText?.trim()||'')||!/\d+(?:[.,]\d+)?\s*m\s*[²2]/iu.test(text))continue;
+  if(result.some(p=>p.node.contains(n)||n.contains(p.node)))continue;
+  result.push({node:n,source,ready:()=>n.isConnected!==false&&own()&&painted()&&source()===text,item:{posterKey:'poster:'+postId,exactPostId:postId,exactAssociation:true,domPhoto:true,networkRequired:false}});
+ }
+ return result;
+}
 function photoNodes(card,postId,group,core,audit=null){
  const count=k=>{if(audit)audit[k]=Math.min(10000,(audit[k]||0)+1);};
  const result=[];const video=!!card.querySelector?.('video');
@@ -142,9 +161,17 @@ function photoNodes(card,postId,group,core,audit=null){
   if(networkAnchor)count('photoNetworkAnchors');if(svg)count('photoSvgBounds');if(rect.width<80||rect.height<80)count('photoTinyBound');
   result.push({node:renderNode,source,ready:()=>n.isConnected!==false&&n.closest('[role="article"],article')===card&&n.closest('a[href]')===a&&photoAnchorHref(a)===anchorHref&&!n.closest('[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],video')&&(!svg||photoSvgRoot(n)===svg)&&(!background||cssPhotoLoaded(n,source())),item:{url,mediaId,linkedPostId,networkRequired,exactPostId:postId,exactAssociation:postId!==null,domPhoto:true}});if(result.length===20)break;
  }
- return result;
+ return result.concat(textPosterNodes(card,postId));
 }
 function domPhotos(card,postId,group,core){return photoNodes(card,postId,group,core).filter(p=>!p.item.networkRequired).map(p=>p.item);}
+function posterSaleFields(f,text){
+ if(f.intent!=='UNKNOWN'||f.qualification==='FOREIGN_CITY'||!['EXPLICIT_TOTAL','THOUSANDS_TOTAL'].includes(f.priceSource)||!(f.price>=100000&&f.area>=10&&f.area<=500))return f;
+ const t=text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/ł/g,'l').toLowerCase();
+ if(/\b(?:szukam|poszukuje|kupie|budzet|wynaj|najem|odstepne|zamienie|remontujemy|wykonujemy|koszt remontu|wycena|przyklad|przykladow|sprzedane|sprzedalem|nieaktualne)\w*/u.test(t))return f;
+ const anchors=[/\b(?:mieszkan\w*|kawaler\w*|apartament\w*)/u,/\bblok\w*/u,/\b(?:pietr\w*|balkon\w*)/u,/\b(?:do remontu|po remoncie|do odswiezenia|stan deweloperski)/u].filter(p=>p.test(t)).length;
+ // Area + an explicit total asking price + two independent residential facts.
+ return anchors>=2?{...f,intent:'SELL_PROPERTY',usable:true,qualification:'CANDIDATE'}:f;
+}
 function createModel(core,fields,group){
  const rowKeys=['postId','permalink','layer','price','priceSource','area','rooms','district','neighborhood','street','intent','usable','photos','qualification'];
  const qualifications=['CANDIDATE','NO_TEXT','FOREIGN_CITY','NOT_PROPERTY','INTENT','MISSING_FIELDS','CONFLICT','CLASSIFIER'];
@@ -189,7 +216,8 @@ function createModel(core,fields,group){
   // A shared/quoted story's message is not the enclosing post's own message.
   const path=r.__structuredDiagnostics?.structuredTextPath;
   const borrowed=layer!=='DOM'&&typeof path==='string'&&/(?:^|\.)(?:[^.]*shared[^.]*|[^.]*quoted[^.]*|crosspost[^.]*|reshare[^.]*|original_story|attached_story)(?:\.|$)/i.test(path);
-  const f=fields.previewFields({postText:!borrowed&&typeof r.text==='string'?r.text.slice(0,12000):''});
+  const ownText=!borrowed&&typeof r.text==='string'?r.text.slice(0,12000):'';
+  const f=posterSaleFields(fields.previewFields({postText:ownText}),ownText);
   const row={postId:r.postId,permalink:'https://www.facebook.com/groups/'+group+'/posts/'+r.postId+'/',layer,
    price:bounded(f.price,1,20000000),priceSource:bounded(f.price,1,20000000)!==null?f.priceSource:'NONE',area:bounded(f.area,1,9999),rooms:bounded(f.rooms,1,20),
    district:f.district,neighborhood:f.neighborhood,street:typeof f.street==='string'?f.street.slice(0,80):null,intent:f.intent,usable:f.usable===true,
@@ -623,5 +651,5 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
  }catch{return empty('ERROR');}
  finally{noticeDispose?.();gestureWatch?.stop();setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
-const api={disclosureBinding,disclosureLabel,expandOwnMessage,ownCardId,messageText,networkMedia,imageURL,photoAnchorHref,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,mergeSnapshot,viewportMetrics,scrollDistance,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
+const api={textPosterNodes,disclosureBinding,disclosureLabel,expandOwnMessage,ownCardId,messageText,networkMedia,imageURL,photoAnchorHref,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,mergeSnapshot,viewportMetrics,scrollDistance,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);

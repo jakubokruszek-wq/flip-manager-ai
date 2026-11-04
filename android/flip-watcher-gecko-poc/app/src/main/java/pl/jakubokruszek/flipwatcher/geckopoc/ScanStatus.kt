@@ -23,7 +23,7 @@ data class ScanState(
     val group:String="", val position:Int=0, val total:Int=0, val done:Int=0,
     val posts:Int=0, val photos:Int=0, val uploads:Int=0, val reason:String="",
     val checked:Long=0, val skipped:String=""
-) { val active get()=phase in setOf("PREPARING","UPLOADING","LOADING","READING","SAVING") }
+) { val active get()=phase in setOf("PREPARING","UPLOADING","LOADING","READING","OCR","SAVING") }
 
 object ScanStatusText {
     fun reason(code:String):String=when(code){
@@ -54,6 +54,7 @@ object ScanStatusText {
         s.phase=="UPLOADING"->"Wysyłanie zapisanych ofert"
         s.phase=="LOADING"->"Wczytywanie grupy"
         s.phase=="READING"->"Odczyt postów i zdjęć"
+        s.phase=="OCR"->"Odczyt tekstu ze zdjęć ofert (OCR)"
         s.phase=="SAVING"->"Zapisywanie wyników"
         s.phase=="WAITING_UI"->"Skan wstrzymany — aplikacja jest otwarta"
         s.phase=="RETRY"->"Skan częściowy — oczekuje na ponowienie"
