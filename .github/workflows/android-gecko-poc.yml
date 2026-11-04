@@ -529,6 +529,7 @@ jobs:
           - Rozpoznaje cenę w formacie „339.000 do negocjacji” bez waluty; numery telefonów, opłaty i sprzeczne kwoty nie są ceną.
           - Przesyła treść własnego posta przypisaną do dokładnego ID grupy i posta. Komentarze i OCR nie są przedstawiane jako oryginalny opis.
           - Zachowuje zgodność ze starszą kolejką. Nowe importy uzupełniają braki bez kasowania istniejących opisów, cen i zdjęć.
+          - Automat zachowuje do 50 postów na grupę i przewija do 45 sekund; odczyt oraz zdjęcia pozostają ograniczone pamięciowo.
           - Zachowuje automatyczny lokalny OCR i pobieranie kolorowych grafik z tekstem z 0.5.75.
 
           Instaluj jako aktualizację, bez odinstalowywania. Następny skan odczyta dane z postów ponownie; sama instalacja nie tworzy brakujących danych.

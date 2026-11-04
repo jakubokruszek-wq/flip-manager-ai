@@ -40,7 +40,8 @@ object DesktopViewportProtocol {
 }
 
 /** Bounded RAM ownership. The private archive takes separate pixel copies before recycling. */
-class DesktopThumbnails {
+class DesktopThumbnails(private val maxPosts:Int=20) {
+    init{require(maxPosts in setOf(20,50))}
     private val images=LinkedHashMap<String,MutableMap<Int,Bitmap>>()
     private val ocr=LinkedHashMap<String,MutableMap<Int,Bitmap>>()
     internal val ocrBytes:Int get()=ocr.values.sumOf{m->m.values.sumOf{it.allocationByteCount}}
@@ -48,7 +49,7 @@ class DesktopThumbnails {
     fun ocrRows(id:String):List<Bitmap> = ocr[id]?.toSortedMap()?.values?.toList()?:emptyList()
     val count:Int get()=images.values.sumOf{it.size}
     fun put(id:String,slot:Int,image:Bitmap,ocrImage:Bitmap?=null):Boolean {
-        if(slot !in 0..2||!Regex("[0-9]{5,30}").matches(id)||image.isRecycled||image.width>192||image.height>144||!images.containsKey(id)&&images.size>=20){if(!image.isRecycled)image.recycle();ocrImage?.let{if(!it.isRecycled)it.recycle()};return false}
+        if(slot !in 0..2||!Regex("[0-9]{5,30}").matches(id)||image.isRecycled||image.width>192||image.height>144||!images.containsKey(id)&&images.size>=maxPosts){if(!image.isRecycled)image.recycle();ocrImage?.let{if(!it.isRecycled)it.recycle()};return false}
         val slots=images.getOrPut(id){linkedMapOf()};if(slots.containsKey(slot)){image.recycle();ocrImage?.let{if(!it.isRecycled)it.recycle()};return false};slots[slot]=image
         ocrImage?.let{b->
             // Preserve one OCR crop per post before extra views of the same post.
@@ -101,7 +102,7 @@ private class VisibleWatcherViewport(private val view:GeckoView):WatcherViewport
 
 /** Official GeckoView wheel input and rendered-pixel crops, under the same live native gate. */
 class DesktopViewportBridge(private val view:WatcherViewport,private val nonce:String,private val images:DesktopThumbnails,
-                            private val live:()->Boolean,private val now:()->Long={android.os.SystemClock.elapsedRealtime()}) {
+                            private val live:()->Boolean,private val now:()->Long={android.os.SystemClock.elapsedRealtime()},private val background:Boolean=false) {
     constructor(view:GeckoView,nonce:String,images:DesktopThumbnails,live:()->Boolean):this(VisibleWatcherViewport(view),nonce,images,live)
     internal val captureCounts=IntArray(8) // attempts,inactive,aspect,frame,late,error,pending,committed; counts only
     private var closed=false;private var busy=false;private var captures=0;private var scrolls=0;private var lastScroll=Long.MIN_VALUE
@@ -116,11 +117,11 @@ class DesktopViewportBridge(private val view:WatcherViewport,private val nonce:S
         fun ack(ok:Boolean,count:Int=0){if(!closed)reply(JSONObject().put("type","desktopViewportAck").put("nonce",nonce).put("requestId",r.requestId).put("accepted",ok).put("count",count))}
         if(r.action=="probe"){
             if(closed)return
-            if(requests.size>=90||!requests.add(r.requestId)){ack(false,1);return}
+            if(requests.size>=(if(background)240 else 90)||!requests.add(r.requestId)){ack(false,1);return}
             val code=when{!live()->1;!view.isShown||view.width<100||view.height<100->2;!view.hasWindowFocus()->3;else->0}
             ack(code==0,code);return
         }
-        if(!active()||busy||requests.size>=90||!requests.add(r.requestId)){if(r.action=="photos")captureCounts[1]++;ack(false);return}
+        if(!active()||busy||requests.size>=(if(background)240 else 90)||!requests.add(r.requestId)){if(r.action=="photos")captureCounts[1]++;ack(false);return}
         if(pendingFrame!=null&&now()-pendingAt>1000)discard()
         if(r.action in setOf("commit","drop")){
             if(r.frameId!=pendingFrame){ack(false);return}
@@ -131,7 +132,7 @@ class DesktopViewportBridge(private val view:WatcherViewport,private val nonce:S
         }
         if(pendingFrame!=null){ack(false);return}
         if(r.action=="scroll"){
-            if(scrolls>=30||lastScroll!=Long.MIN_VALUE&&now()-lastScroll<700){ack(false);return}
+            if(scrolls>=(if(background)60 else 30)||lastScroll!=Long.MIN_VALUE&&now()-lastScroll<700){ack(false);return}
             val stamp=now();val props=MotionEvent.PointerProperties().apply{id=0;toolType=MotionEvent.TOOL_TYPE_MOUSE}
             val coords=MotionEvent.PointerCoords().apply{x=(view.width*r.x).toFloat();y=(view.height*r.y).toFloat();setAxisValue(MotionEvent.AXIS_VSCROLL,-6f)}
             val eventStamp=android.os.SystemClock.uptimeMillis()
@@ -140,7 +141,7 @@ class DesktopViewportBridge(private val view:WatcherViewport,private val nonce:S
             return
         }
         captureCounts[0]++
-        if(captures>=20||abs((r.width/r.height)/(view.width.toDouble()/view.height)-1)>0.005){captureCounts[2]++;ack(false);return}
+        if(captures>=(if(background)50 else 20)||abs((r.width/r.height)/(view.width.toDouble()/view.height)-1)>0.005){captureCounts[2]++;ack(false);return}
         busy=true;captures++;val started=now()
         try{view.capturePixels().accept({frame->
             try{

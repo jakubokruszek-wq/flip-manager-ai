@@ -37,6 +37,22 @@ class WatcherAutomationInstrumentedTest {
             WatcherOutbox(context).use{q->val reopened=checkNotNull(q.next(device,Long.MAX_VALUE));assertEquals(frozen.id,reopened.id);assertEquals(frozen.body,reopened.body);val body=org.json.JSONObject(reopened.body);assertEquals(2,body.getInt("version"));assertEquals(valid.postTexts.getValue(row.postId),body.getString("postText"))}
         }finally{context.deleteDatabase("watcher-outbox-v1.db")}
     }
+    @Test fun fiftyBackgroundRowsStayBoundedAndEachFrozenPacketHasItsOwnDescription(){
+        context.deleteDatabase("watcher-outbox-v1.db")
+        try{
+            val base=result();val rows=(0 until 50).map{i->val id=(550000000000100L+i).toString();base.rows.single().copy(postId=id,permalink=group.url+"posts/$id/")}
+            val photos=rows.map{base.photos.single().copy(postId=it.postId)}
+            val texts=rows.associate{it.postId to "Opis własnego posta ${it.postId}"}
+            assertNull(SavedResultCodec.rows(org.json.JSONArray(rows.map(SavedResultCodec::row)),group.id))
+            assertEquals(rows,SavedResultCodec.rows(org.json.JSONArray(rows.map(SavedResultCodec::row)),group.id,true))
+            WatcherOutbox(context).use{q->
+                q.enqueue(device,group,base.copy(rows=rows,photos=photos,postTexts=texts))
+                val seen=mutableSetOf<String>()
+                repeat(50){val item=checkNotNull(q.next(device,Long.MAX_VALUE));val body=org.json.JSONObject(item.body);val id=body.getJSONObject("row").getString("postId");assertTrue(seen.add(id));assertEquals(texts[id],body.getString("postText"));q.acknowledge(item.id,"receipt-$id")}
+                assertNull(q.next(device,Long.MAX_VALUE));assertEquals(50,seen.size)
+            }
+        }finally{context.deleteDatabase("watcher-outbox-v1.db")}
+    }
     @Test fun encryptedQueueSurvivesReopenLostReceiptAndRepeatedScan() {
         context.deleteDatabase("watcher-outbox-v1.db")
         val first=WatcherOutbox(context).use{q->q.enqueue(device,group,result());checkNotNull(q.next(device,Long.MAX_VALUE))}

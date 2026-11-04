@@ -60,7 +60,7 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
     }
     /** Body is frozen BEFORE HTTP, with an idempotency key independent of retry time or scan. */
     fun enqueue(device:String,group:WatcherGroup,value:SavedResult) {
-        require(SavedResultCodec.rows(JSONArray(value.rows.map(SavedResultCodec::row)),group.id)==value.rows)
+        require(SavedResultCodec.rows(JSONArray(value.rows.map(SavedResultCodec::row)),group.id,true)==value.rows)
         val db=writableDatabase;db.beginTransaction()
         try {
             for(row in value.rows) {

@@ -193,10 +193,11 @@ function createModel(core,fields,group,collectPostText=false){
   return Object.fromEntries(rowKeys.map(k=>[k,r[k]]));
  }
 
+ const maxPosts=collectPostText?50:20;
  const rows=new Map(),blocked=new Map(),photoEvidence=new Map(),postTexts=new Map(),stats=zero();
  function photos(record,layer){
   let evidence=photoEvidence.get(record.postId);
-  if(!evidence){if(photoEvidence.size>=20)return 0;evidence={ids:new Set(),urls:new Map()};photoEvidence.set(record.postId,evidence);}
+  if(!evidence){if(photoEvidence.size>=maxPosts)return 0;evidence={ids:new Set(),urls:new Map()};photoEvidence.set(record.postId,evidence);}
   for(const item of (Array.isArray(record.media)?record.media:[]).slice(0,100)){
    if(item?.exactAssociation!==true||item.exactPostId!==record.postId)continue;
    const id=typeof item.mediaId==='string'&&/^\d{5,30}$/.test(item.mediaId)?item.mediaId:null,url=imageURL(item.url);
@@ -212,7 +213,7 @@ function createModel(core,fields,group,collectPostText=false){
  function eligible(row){return row.usable===true&&['SELL_PROPERTY','UNKNOWN'].includes(row.intent)&&[row.price,row.area,row.rooms].some(v=>v!==null);}
  // Keep the bounded preview useful without replacing a retained offer or media evidence.
  function admit(row){
-  if(rows.has(row.postId)||rows.size<20)return true;
+  if(rows.has(row.postId)||rows.size<maxPosts)return true;
   const review=row.photos>0&&unresolved(row);
   const partial=row.layer==='DOM'&&row.usable===true&&row.intent==='SELL_PROPERTY'&&row.qualification==='MISSING_FIELDS';
   const victim=eligible(row)||review||partial?[...rows.values()].find(old=>unresolved(old)&&!eligible(old)&&old.photos===0&&!blocked.get(old.postId)?.size&&(!partial||old.qualification==='NO_TEXT')):null;
@@ -505,7 +506,8 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
  const empty=reason=>({status:'STOP',reason,rows:[],stats:zero()});
  if(m.consent!==true||!safe(m))return empty('CONTEXT');
  const baseline=m.baselineScroll===true;
- const fast=m.fastScroll===true&&m.gestureScroll!==true,maxSteps=fast?60:30,cadence=fast?500:1000;
+ const automatic=m.includePostText===true,scrollMs=automatic?45000:30000;
+ const fast=m.fastScroll===true&&m.gestureScroll!==true,maxSteps=fast?60:30,cadence=fast?(automatic?750:500):1000;
  if((m.gestureScroll===true&&!baseline)||baseline&&(m.photosConsent===true||m.viewportConsent===true))return empty('CONTEXT');
  const selectTail=baseline?baselineTailTarget:tailTarget;
  const uuid=/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
@@ -542,7 +544,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
    for(const [from,to] of [['touches','gestureTouches'],['anchored','gestureAnchored'],['rejected','gestureRejected']])model.stats[to]=picked?.stats?.[from]||0;
   }
   // Reserve time for final extraction and native delivery within the original deadline.
-  const scrollStart=w.performance.now(),scrollEnd=m.gestureScroll===true&&!gestureTarget?scrollStart:Math.min(scrollStart+30000,end-1500);
+  const scrollStart=w.performance.now(),scrollEnd=m.gestureScroll===true&&!gestureTarget?scrollStart:Math.min(scrollStart+scrollMs,end-1500);
   let noTargetStreak=0,lastTailAt=-Infinity,nativeFailures=0,lastMoved=null;const photoSlots=new Map(),viewport=baseline?null:w.FlipDesktopViewport;let mediaBindings=[];const snapshots=new Map(),textExpansions=new Set();
   model.stats.viewportModule=Number(!!viewport);
   model.stats.viewportGranted=Number(m.viewportConsent===true||m.photosConsent===true);
@@ -587,7 +589,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
 
     // A cold or still-changing first frame must not be lost by scrolling away.
     // One bounded retry, still inside the original capture/time budgets.
-    for(let attempt=0;attempt<2&&model.stats.photoPreviewFrames<20&&w.performance.now()<scrollEnd-5000;attempt++){
+    for(let attempt=0;attempt<2&&model.stats.photoPreviewFrames<(automatic?50:20)&&w.performance.now()<scrollEnd-5000;attempt++){
      const shot=viewport.photos(w,core,m.groupId,photoNodes,photoSlots,new Set(model.rows().map(r=>r.postId)),mediaBindings,model.stats,{imageURL,photoLinkId,photoAnchorHref,opaquePhotoLink},new Set(model.rows().filter(r=>!r.usable||r.price===null||r.area===null).map(r=>r.postId)));if(!shot)break;
      model.stats.photoPreviewFrames++;const ack=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:'photos',width:shot.width,height:shot.height,tiles:shot.tiles});
      if(invalid||!safe(m))return empty('CONTEXT');
@@ -653,7 +655,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
    await pause(Math.min(cadence,Math.max(0,scrollEnd-w.performance.now()))); // measure actual movement before the next bounded attempt
    if(readPosition()>before){model.stats.scrollMoves++;if(m.gestureScroll===true)model.stats.gestureScrollMoves++;lastMoved=container;}else model.stats.scrollStalls++;
   }
-  model.stats.scrollElapsedMs=Math.min(30000,Math.max(0,Math.floor(w.performance.now()-scrollStart)));
+  model.stats.scrollElapsedMs=Math.min(scrollMs,Math.max(0,Math.floor(w.performance.now()-scrollStart)));
   await pause(700);if(!await active())return empty('CONTEXT');readDOM(w,model,core,m.groupId);
   const result=await send({type:'readDesktop',nonce:m.nonce});if(invalid||!safe(m)||result?.status!=='OK')return empty('CONTEXT');
   for(const row of result.rows||[])mergeSnapshot(model,snapshots,row);
@@ -663,7 +665,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   for(const [stat,field] of [['dataPrice','price'],['dataArea','area'],['dataRooms','rooms']])model.stats[stat]=finalRows.filter(r=>r[field]!==null).length;
   model.stats.dataLocation=finalRows.filter(r=>[r.district,r.neighborhood,r.street].some(v=>v!==null)).length;
   model.stats.dataNoText=finalRows.filter(r=>r.qualification==='NO_TEXT').length;
-  for(const k of statKeys)model.stats[k]=Math.max(0,Math.min(k==='bytes'?4194304:k==='scrollElapsedMs'?30000:k==='gestureWaitMs'?15000:10000,Math.floor(model.stats[k])));
+  for(const k of statKeys)model.stats[k]=Math.max(0,Math.min(k==='bytes'?4194304:k==='scrollElapsedMs'?scrollMs:k==='gestureWaitMs'?15000:10000,Math.floor(model.stats[k])));
   return {status:'OK',reason:'DONE',rows:model.rows(),stats:{...model.stats},...(m.includePostText===true?{postTexts:model.postTexts()}:{} )};
  }catch{return empty('ERROR');}
  finally{noticeDispose?.();gestureWatch?.stop();setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}

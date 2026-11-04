@@ -29,7 +29,7 @@ class BackgroundWatcherScan(private val context:Context) {
         withTimeout(if(fixture)300_000 else 180_000){
             check(alive())
             val browser=GeckoSession()
-            val images=DesktopThumbnails()
+            val images=DesktopThumbnails(50)
             progress("LOADING")
             var observer:Job?=null
             var gate:DesktopTrial?=null
@@ -75,7 +75,7 @@ class BackgroundWatcherScan(private val context:Context) {
                 val trial=DesktopTrial(actualTarget,{android.os.SystemClock.elapsedRealtime()},fixture,groupId=group.id,allowRootQuery=true)
                 gate=trial;initial=false;check(trial.begin(true));val nonce=UUID.randomUUID().toString()
                 observer=launch{var last="";while(true){val phase=if(trial.phase==DesktopTrial.Phase.READING)"READING"else"LOADING";if(phase!=last){last=phase;progress(phase)};delay(500)}}
-                channel.viewportBridge=DesktopViewportBridge(checkNotNull(surface),nonce,images,{live()&&trial.active&&trial.phase==DesktopTrial.Phase.READING})
+                channel.viewportBridge=DesktopViewportBridge(checkNotNull(surface),nonce,images,{live()&&trial.active&&trial.phase==DesktopTrial.Phase.READING},background=true)
                 val result=DesktopSessionPreview.run(browser,channel,trial,nonce,actualTarget,{current},{pageReady&&live()},fastScroll=true,fixture=fixture,groupId=group.id,alive=::live,includePostText=true)
                 check(live()&&result.reason=="DONE"){stopReason?:"SCAN_"+result.reason}
                 val sourceRows=checkNotNull(result.reply).rows

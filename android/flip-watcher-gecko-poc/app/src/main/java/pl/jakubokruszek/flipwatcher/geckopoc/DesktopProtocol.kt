@@ -31,9 +31,9 @@ object DesktopProtocol {
         val status=j.optString("status");val reason=j.optString("reason")
         if(status !in setOf("OK","STOP","WAIT_FRESH")||reason !in setOf("DONE","CONTEXT","ERROR","BUSY","FRESHNESS","NOTICE_BLOCKED"))return null
         if((status=="OK")!=(reason=="DONE")||(status=="WAIT_FRESH")!=(reason=="FRESHNESS"))return null
-        val stats=parseStats(j.getJSONObject("stats"))?:return null
+        val stats=parseStats(j.getJSONObject("stats"),if(allowPostText)50 else 20)?:return null
         if(reason=="NOTICE_BLOCKED"&&stats.getValue("noticeReason")==0)return null
-        val a=j.getJSONArray("rows");if(a.length()>20||(status!="OK"&&a.length()!=0))return null
+        val a=j.getJSONArray("rows");if(a.length()>(if(allowPostText)50 else 20)||(status!="OK"&&a.length()!=0))return null
         if(status=="OK"&&stats.getValue("verified")!=1)return null
         val seen=HashSet<String>();val rows=(0 until a.length()).map {i->
             val r=a.getJSONObject(i);if(r.keys().asSequence().toSet()!=rowKeys)return null
@@ -65,18 +65,18 @@ object DesktopProtocol {
         }
         DesktopReply(status,reason,rows,stats,postTexts)
     }.getOrNull()
-    fun parseStats(j:JSONObject):Map<String,Int>? {
+    fun parseStats(j:JSONObject,maxPosts:Int=20):Map<String,Int>? {
         if(j.keys().asSequence().toSet()!=statKeys.toSet())return null
-        val result=statKeys.associateWith{key->val v=j.opt(key);if(v !is Int||v<0||v>(if(key=="bytes")4194304 else if(key=="scrollElapsedMs")30000 else if(key=="gestureWaitMs")15000 else 10000))return null;v}
+        val result=statKeys.associateWith{key->val v=j.opt(key);if(v !is Int||v<0||v>(if(key=="bytes")4194304 else if(key=="scrollElapsedMs")if(maxPosts==50)45000 else 30000 else if(key=="gestureWaitMs")15000 else 10000))return null;v}
         val fast=result.getValue("scrollFast");val cadence=result.getValue("scrollCadenceMs")
-        if(fast !in 0..1||fast==1&&cadence!=500||fast==0&&cadence !in setOf(0,1000)||fast==1&&result.getValue("gestureRequested")!=0)return null
+        if(fast !in 0..1||fast==1&&cadence !in (if(maxPosts==50)setOf(500,750) else setOf(500))||fast==0&&cadence !in setOf(0,1000)||fast==1&&result.getValue("gestureRequested")!=0)return null
         val stepLimit=if(fast==1)60 else 30
-        if(result.getValue("candidates")>20||result.getValue("verified")>1||result.getValue("desktop")>1||result.getValue("scrollSteps")>stepLimit||result.getValue("scrollMoves")>result.getValue("scrollSteps"))return null
+        if(result.getValue("candidates")>maxPosts||result.getValue("verified")>1||result.getValue("desktop")>1||result.getValue("scrollSteps")>stepLimit||result.getValue("scrollMoves")>result.getValue("scrollSteps"))return null
         if(result.getValue("scrollSeen")>512||result.getValue("scrollHit")>stepLimit||result.getValue("scrollRoot")>1||result.getValue("scrollInner")>1||listOf("scrollNoRange","scrollHidden","scrollOffscreen","scrollUnbound").any{result.getValue(it)>512})return null
         if(result.getValue("scrollStalls")>result.getValue("scrollSteps")-result.getValue("scrollMoves")||result.getValue("scrollAtEnd")>512||result.getValue("scrollNoTarget")>stepLimit)return null
         if(result.getValue("scrollTailAttempts")>2||result.getValue("scrollTailAttempts")>result.getValue("scrollSteps")||result.getValue("scrollTailMoves")>result.getValue("scrollTailAttempts")||result.getValue("scrollTailMoves")>result.getValue("scrollMoves")||result.getValue("pageFocused")>1||result.getValue("pageVisible")>1)return null
-        if(result.getValue("scrollNativeSteps")>result.getValue("scrollSteps")||result.getValue("scrollNativeMoves")>result.getValue("scrollNativeSteps")||result.getValue("scrollNativeMoves")>result.getValue("scrollMoves")||result.getValue("photoPreviewFrames")>20||result.getValue("photoPreviews")>60)return null
-        if(listOf("viewportModule","viewportGranted","viewportReady").any{result.getValue(it)>1}||result.getValue("viewportProbeCode")>4||result.getValue("nativeRequests")>30||result.getValue("nativeRejected")+result.getValue("nativeTimeout")>result.getValue("nativeRequests")||result.getValue("mediaBindingPosts")>20||result.getValue("pointMisses")>stepLimit)return null
+        if(result.getValue("scrollNativeSteps")>result.getValue("scrollSteps")||result.getValue("scrollNativeMoves")>result.getValue("scrollNativeSteps")||result.getValue("scrollNativeMoves")>result.getValue("scrollMoves")||result.getValue("photoPreviewFrames")>maxPosts||result.getValue("photoPreviews")>maxPosts*3)return null
+        if(listOf("viewportModule","viewportGranted","viewportReady").any{result.getValue(it)>1}||result.getValue("viewportProbeCode")>4||result.getValue("nativeRequests")>(if(maxPosts==50)60 else 30)||result.getValue("nativeRejected")+result.getValue("nativeTimeout")>result.getValue("nativeRequests")||result.getValue("mediaBindingPosts")>maxPosts||result.getValue("pointMisses")>stepLimit)return null
         if(listOf("pointProbes","pointEmpty","pointFrame","pointForeign","pointForm","pointComment","pointCommentable","pointChrome","pointUnbound","pointWidget").any{result.getValue(it)>64}||result.getValue("pointDialog")>64||result.getValue("pointCache")>1||result.getValue("pointCacheCards")>100||result.getValue("pointRects")>4)return null
         if(result.getValue("gestureRequested")>1||result.getValue("gestureAnchored")>result.getValue("gestureRequested")||result.getValue("gestureAnchored")>result.getValue("gestureTouches")||result.getValue("gestureTouches")>20||result.getValue("gestureRejected")>20||result.getValue("gestureScrollSteps")>result.getValue("scrollSteps")||result.getValue("gestureScrollMoves")>result.getValue("gestureScrollSteps")||result.getValue("gestureScrollMoves")>result.getValue("scrollMoves"))return null
         if(result.getValue("noticeDetected")>1||result.getValue("noticeClosed")>result.getValue("noticeDetected"))return null

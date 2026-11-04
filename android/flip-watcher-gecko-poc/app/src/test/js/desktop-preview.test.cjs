@@ -191,3 +191,10 @@ test('post text requires explicit collection, exact own DOM binding, bounded ret
  assert.equal(m.postTexts().length,1);assert(!JSON.stringify(m.postTexts()).includes('PRIVATE'));
  m.clear();assert.deepEqual(m.postTexts(),[]);
 });
+
+test('automated collector retains 50 exact posts while manual preview remains at 20',()=>{
+ const automatic=preview.createModel(core,fields,group,true),manual=model();
+ for(let i=0;i<70;i++){const r=record(String(550000000000000+i));automatic.add(r,'DOM');manual.add(r,'DOM');}
+ assert.equal(automatic.rows().length,50);assert.equal(automatic.postTexts().length,50);assert.equal(manual.rows().length,20);
+ assert(automatic.rows().some(r=>r.postId==='550000000000049'));assert(!automatic.rows().some(r=>r.postId==='550000000000050'));
+});

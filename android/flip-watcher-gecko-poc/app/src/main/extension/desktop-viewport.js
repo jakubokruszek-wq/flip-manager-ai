@@ -184,7 +184,7 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null,
   if(preferredIds&&((!extraPass&&captured(id))||tiles.some(tile=>tile.postId===id)))continue;
   if(!allowedIds.has(id))continue;
   if(!documentSource)count(fromNetwork?'photoNetworkCards':'photoExactCards');
-  if(!slots.has(id)){if(slots.size===20)continue;slots.set(id,new Map());}const media=slots.get(id);
+  if(!slots.has(id)){if(slots.size>=Math.min(50,Math.max(20,allowedIds.size)))continue;slots.set(id,new Map());}const media=slots.get(id);
   for(const {node,item,source:readSource,ready} of documentSource?[documentSource]:photoNodes(card,id,group,core,audit)){
    count('photoSources');
    if((fromNetwork||item.networkRequired)&&identity(item,owners)!==id){count('photoIdentityRejected');continue;}
