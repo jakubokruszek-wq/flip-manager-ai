@@ -101,6 +101,9 @@ class WatcherAutomationInstrumentedTest {
         val prefs=WatcherAutomation.preferences(context)
         val oldEnabled=WatcherAutomation.enabled(context);val oldVisible=WatcherAutomation.uiVisible
         val oldCompleted=prefs.getString("completed_slot",null)
+        val catalogPrefs=context.getSharedPreferences("gecko_poc",Context.MODE_PRIVATE)
+        val oldCatalog=catalogPrefs.getString("watcher_active_groups",null)
+        val oldGroups=WatcherGroups.active.toList()
         prefs.edit().putBoolean("enabled",true).remove("completed_slot").commit();WatcherAutomation.uiVisible=false
         val accepted=linkedMapOf<String,String>();var calls=0;var loseReceipt=true;var foregroundAttempts=0
         val credentials=WatcherLink.Credentials(device,"synthetic-credential-unused-over-network")
@@ -150,6 +153,8 @@ class WatcherAutomationInstrumentedTest {
         }finally{
             WatcherAutomation.configure(context,false)
             prefs.edit().putBoolean("enabled",oldEnabled).putString("completed_slot",oldCompleted).commit();WatcherAutomation.uiVisible=oldVisible
+            catalogPrefs.edit().putString("watcher_active_groups",oldCatalog).commit()
+            WatcherGroups.setActive(oldGroups)
             context.deleteDatabase("watcher-outbox-v1.db")
         }
     }
