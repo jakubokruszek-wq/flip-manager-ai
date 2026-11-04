@@ -1,7 +1,7 @@
 /* Only bounded, explicitly delimited Facebook feed units. Identity still requires exact post links. */
 (function(root){'use strict';
 const article='[role="article"],article',unit='[data-pagelet^="FeedUnit_"],[data-testid="post_container"]';
-function owner(n){return n?.closest?.(article)||n?.closest?.(unit)||null;}
+function owner(n){const semantic=n?.closest?.(article);if(semantic)return semantic;const candidate=n?.closest?.(unit);return candidate&&!candidate.querySelector?.(article)?candidate:null;}
 function list(doc){
  const articles=Array.from(doc.querySelectorAll(article));
  if(articles.length>100)return articles.slice(0,101);
