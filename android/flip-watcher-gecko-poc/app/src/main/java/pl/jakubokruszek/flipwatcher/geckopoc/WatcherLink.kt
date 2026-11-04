@@ -36,8 +36,8 @@ object WatcherLink {
         val a=j.getJSONArray("groups");require(a.length()<=200)
         val groups=(0 until a.length()).map{index->
             val row=a.getJSONObject(index);val id=row.getString("groupId")
-            require(WatcherGroups.find(id)!=null) // This release supports the reviewed eleven sources.
             require(row.getString("url")=="https://www.facebook.com/groups/$id/")
+            require(id.matches(Regex("[A-Za-z0-9_.-]{1,100}")))
             val name=row.getString("name");require(name.isNotBlank()&&name.length<=500)
             WatcherGroup(id,name)
         }
@@ -52,6 +52,7 @@ object WatcherLink {
             connection.instanceFollowRedirects=false;connection.connectTimeout=10000;connection.readTimeout=15000
             connection.useCaches=false;connection.setRequestProperty("Accept","application/json")
             connection.setRequestProperty("Authorization","Bearer "+credentials.token)
+            if(path=="/api/collector/facebook/groups")connection.setRequestProperty("X-Watcher-Group-Protocol","2")
             val status=connection.responseCode
             if(status==401)error("WATCHER_PAIRING_REQUIRED")
             if(status!=200)error("WATCHER_UNAVAILABLE")
@@ -60,8 +61,9 @@ object WatcherLink {
         }finally{connection.disconnect()}
     }
     fun groups(credentials:Credentials,verifyDevice:Boolean=false):List<WatcherGroup>{
-        if(verifyDevice){val j=JSONObject(get("/api/collector/devices/current",credentials));require(j.optBoolean("connected")&&j.getString("deviceId")==credentials.deviceId&&!j.optBoolean("revoked",true))}
-        return parseGroups(get("/api/collector/facebook/groups",credentials))
+        if(verifyDevice){val j=JSONObject(get("/api/collector/devices/current",credentials));require(j.optBoolean("connected")&&j.getString("deviceId")==credentials.deviceId&&!j.optBoolean("revoked",true)){"WATCHER_DEVICE_MISMATCH"}}
+        val raw=get("/api/collector/facebook/groups",credentials)
+        return try{parseGroups(raw)}catch(e:Exception){throw IllegalStateException("WATCHER_GROUPS_INVALID",e)}
     }
     private fun readBounded(input:java.io.InputStream,limit:Int):ByteArray {
         val out=java.io.ByteArrayOutputStream();val buffer=ByteArray(4096)

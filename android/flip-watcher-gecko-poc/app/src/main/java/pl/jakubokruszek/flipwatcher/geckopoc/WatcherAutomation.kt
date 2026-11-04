@@ -143,6 +143,9 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                         if(alreadyCompleted||!scheduleDue||budgetReached){WatcherScanStatus.finish(context,run,if(budgetReached)"RETRY"else"UPLOAD_DONE",if(budgetReached)"BATCH_CONTINUE"else lastIssue);return@withTimeout}
                         if(WatcherAutomation.uiVisible){queue.log("WAITING_FOR_BACKGROUND");WatcherScanStatus.finish(context,run,"WAITING_UI","WAITING_FOR_BACKGROUND");return@withTimeout}
                         val groups=groups(credentials)
+                        WatcherGroups.setActive(groups)
+                        val groupCache=org.json.JSONObject().put("version",1).put("groups",org.json.JSONArray(groups.map{org.json.JSONObject().put("groupId",it.id).put("url",it.url).put("name",it.name)})).toString()
+                        check(context.getSharedPreferences("gecko_poc",Context.MODE_PRIVATE).edit().putString("watcher_active_groups",groupCache).commit())
                         // Resume after the last attempted source if a slow group exhausted the worker budget.
                         val cursor=groups.indexOfFirst{it.id==prefs.getString("last_attempted_source",null)}
                         val ordered=if(cursor<0)groups else groups.drop(cursor+1)+groups.take(cursor+1)
@@ -152,7 +155,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             if(WatcherAutomation.uiVisible||!WatcherAutomation.enabled(context))break
                             if(queue.scanned(slot,group.id))continue
                             if(remaining()<120_000){budgetReached=true;break}
-                            queue.log("GROUP_"+(WatcherGroups.configured.indexOfFirst{it.id==group.id}+1))
+                            queue.log("GROUP_"+(index+1))
                             check(prefs.edit().putString("last_attempted_source",group.id).commit())
                             queue.log("SCAN_STARTED")
                             WatcherScanStatus.update(context,run){it.copy(phase="LOADING",group=group.name,position=index+1,reason="")}

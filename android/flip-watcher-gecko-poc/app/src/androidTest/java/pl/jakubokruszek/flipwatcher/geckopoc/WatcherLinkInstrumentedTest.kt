@@ -30,4 +30,15 @@ class WatcherLinkInstrumentedTest {
         bytes[bytes.lastIndex]=(bytes.last().toInt() xor 1).toByte();file.writeBytes(bytes)
         assertTrue(runCatching{WatcherLink.load(context)}.isFailure);assertTrue(file.exists())
     }
+    @Test fun dynamicGroupsAreValidatedOnTheRealAndroidJsonRuntime(){
+        val json="""{"version":1,"groups":[{"groupId":"297408205383031","name":"FLIPERZY POLSKA","url":"https://www.facebook.com/groups/297408205383031/"}]}"""
+        try{
+            val groups=WatcherLink.parseGroups(json);WatcherGroups.setActive(groups)
+            PocPolicy.selectGroup("297408205383031")
+            assertTrue(WatcherGroups.isActive("297408205383031"))
+            assertEquals(PageKind.APPROVED_POST,PocPolicy.classify("https://www.facebook.com/groups/297408205383031/posts/1655103482946823/"))
+            assertTrue(runCatching{WatcherLink.parseGroups(json.replace("https://www.facebook.com/groups/","https://evil.test/groups/"))}.isFailure)
+        }finally{WatcherGroups.setActive(WatcherGroups.configured);PocPolicy.selectGroup(WatcherGroups.LEGACY_GROUP)}
+    }
+
 }

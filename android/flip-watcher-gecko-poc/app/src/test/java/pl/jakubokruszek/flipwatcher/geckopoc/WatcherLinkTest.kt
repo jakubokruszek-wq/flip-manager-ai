@@ -26,7 +26,7 @@ class WatcherLinkTest {
     }
     @Test fun corruptUnsupportedDuplicateAndCrossGroupFeedFailsBeforeChangingCatalog(){
         val bad=feed(WatcherGroups.LEGACY_GROUP);bad.getJSONArray("groups").getJSONObject(0).put("url","https://www.facebook.com/groups/402796264871862/")
-        for(value in listOf(bad,feed("foreign"),feed(WatcherGroups.LEGACY_GROUP,WatcherGroups.LEGACY_GROUP),feed().put("version",2)))assertTrue(runCatching{WatcherLink.parseGroups(value.toString())}.isFailure)
+        for(value in listOf(bad,feed("../foreign"),feed(WatcherGroups.LEGACY_GROUP,WatcherGroups.LEGACY_GROUP),feed().put("version",2)))assertTrue(runCatching{WatcherLink.parseGroups(value.toString())}.isFailure)
         assertEquals(11,WatcherGroups.active.size)
     }
     @Test fun disablingSelectedSourceStopsAutomationWithoutDeletingHistoricalArchive(){
@@ -38,4 +38,15 @@ class WatcherLinkTest {
         assertEquals(filename,WatcherGroups.archiveFile(WatcherGroups.LEGACY_GROUP))
         assertTrue(runCatching{PocPolicy.selectGroup(WatcherGroups.LEGACY_GROUP)}.isFailure)
     }
+    @Test fun newAuthenticatedGroupCatalogCanSelectAndArchiveWithoutAnApkAllowlist(){
+        val groups=WatcherLink.parseGroups(feed(WatcherGroups.LEGACY_GROUP,"297408205383031").toString())
+        WatcherGroups.setActive(groups)
+        assertEquals("297408205383031",WatcherGroups.find("297408205383031")!!.id)
+        PocPolicy.selectGroup("297408205383031")
+        assertEquals(PageKind.APPROVED_POST,PocPolicy.classify("https://www.facebook.com/groups/297408205383031/posts/1655103482946823/"))
+        assertEquals(PageKind.OTHER_GROUP,PocPolicy.classify("https://www.facebook.com/groups/297408205383032/posts/1655103482946823/"))
+        assertEquals("saved-search-297408205383031-v1.bin",WatcherGroups.archiveFile("297408205383031"))
+        assertEquals("saved-search-v1.bin",WatcherGroups.archiveFile(WatcherGroups.LEGACY_GROUP))
+    }
+
 }

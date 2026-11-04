@@ -24,11 +24,11 @@ object WatcherGroups {
     @Volatile private var activeSources:List<WatcherGroup>?=null
     val active:List<WatcherGroup> get()=activeSources?:configured
     fun setActive(groups:List<WatcherGroup>){
-        require(groups.map{it.id}.toSet().size==groups.size&&groups.all{find(it.id)!=null})
+        require(groups.size<=200&&groups.map{it.id}.toSet().size==groups.size)
         activeSources=groups.toList()
     }
     fun isActive(id:String)=active.any{it.id==id}
-    fun find(id:String)=configured.singleOrNull{it.id==id}
+    fun find(id:String)=activeSources?.singleOrNull{it.id==id}?:configured.singleOrNull{it.id==id}
     /** The old encrypted file is retained byte-for-byte; other groups cannot replace it. */
     fun archiveFile(groupId:String):String {
         require(find(groupId)!=null)
