@@ -33,7 +33,7 @@ concurrency:
 jobs:
   guard:
     name: Isolation, collector-core and adapter tests
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -59,7 +59,7 @@ jobs:
 
   build:
     name: Compile, unit tests, APK
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     defaults:
       run:
@@ -133,7 +133,7 @@ jobs:
 
   instrumented:
     name: GeckoView instrumented tests (Android 16 emulator, local HTML)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
@@ -237,7 +237,7 @@ jobs:
     name: Direct download of tested 0.5.62 APK
     if: >-
       github.event_name == 'push' && github.ref == 'refs/heads/claude/facebook-watcher-mobile-gq36l8' && github.event.head_commit.message == 'delivery: publish tested Gecko POC 0.5.62 download'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
@@ -276,7 +276,7 @@ jobs:
     name: Direct download of tested 0.5.63 APK
     if: >-
       github.event_name == 'push' && github.ref == 'refs/heads/claude/facebook-watcher-mobile-gq36l8' && github.event.head_commit.message == 'delivery: publish tested Gecko POC 0.5.63 download'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
@@ -315,7 +315,7 @@ jobs:
     name: Direct download of tested 0.5.64 APK
     if: >-
       github.event_name == 'push' && github.ref == 'refs/heads/claude/facebook-watcher-mobile-gq36l8' && github.event.head_commit.message == 'delivery: publish tested Gecko POC 0.5.64 download'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
@@ -355,7 +355,7 @@ jobs:
     name: Direct download of tested 0.5.65 APK
     if: >-
       github.event_name == 'push' && github.ref == 'refs/heads/claude/facebook-watcher-mobile-gq36l8' && github.event.head_commit.message == 'delivery: publish tested Gecko POC 0.5.65 download'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
@@ -396,7 +396,7 @@ jobs:
     name: Direct download of tested 0.5.66 APK
     if: >-
       github.event_name == 'push' && github.ref == 'refs/heads/claude/facebook-watcher-mobile-gq36l8' && github.event.head_commit.message == 'delivery: publish tested Gecko POC 0.5.66 download'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
@@ -438,7 +438,7 @@ jobs:
     name: Direct download of tested 0.5.67 APK
     if: >-
       github.event_name == 'push' && github.ref == 'refs/heads/claude/facebook-watcher-mobile-gq36l8' && github.event.head_commit.message == 'delivery: publish tested Gecko POC 0.5.67 download'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
@@ -487,7 +487,7 @@ jobs:
   verified-apk:
     name: Verified Samsung APK
     needs: [guard, build, instrumented]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -504,7 +504,7 @@ jobs:
     name: Publish tested Android 0.5.75
     if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-poster-offers'
     needs: [guard, build, instrumented, verified-apk]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
