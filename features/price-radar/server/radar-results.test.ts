@@ -25,13 +25,15 @@ const { getRadarResults } = await import("./radar-results.ts");
 const OWNER = "owner-1";
 
 function row(overrides: Row = {}): Row {
-  return {
+  const base: Row = {
     id: "listing-1", owner_id: OWNER, source: "domiporta", external_listing_id: "ext-1", original_url: "https://domiporta.pl/1", normalized_url: "https://domiporta.pl/1",
     title: "Mieszkanie", description: null, price: 450_000, area: 50, price_per_sqm: 9_000, rooms: 2, city: "Łódź", district: "Bałuty",
     building_type: "blok", market_type: "secondary", renovation_status: "fresh_renovation", content_hash: "hash-1", raw_payload: {},
     first_seen_at: "2026-10-01T00:00:00Z", last_seen_at: "2026-10-05T00:00:00Z", published_at: null, source_updated_at: null, collected_at: "2026-10-05T00:00:00Z", cross_source_identity: null, status: "active", excluded_at: null, excluded_reason: null,
     ...overrides,
   };
+  if (!("description" in overrides)) base.description = base.market_type === "primary" ? "Mieszkanie wykończone pod klucz, gotowe do zamieszkania." : base.renovation_status === "fresh_renovation" ? "Mieszkanie świeżo po generalnym remoncie, gotowe do zamieszkania." : "Mieszkanie w pełni wykończone, gotowe do zamieszkania, wysoki standard.";
+  return base;
 }
 
 const baseFilters = { districts: [], market: "both" as const, areaMin: null, areaMax: null, rooms: [], sources: [], minPricePerSqm: null };
@@ -126,7 +128,7 @@ test("A/B stats stay separated by market and standard, with turnkey primary trea
   assert.equal(payload.stats.length, 3, "district, market, and quality category are independent groups");
 });
 
-test("a previously persisted Oferty.net row with conflicting own-unit area, floor, and microdistrict stays visible for review but is excluded from A/B statistics", async () => {
+test("a previously persisted Oferty.net row with conflicting own-unit area, floor, and microdistrict is hidden automatically and excluded from A/B statistics", async () => {
   currentDb = fakeDb([row({
     id: "oferty-1543068412", source: "oferty_net", external_listing_id: "1543068412",
     original_url: "https://www.oferty.net/of,1543068412", normalized_url: "https://www.oferty.net/of,1543068412",
@@ -136,16 +138,14 @@ test("a previously persisted Oferty.net row with conflicting own-unit area, floo
     raw_payload: { detailVerified: true, detailLocationText: "Łódź, Bałuty, Bałuty-Doły, Zawiszy Czarnego", detailEvidence: { floor: 6, locationText: "Łódź, Bałuty, Bałuty-Doły, Zawiszy Czarnego" } },
   })]);
   const payload = await getRadarResults(OWNER, baseFilters, currentDb as never);
-  assert.equal(payload.listings.length, 1, "the historical row is retained as visible review evidence");
-  assert.deepEqual(payload.listings[0]?.verificationIssues, ["area", "floor", "location"]);
+  assert.equal(payload.listings.length, 0, "a contradictory historical snapshot is not visible in automatic-only Radar");
   assert.equal(payload.stats.length, 0, "an unresolved same-dwelling contradiction cannot enter category A/B sample counts");
 });
 
 test("a stored identity-change marker survives read and excludes the old snapshot from sample statistics without deleting it", async () => {
   currentDb = fakeDb([row({ raw_payload: { identityVerificationIssues: ["area", "rooms", "location"] } })]);
   const payload = await getRadarResults(OWNER, baseFilters, currentDb as never);
-  assert.equal(payload.listings.length, 1);
-  assert.deepEqual(payload.listings[0]?.verificationIssues, ["area", "rooms", "location"]);
+  assert.equal(payload.listings.length, 0);
   assert.equal(payload.stats.length, 0);
 });
 
@@ -197,4 +197,10 @@ test("archived OLX rows stay in the table but are no longer listings, samples or
   assert.ok(!payload.excludedListings.some((listing) => listing.source === "olx"));
   assert.equal(payload.stats.reduce((total, group) => total + group.sampleSize, 0), 1, "the OLX row is not part of any sample");
   assert.ok(payload.stats.every((group) => group.averagePricePerSqm === null || group.averagePricePerSqm < 19_000), "nor of any average");
+});
+
+test("stored category labels with no current text proof never enter cards or statistics",async()=>{
+  currentDb=fakeDb([row({id:"good"}),row({id:"unknown",external_listing_id:"unknown",description:null}),row({id:"future",external_listing_id:"future",description:"Wysoki standard pod klucz. Planowane zakończenie remontu w listopadzie."})]);
+  const payload=await getRadarResults(OWNER,baseFilters,currentDb as never);
+  assert.deepEqual(payload.listings.map(item=>item.id),["good"]);assert.equal(payload.stats[0]?.sampleSize,1);
 });

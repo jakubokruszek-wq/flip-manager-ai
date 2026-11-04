@@ -300,7 +300,7 @@ export function inspectRadarFinishEvidence(text: string): {
   const renovationNotCompleted = /\b(?:bedzie|zostanie|ma\s+byc|planowan\p{L}*)[^.!?;]{0,100}remon\p{L}*|\b(?:nie\s+(?:jest\s+)?po|bez)\s+(?:generaln\p{L}*|kapitaln\p{L}*)\s+remon\p{L}*/iu.test(normalizedOwnText)
     || INCOMPLETE_RENOVATION_PATTERN.test(normalizedOwnText)
     || PLANNED_RENOVATION_COMPLETION_PATTERN.test(normalizedOwnText);
-  const fullRenovation = !renovationNotCompleted && /(?:generaln\p{L}*|kapitaln\p{L}*)\s+remon\p{L}*/iu.test(ownText);
+  const fullRenovation = !renovationNotCompleted && !PARTIAL_RENOVATION_PATTERN.test(ownText) && /(?:generaln\p{L}*|kapitaln\p{L}*)\s+remon\p{L}*/iu.test(ownText);
   const normalizePattern = (pattern: RegExp) => new RegExp(pattern.source.normalize("NFD").replace(/\p{M}/gu, "").replace(/[łŁ]/gu, "l"), "iu");
   const freshPattern = normalizePattern(FRESH_FULL_RENOVATION_PATTERN);
   const unusedPattern = normalizePattern(UNUSED_AFTER_FULL_RENOVATION_PATTERN);

@@ -14,3 +14,9 @@ test("flip sorts by flipScore descending",()=>{ const lower={...base,listingId:"
 test("price sorts ascending and pushes an unknown price to the end",()=>{ const cheaper={...base,listingId:"2",price:150000}; const unknown={...base,listingId:"3",price:null}; assert.deepEqual(sortFacebookInbox([base,unknown,cheaper],"price").map(i=>i.listingId),["2","1","3"]); });
 test("profit sorts descending and pushes an unknown profit to the end",()=>{ const lowerProfit={...base,listingId:"2",potentialProfit:10000}; const unknownProfit={...base,listingId:"3",potentialProfit:null}; assert.deepEqual(sortFacebookInbox([lowerProfit,unknownProfit,base],"profit").map(i=>i.listingId),["1","2","3"]); });
 test("maps opportunity thresholds",()=>{ assert.equal(opportunityLabel(90),"Wyjątkowa okazja"); assert.equal(opportunityLabel(85),"Bardzo dobra"); assert.equal(opportunityLabel(75),"Warta analizy"); assert.equal(opportunityLabel(74),null); });
+
+test("unit-price ceiling keeps missing values, includes the boundary and rejects only known values above it",()=>{
+  const items=[{...base,listingId:"unknown",pricePerSqm:null},{...base,listingId:"at",pricePerSqm:7000},{...base,listingId:"above",pricePerSqm:7001}];
+  assert.deepEqual(filterFacebookInbox(items,"all",{...EMPTY_FACEBOOK_INBOX_FILTERS,maxPricePerSqm:7000}).map(item=>item.listingId),["unknown","at"]);
+  assert.deepEqual(filterFacebookInbox(items,"all",{...EMPTY_FACEBOOK_INBOX_FILTERS,maxPricePerSqm:7000,minArea:60}).map(item=>item.listingId),[],"other selected conditions still apply to an unknown unit price");
+});

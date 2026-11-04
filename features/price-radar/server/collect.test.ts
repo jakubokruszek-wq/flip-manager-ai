@@ -432,8 +432,8 @@ test("a legacy checkpoint with no qualification version keeps strict v1 rules wh
   if (claim.kind !== "claimed" || !claim.run.leaseToken) throw new Error("expected claimed legacy-style run");
   const portion = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken }, db as never);
   assert.equal(portion.qualifiedCount, 0, "a pre-v2 active run is not silently broadened to category B");
-  assert.deepEqual(portion.qualificationRejections, {}, "uncertain finish is held for operator review instead of being discarded");
-  assert.equal(db.tables.price_radar_verification_queue.length, 1, "legacy qualification rules remain strict while the candidate can still be reviewed separately");
+  assert.deepEqual(portion.qualificationRejections, {domiporta:{renovation_not_confirmed_fresh_full:1}});
+  assert.equal(db.tables.price_radar_verification_queue.length, 0, "strict legacy rules reject the candidate automatically");
   assert.equal(db.tables.price_radar_listings.length, 0);
 });
 
@@ -907,13 +907,11 @@ test("a rejected contradictory reimport quarantines the previously counted dwell
   assert.equal(kept.area, 45);
   assert.equal(kept.price, 419_000);
   assert.deepEqual((kept.raw_payload as Row).identityVerificationIssues, ["area", "rooms", "floor", "location"]);
-  assert.deepEqual(result.qualificationRejections, { oferty_net: { already_in_analysis: 1 } }, "the conflict is flagged inline on the already-active row, never queued a second time as a fresh pending card");
+  assert.deepEqual(result.qualificationRejections, { oferty_net: { detail_conflict: 1 } }, "the conflict is flagged inline on the already-active row, never queued a second time as a fresh pending card");
   assert.equal(db.tables.price_radar_verification_queue.length, 0, "a listing already active in the analysis is never also queued for a separate review decision");
 
   const read = await getRadarResults(ownerId, { districts: ["Bałuty"], market: "both", areaMin: 30, areaMax: 80, rooms: [], sources: [], minPricePerSqm: null }, db as never);
-  assert.equal(read.listings.length, 1, "the saved record and its evidence remain available for review");
-  assert.equal(read.listings[0]?.id, "radar-existing-conflicted");
-  assert.deepEqual(read.listings[0]?.verificationIssues, ["area", "rooms", "floor", "location"]);
+  assert.equal(read.listings.length, 0, "contradictory history stays saved but is hidden from the automatic Radar");
   assert.equal(read.stats.length, 0, "the saved but unresolved record is excluded from A/B reference statistics");
 });
 
@@ -1069,27 +1067,23 @@ test("resuming a legacy checkpoint that still queues a now-disabled source (szyb
   assert.equal(result.status, "partial", "a skipped disabled source still ends the run partial, not silently 'completed'");
 });
 
-test("a candidate missing ONLY its district (every other Radar criterion confirmed) is queued for manual district assignment, never counted as a dead-end rejection", async () => {
+test("a district-missing candidate is automatically rejected without a manual queue", async () => {
   const db = fakeDb();
   fakeSourceImpl = async (id) => ({ listings: [{ ...qualifyingListing(`${id}-nodist`, id), district: null }], warnings: [], fetched: 1 });
   const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
   if (claimed.kind !== "claimed") throw new Error("expected claimed");
 
   const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
-
-  assert.equal(result.qualifiedCount, 0, "a queued candidate is not yet a qualified Radar listing");
-  assert.equal(db.tables.price_radar_listings.length, 0, "a district-only-missing candidate is never written straight to price_radar_listings");
-  assert.deepEqual(result.qualificationRejections, {}, "it must never also be counted as district_not_confirmed -- it is an actionable queue item, not a dead end");
-  assert.equal(db.tables.price_radar_district_queue.length, 1);
-  assert.equal(db.tables.price_radar_district_queue[0]?.source, "domiporta");
-  assert.equal(db.tables.price_radar_district_queue[0]?.building_type, "blok");
-  assert.equal(db.tables.price_radar_district_queue[0]?.status, "pending");
-  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).districtQueuedCount, 1);
-  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).verificationQueuedCount, 0);
-  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).rejectedCount, 0);
+  assert.equal(result.qualifiedCount,0);
+  assert.equal(db.tables.price_radar_listings.length,0);
+  assert.equal(db.tables.price_radar_district_queue.length,0);
+  assert.equal(db.tables.price_radar_verification_queue.length,0);
+  assert.equal(Object.values(result.qualificationRejections).flatMap(counts=>Object.values(counts)).reduce((sum,n)=>sum+n,0),1,"one automatic rejection is recorded instead of manual work");
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).verificationQueuedCount??0,0);
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).districtQueuedCount??0,0);
 });
 
-test("a verified Oferty.net category-B listing missing only its district reaches the operator queue", async () => {
+test("a high-standard Oferty.net candidate without a district is rejected automatically", async () => {
   const db = fakeDb();
   fakeSourceImpl = async () => ({ listings: [{
     ...qualifyingListing("oferty-b-no-district", "oferty_net"),
@@ -1102,16 +1096,16 @@ test("a verified Oferty.net category-B listing missing only its district reaches
   if (claim.kind !== "claimed") throw new Error("expected claimed");
 
   const result = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
-  assert.equal(result.qualifiedCount, 0, "the operator must confirm the district before the offer enters A/B statistics");
-  assert.equal(db.tables.price_radar_listings.length, 0);
-  assert.equal(db.tables.price_radar_district_queue.length, 1, "the missing district is the only unresolved criterion");
-  assert.equal(db.tables.price_radar_district_queue[0]?.source, "oferty_net");
-  assert.equal(db.tables.price_radar_district_queue[0]?.market_type, "secondary");
-  assert.equal(db.tables.price_radar_district_queue[0]?.renovation_status, "turnkey_finish", "category B needs no renovation date");
-  assert.deepEqual(result.qualificationRejections, {});
+  assert.equal(result.qualifiedCount,0);
+  assert.equal(db.tables.price_radar_listings.length,0);
+  assert.equal(db.tables.price_radar_district_queue.length,0);
+  assert.equal(db.tables.price_radar_verification_queue.length,0);
+  assert.equal(Object.values(result.qualificationRejections).flatMap(counts=>Object.values(counts)).reduce((sum,n)=>sum+n,0),1,"one automatic rejection is recorded instead of manual work");
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).verificationQueuedCount??0,0);
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).districtQueuedCount??0,0);
 });
 
-test("an uncertain but credible apartment-sale candidate is saved only to the separate verification queue", async () => {
+test("unconfirmed apartment-sale details are rejected without manual verification", async () => {
   const db = fakeDb();
   fakeSourceImpl = async () => ({ listings: [{
     ...qualifyingListing("needs-verification-42", "oferty_net"),
@@ -1129,23 +1123,16 @@ test("an uncertain but credible apartment-sale candidate is saved only to the se
   if (claim.kind !== "claimed") throw new Error("expected claimed");
 
   const result = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
-
-  assert.equal(result.qualifiedCount, 0);
-  assert.equal(db.tables.price_radar_listings.length, 0, "unverified source data never reaches Radar comparisons");
-  assert.equal(db.tables.price_radar_district_queue.length, 0, "multiple missing facts do not masquerade as district-only work");
-  assert.equal(db.tables.price_radar_verification_queue.length, 1);
-  const queued = db.tables.price_radar_verification_queue[0]!;
-  assert.equal(queued.owner_id, ownerId);
-  assert.equal(queued.status, "pending");
-  assert.equal(queued.original_url, "https://example.test/needs-verification-42");
-  assert.equal((queued.source_snapshot as Row).sourceHttpStatus, 200);
-  assert.deepEqual(queued.missing_fields, ["building_type", "market_type", "standard"]);
-  assert.deepEqual(result.qualificationRejections, {}, "a successfully queued candidate is not counted as a discarded rejection");
-  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).verificationQueuedCount, 1);
-  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).rejectedCount, 0);
+  assert.equal(result.qualifiedCount,0);
+  assert.equal(db.tables.price_radar_listings.length,0);
+  assert.equal(db.tables.price_radar_district_queue.length,0);
+  assert.equal(db.tables.price_radar_verification_queue.length,0);
+  assert.equal(Object.values(result.qualificationRejections).flatMap(counts=>Object.values(counts)).reduce((sum,n)=>sum+n,0),1,"one automatic rejection is recorded instead of manual work");
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).verificationQueuedCount??0,0);
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).districtQueuedCount??0,0);
 });
 
-test("a confirmed operator decision is reapplied on source reimport, promotes one listing, and stays visible below the 20-offer sample minimum", async () => {
+test("a historical operator confirmation cannot promote unconfirmed current source data", async () => {
   const decision = {
     apartmentSaleConfirmed: true, price: 440_000, area: 40, rooms: 2, city: "Łódź", district: "Bałuty",
     buildingType: "blok", marketType: "secondary", qualityCategory: "ready_high_standard",
@@ -1170,24 +1157,9 @@ test("a confirmed operator decision is reapplied on source reimport, promotes on
   if (claim.kind !== "claimed") throw new Error("expected claimed");
 
   const result = await runRadarCollectionPortion({ runId: claim.run.id, ownerId, leaseToken: claim.run.leaseToken! }, db as never);
-
-  assert.equal(result.qualifiedCount, 1, "the persisted operator total price and corrected fields are applied before qualification");
-  assert.equal(db.tables.price_radar_listings.length, 1, "reimport updates/promotes one canonical Radar listing");
-  const saved = db.tables.price_radar_listings[0]!;
-  assert.equal(saved.price, 440_000);
-  assert.equal(saved.price_per_sqm, 11_000);
-  assert.equal(saved.district, "Bałuty");
-  assert.equal((saved.raw_payload as Row).priceKind, "total");
-  assert.equal(((saved.raw_payload as Row).operatorPriceEvidence as Row).priceKind, "from", "the original parser warning remains auditable");
-
-  const visible = await getRadarResults(ownerId, {
-    districts: ["Bałuty"], market: "both", areaMin: 31, areaMax: 62, rooms: [1, 2, 3], sources: [], minPricePerSqm: 8_800,
-  }, db as never);
-  assert.equal(visible.listings.length, 1, "the confirmed offer is not hidden while its group has fewer than 20 records");
-  assert.equal(visible.stats.length, 1);
-  assert.equal(visible.stats[0]?.sampleSize, 1);
-  assert.equal(visible.stats[0]?.isSmallSample, true);
-  assert.equal(visible.stats[0]?.averagePricePerSqm, null, "a one-offer sample does not publish a reference price");
+  assert.equal(result.qualifiedCount,0,"historical confirmation cannot replace current automatic source verification");
+  assert.equal(db.tables.price_radar_listings.length,0);
+  assert.equal(db.tables.price_radar_verification_queue.length,1,"the historical decision is preserved without exposing a manual queue");
 });
 
 test("a candidate already rejected in the verification queue stays rejected even once a later scan fully confirms it, instead of silently qualifying directly", async () => {
@@ -1222,7 +1194,7 @@ test("a candidate already rejected in the district-assignment queue stays reject
   assert.deepEqual(result.qualificationRejections, { domiporta: { previously_rejected_by_operator: 1 } });
 });
 
-test("a candidate otherwise reviewable (e.g. a missing price) is never queued for a separate decision when it already has an active row in the comparison analysis", async () => {
+test("an unqualified previously saved candidate cannot create manual work", async () => {
   const existing = {
     id: "radar-existing-active", owner_id: ownerId, source: "domiporta", external_listing_id: "already-active-offer",
     original_url: "https://example.test/already-active-offer", normalized_url: "https://example.test/already-active-offer",
@@ -1238,29 +1210,32 @@ test("a candidate otherwise reviewable (e.g. a missing price) is never queued fo
   if (claimed.kind !== "claimed") throw new Error("expected claimed");
 
   const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
-
-  assert.equal(result.qualifiedCount, 0);
-  assert.equal(db.tables.price_radar_verification_queue.length, 0, "already represented in the analysis -- never queued again as a fresh pending card");
-  assert.deepEqual(result.qualificationRejections, { domiporta: { already_in_analysis: 1 } });
+  assert.equal(result.qualifiedCount,0);
+  assert.equal(db.tables.price_radar_listings.length,1);
+  assert.equal(db.tables.price_radar_district_queue.length,0);
+  assert.equal(db.tables.price_radar_verification_queue.length,0);
+  assert.equal(Object.values(result.qualificationRejections).flatMap(counts=>Object.values(counts)).reduce((sum,n)=>sum+n,0),1,"one automatic rejection is recorded instead of manual work");
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).verificationQueuedCount??0,0);
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).districtQueuedCount??0,0);
 });
 
-test("an unapplied district queue migration is surfaced as partial work instead of silently dropping an otherwise eligible candidate", async () => {
+test("automatic rejection does not depend on a manual district queue schema", async () => {
   const db = fakeDb({ districtQueueRpcError: { code: "PGRST202", message: "Could not find the function public.upsert_price_radar_district_queue_candidate in the schema cache" } });
   fakeSourceImpl = async (id) => ({ listings: [{ ...qualifyingListing(`${id}-nodist-no-schema`, id), district: null }], warnings: [], fetched: 1 });
   const claimed = await claimOrCreateRadarRun(ownerId, ["domiporta"], db as never);
   if (claimed.kind !== "claimed") throw new Error("expected claimed");
 
   const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
-
-  assert.equal(result.status, "partial", "a missing required queue schema is not reported as a clean, completed source");
-  assert.equal(result.sourceStatuses.domiporta, "partial");
-  assert.equal(db.tables.price_radar_district_queue.length, 0, "the test does not pretend an unavailable table accepted the candidate");
-  assert.equal(db.tables.price_radar_listings.length, 0, "a district-missing candidate is never promoted without operator confirmation");
-  assert.match(result.sourceWarnings?.domiporta?.join(" ") ?? "", /RADAR_DISTRICT_QUEUE_UNAVAILABLE/u);
-  assert.deepEqual(result.qualificationRejections, {}, "the candidate remains an actionable queue dependency, not a false rejection");
+  assert.equal(result.qualifiedCount,0);
+  assert.equal(db.tables.price_radar_listings.length,0);
+  assert.equal(db.tables.price_radar_district_queue.length,0);
+  assert.equal(db.tables.price_radar_verification_queue.length,0);
+  assert.equal(Object.values(result.qualificationRejections).flatMap(counts=>Object.values(counts)).reduce((sum,n)=>sum+n,0),1,"one automatic rejection is recorded instead of manual work");
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).verificationQueuedCount??0,0);
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).districtQueuedCount??0,0);
 });
 
-test("a candidate missing its district AND another criterion (e.g. an unconfirmed building type) enters the general verification queue, not the district-only queue", async () => {
+test("multiple uncertain fields are rejected automatically", async () => {
   const db = fakeDb();
   fakeSourceImpl = async (id) => ({
     listings: [{ ...qualifyingListing(`${id}-nodist-nobuild`, id), district: null, title: "Mieszkanie", description: "Świeżo po generalnym remoncie w 2025, gotowe do zamieszkania. Rynek wtórny." }],
@@ -1270,10 +1245,13 @@ test("a candidate missing its district AND another criterion (e.g. an unconfirme
   if (claimed.kind !== "claimed") throw new Error("expected claimed");
 
   const result = await runRadarCollectionPortion({ runId: claimed.run.id, ownerId, leaseToken: claimed.run.leaseToken! }, db as never);
-
-  assert.equal(db.tables.price_radar_district_queue.length, 0, "missing more than just the district must never enter the district-only queue");
-  assert.equal(db.tables.price_radar_verification_queue.length, 1, "the general queue handles multiple uncertain facts for a credible offer");
-  assert.deepEqual(result.qualificationRejections, {}, "a saved review candidate is not counted as discarded");
+  assert.equal(result.qualifiedCount,0);
+  assert.equal(db.tables.price_radar_listings.length,0);
+  assert.equal(db.tables.price_radar_district_queue.length,0);
+  assert.equal(db.tables.price_radar_verification_queue.length,0);
+  assert.equal(Object.values(result.qualificationRejections).flatMap(counts=>Object.values(counts)).reduce((sum,n)=>sum+n,0),1,"one automatic rejection is recorded instead of manual work");
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).verificationQueuedCount??0,0);
+  assert.equal((db.tables.price_radar_runs[0].checkpoint as Row).districtQueuedCount??0,0);
 });
 
 test("a portal that times out on every portion is closed after a bounded number of tries so the run and other portals are never blocked (OLX dropped from the selection)", async () => {
@@ -1644,4 +1622,22 @@ test("every unfinished portal gets processing time even when all of them have mu
   for (const source of sources) assert.ok((calls[source] ?? 0) >= 1, `${source} got a turn in the very first portion`);
   const progress = (db.tables.price_radar_runs[0]!.checkpoint as { progress: { metrics: { sources: Record<string, { fetched: number }> } } }).progress;
   for (const source of sources) assert.ok(progress.metrics.sources[source]!.fetched >= 1, `${source} made progress`);
+});
+
+test("automatic Radar hides a previously accepted snapshot after lost proof and restores it only after fresh confirmation", async()=>{
+  const db=fakeDb();
+  const good=qualifyingListing("automatic-proof-cycle","domiporta");
+  const uncertain={...good,description:"Dane wymagają sprawdzenia.",rawPayload:{detailVerified:false}};
+  const filters={districts:["Bałuty"],market:"both" as const,areaMin:null,areaMax:null,rooms:[],sources:[],minPricePerSqm:null};
+  for(const [input,expected] of [[good,1],[uncertain,0],[good,1]] as const){
+    fakeSourceImpl=async()=>({listings:[input],warnings:[],fetched:1});
+    const claim=await claimOrCreateRadarRun(ownerId,["domiporta"],db as never);
+    if(claim.kind!=="claimed")throw new Error("expected a new owned run");
+    await runRadarCollectionPortion({runId:claim.run.id,ownerId,leaseToken:claim.run.leaseToken!},db as never);
+    const read=await getRadarResults(ownerId,filters,db as never);
+    assert.equal(read.listings.length,expected);
+    assert.equal(db.tables.price_radar_verification_queue.length,0);
+    assert.equal(db.tables.price_radar_district_queue.length,0);
+  }
+  assert.equal(db.tables.price_radar_listings.length,1,"re-verification updates one retained source identity");
 });

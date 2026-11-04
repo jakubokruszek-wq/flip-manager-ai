@@ -1,4 +1,5 @@
 import "server-only";
+import { hasAcceptedRadarStandard } from "../accepted-standard";
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { dedupeByListingIdentity } from "@/features/listing-identity";
@@ -48,7 +49,7 @@ export async function getRadarResults(ownerId: string, filters: RadarFilters, su
 
   // OLX left Radar: archived OLX rows stay in the table (history) but are no
   // longer current listings, samples or part of any average.
-  const allListings = rows.map(toRadarListing).filter((listing): listing is RadarListing => listing !== null && listing.source !== "olx");
+  const allListings = rows.map(toRadarListing).filter((listing): listing is RadarListing => listing !== null && listing.source !== "olx" && hasAcceptedRadarStandard(listing));
   // Within one portal: the same proven identity resolution Finder/Watcher
   // use (confirmed externalListingId/URL). Its keys are source-prefixed, so
   // this alone never merges across different portals.

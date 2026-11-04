@@ -92,7 +92,7 @@ function freshListingsPayload() {
       makeListing({ listingId: REJECTED_ID, title: "Kawalerka, Bałuty", workflowStatus: "rejected", price: 280_000, area: 32, rooms: 1, pricePerM2: 8750, pricePerSqm: 8750 }),
       makeListing({ listingId: RESTORABLE_ID, title: "Dom, Górna", lifecycleStatus: "ARCHIVED", price: 620_000, area: 110, rooms: 4, pricePerM2: 5636, pricePerSqm: 5636 }),
       makeListing({ listingId: FACEBOOK_LINK_ID, title: "Mieszkanie, Śródmieście", originalUrl: "https://www.facebook.com/groups/example/permalink/1749121366325600/", price: 390_000, area: 48, rooms: 2, pricePerM2: 8125, pricePerSqm: 8125 }),
-      makeListing({ listingId: MAX_ACTIONS_ID, title: "Kamienica, Polesie", workflowStatus: "rejected", lifecycleStatus: "ARCHIVED", readAt: now, isNew: false, originalUrl: "https://www.facebook.com/groups/example/permalink/1749121366325601/", price: 510_000, area: 88, rooms: 3, pricePerM2: 5795, pricePerSqm: 5795 }),
+      makeListing({ listingId: MAX_ACTIONS_ID, title: "Kamienica, Polesie", workflowStatus: "rejected", lifecycleStatus: "ARCHIVED", readAt: now, isNew: false, originalUrl: "https://www.facebook.com/groups/example/permalink/1749121366325601/", price: 510_000, area: 88, rooms: 3, pricePerM2: null, pricePerSqm: null }),
     ],
   };
 }
@@ -729,6 +729,10 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     controls=await openFilters();
     assert.equal(await controls.getByLabel("Cena minimalna (PLN)",{exact:true}).inputValue(),"");
     assert.equal(await controls.getByRole("checkbox",{name:"2",exact:true}).isChecked(),false);
+    await controls.getByLabel("Maks. cena za m² (PLN)",{exact:true}).fill("7000");
+    await page.locator(`#facebook-inbox-${NORMAL_ID}`).waitFor({state:"hidden"});
+    await page.locator(`#facebook-inbox-${MAX_ACTIONS_ID}`).waitFor({state:"visible"});
+    assert.equal(await page.locator(`#facebook-inbox-${FACEBOOK_LINK_ID}`).count(),0,"a known price above the limit is excluded while the missing value remains");
     assertNoUnexpectedNoise(handle);
   });
 

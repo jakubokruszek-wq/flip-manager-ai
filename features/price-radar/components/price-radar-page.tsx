@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { hasAcceptedRadarStandard } from "../accepted-standard";
 import { apiFetch } from "@/lib/api-fetch";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
 import { MetricCard } from "@/components/ui/metric-card";
-import { DEFAULT_RADAR_DISTRICTS, MIN_RADAR_SAMPLE_SIZE, type RadarDistrictQueueItem, type RadarListing, type RadarMarketFilter, type RadarQualificationRejections, type RadarSource, type RadarStatGroup, type RadarRunStatus, type RadarQualityCategory, type RadarProgressDiagnostics, type RadarVerificationDecision, type RadarVerificationQueueItem } from "@/features/price-radar/types";
+import { DEFAULT_RADAR_DISTRICTS, MIN_RADAR_SAMPLE_SIZE, type RadarListing, type RadarMarketFilter, type RadarQualificationRejections, type RadarSource, type RadarStatGroup, type RadarRunStatus, type RadarQualityCategory, type RadarProgressDiagnostics } from "@/features/price-radar/types";
 import { isRadarDailyScanDue, nextRadarDailyScanAt } from "@/features/price-radar/server/radar-scheduler";
 import { radarRunActivity, radarVerificationBacklogProgress } from "@/features/price-radar/run-presentation";
 import { describeRadarRequestError, RadarHttpError, radarConnectionIssue, radarLeaseExpiredForBrowserResume, radarRunPollDelayMs } from "@/features/price-radar/run-connection";
@@ -17,8 +18,6 @@ type ResultsResponse = {
   activeSources: RadarSource[];
   disabledSourceNote: string;
 };
-type DistrictQueueResponse = { available: boolean; pending: RadarDistrictQueueItem[]; assigned: RadarDistrictQueueItem[]; rejected: RadarDistrictQueueItem[] };
-type VerificationQueueResponse = { available: boolean; pending: RadarVerificationQueueItem[]; confirmed: RadarVerificationQueueItem[]; rejected: RadarVerificationQueueItem[] };
 type RunStatus = { id: string; status: RadarRunStatus; startedAt: string; finishedAt: string | null; leaseUntil: string | null; stopRequestedAt: string | null; userTerminatedAt: string | null; lastProgressAt?: string | null; olxJobStatus?: "queued" | "running" | "completed" | "failed" | "missing" | "unavailable"; olxJobLeaseUntil?: string | null; scannedCount: number; qualifiedCount: number; sourceStatuses: Record<string, string>; sourceErrors: Record<string, string>; sourceWarnings?: Record<string, string[]>; sourceRejectionCounts?: Record<string, Record<string, number>>; qualificationRejections?: RadarQualificationRejections; errorMessage: string | null; checkpoint?: { sourceQueue?: string[]; currentSourceIndex?: number; rejectedCount?: number; verificationQueuedCount?: number; districtQueuedCount?: number; lastProgressAt?: string; progress?: RadarProgressDiagnostics } };
 type SettingsResponse = { filters: { districts: string[]; market: RadarMarketFilter; areaMin: number | null; areaMax: number | null; rooms: number[]; sources: RadarSource[]; minPricePerSqm: number | null; automaticScanEnabled: boolean; automaticScanTime: string }; activeSources: RadarSource[]; disabledSourceNote: string };
 
@@ -71,13 +70,7 @@ export function PriceRadarPage() {
   const stopFinalizeInFlight = useRef(false);
   const lastAutoResumeAttempt = useRef<{ key: string; at: number } | null>(null);
   const refreshRunNow = useRef<(() => void) | null>(null);
-  const [districtQueue, setDistrictQueue] = useState<DistrictQueueResponse | null>(null);
-  const [districtChoices, setDistrictChoices] = useState<Record<string, string>>({});
-  const [districtQueuePending, setDistrictQueuePending] = useState<string | null>(null);
-  const [districtQueueError, setDistrictQueueError] = useState<string | null>(null);
-  const [verificationQueue, setVerificationQueue] = useState<VerificationQueueResponse | null>(null);
-  const [verificationQueueError, setVerificationQueueError] = useState<string | null>(null);
-  const [verificationPending, setVerificationPending] = useState<string | null>(null);
+
 
   useEffect(() => {
     let cancelled = false;
@@ -164,117 +157,7 @@ export function PriceRadarPage() {
     return () => window.clearTimeout(timeoutId);
   }, [load]);
 
-  const loadDistrictQueue = useCallback(async () => {
-    try {
-      const response = await apiFetch("/api/price-radar/district-queue");
-      const payload = (await response.json()) as DistrictQueueResponse | { message?: string };
-      if (!response.ok || !("pending" in payload)) {
-        throw new Error("message" in payload && payload.message ? payload.message : "Nie udało się pobrać kolejki przypisania dzielnicy.");
-      }
-      setDistrictQueue(payload);
-      setDistrictQueueError(null);
-      // Prefill the dropdown with a suggestion the operator has not yet
-      // overridden -- an explicit prior choice in state always wins, and
-      // this never auto-assigns: "Dodaj do porównań" still requires the
-      // operator's own click.
-      const suggested = Object.fromEntries(payload.pending.filter((item) => item.suggestedDistrict).map((item) => [item.id, item.suggestedDistrict as string]));
-      setDistrictChoices((current) => ({ ...suggested, ...current }));
-    } catch (reason) {
-      setDistrictQueueError(describeRadarRequestError(reason, "Nie udało się pobrać kolejki przypisania dzielnicy."));
-    }
-  }, []);
 
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      void loadDistrictQueue();
-    }, 0);
-    return () => window.clearTimeout(timeoutId);
-  }, [loadDistrictQueue]);
-
-  const assignDistrict = async (queueId: string) => {
-    const district = districtChoices[queueId];
-    if (!district) return;
-    setDistrictQueuePending(queueId);
-    try {
-      const response = await apiFetch("/api/price-radar/district-queue/assign", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ queueId, district }),
-      });
-      const payload = await response.json() as { message?: string };
-      if (!response.ok) throw new Error(payload.message || "Nie udało się dodać oferty do porównań.");
-      setDistrictQueueError(null);
-      // A confirmed save moves the offer into price_radar_listings --
-      // both the queue and the A/B sample/stats must reflect this right away.
-      await Promise.all([loadDistrictQueue(), load()]);
-    } catch (reason) {
-      setDistrictQueueError(describeRadarRequestError(reason, "Nie udało się dodać oferty do porównań."));
-    } finally {
-      setDistrictQueuePending(null);
-    }
-  };
-
-  const setDistrictQueueRejection = async (queueId: string, rejected: boolean) => {
-    setDistrictQueuePending(queueId);
-    try {
-      const response = await apiFetch("/api/price-radar/district-queue/reject", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ queueId, rejected }),
-      });
-      const payload = await response.json() as { message?: string };
-      if (!response.ok) throw new Error(payload.message || "Nie udało się zaktualizować decyzji.");
-      setDistrictQueueError(null);
-      await loadDistrictQueue();
-    } catch (reason) {
-      setDistrictQueueError(describeRadarRequestError(reason, "Nie udało się zaktualizować decyzji."));
-    } finally {
-      setDistrictQueuePending(null);
-    }
-  };
-
-  const loadVerificationQueue = useCallback(async () => {
-    try {
-      const response = await apiFetch("/api/price-radar/verification-queue");
-      const payload = await response.json() as VerificationQueueResponse | { message?: string };
-      if (!response.ok || !("pending" in payload)) throw new Error("message" in payload && payload.message ? payload.message : "Nie udało się pobrać kolejki weryfikacji.");
-      setVerificationQueue(payload);
-      setVerificationQueueError(null);
-    } catch (reason) {
-      setVerificationQueueError(describeRadarRequestError(reason, "Nie udało się pobrać kolejki weryfikacji."));
-    }
-  }, []);
-
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => { void loadVerificationQueue(); }, 0);
-    return () => window.clearTimeout(timeoutId);
-  }, [loadVerificationQueue]);
-
-  const resolveVerification = async (queueId: string, decision: RadarVerificationDecision) => {
-    setVerificationPending(queueId);
-    try {
-      const response = await apiFetch("/api/price-radar/verification-queue/resolve", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ queueId, decision }),
-      });
-      const payload = await response.json() as { message?: string; reason?: string };
-      if (!response.ok) throw new Error(payload.message || "Oferta nie przeszła ponownej kwalifikacji.");
-      setVerificationQueueError(null);
-      await Promise.all([loadVerificationQueue(), load()]);
-    } catch (reason) {
-      setVerificationQueueError(describeRadarRequestError(reason, "Nie udało się zatwierdzić oferty."));
-    } finally { setVerificationPending(null); }
-  };
-
-  const setVerificationRejection = async (queueId: string, rejected: boolean) => {
-    setVerificationPending(queueId);
-    try {
-      const response = await apiFetch("/api/price-radar/verification-queue/reject", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ queueId, rejected }),
-      });
-      const payload = await response.json() as { message?: string };
-      if (!response.ok) throw new Error(payload.message || "Nie udało się zapisać decyzji.");
-      setVerificationQueueError(null);
-      await loadVerificationQueue();
-    } catch (reason) {
-      setVerificationQueueError(describeRadarRequestError(reason, "Nie udało się zapisać decyzji."));
-    } finally { setVerificationPending(null); }
-  };
 
   useEffect(() => {
     if (!settingsLoaded) return;
@@ -559,16 +442,7 @@ export function PriceRadarPage() {
   // already applies before averaging. A listing kept visible only pending
   // manual verification is a review candidate, never a qualified comparison,
   // so it gets its own section/count instead of inflating this one.
-  const sampleListings = useMemo(() => (data?.listings ?? []).filter((listing) => (listing.verificationIssues?.length ?? 0) === 0), [data]);
-  const reviewListings = useMemo(() => (data?.listings ?? []).filter((listing) => (listing.verificationIssues?.length ?? 0) > 0), [data]);
-  const [standardQueueFilter,setStandardQueueFilter]=useState("promising");
-  const pendingVerification = useMemo(() => {
-    const qualifiedKeys = new Set(sampleListings.map((listing) => `${listing.source}:${listing.externalListingId}`));
-    return (verificationQueue?.pending ?? []).filter((item) => !qualifiedKeys.has(`${item.source}:${item.externalListingId}`));
-  }, [verificationQueue, sampleListings]);
-  const queueAssessmentCounts=useMemo(()=>pendingVerification.reduce<Record<string,number>>((counts,item)=>{const assessment=item.snapshot.automaticStandardAssessment;if(assessment){counts.assessed+=1;counts[assessment.category]=(counts[assessment.category]??0)+1;}return counts;},{assessed:0}),[pendingVerification]);
-  const effectiveStandardQueueFilter=queueAssessmentCounts.assessed>0?standardQueueFilter:"all";
-  const visiblePendingVerification=useMemo(()=>pendingVerification.filter(item=>effectiveStandardQueueFilter==="all"||(effectiveStandardQueueFilter==="promising"?item.snapshot.automaticStandardAssessment?.priority===3:item.snapshot.automaticStandardAssessment?.category===effectiveStandardQueueFilter)).sort((a,b)=>(b.snapshot.automaticStandardAssessment?.priority??1)-(a.snapshot.automaticStandardAssessment?.priority??1)),[pendingVerification,effectiveStandardQueueFilter]);
+  const sampleListings = useMemo(() => (data?.listings ?? []).filter((listing) => hasAcceptedRadarStandard(listing)), [data]);
   const visibleSources = activeSourceIds.length ? SOURCE_OPTIONS.filter((option) => activeSourceIds.includes(option.value)) : [];
 
   return (
@@ -714,7 +588,6 @@ export function PriceRadarPage() {
           <AutomationMetric label="Zakwalifikowano" value={run ? String(run.qualifiedCount) : "—"} />
           <AutomationMetric label="Odrzucono" value={typeof run?.checkpoint?.rejectedCount === "number" ? String(run.checkpoint.rejectedCount) : "—"} />
           {backlogProgress ? <AutomationMetric label="Automatyczna weryfikacja zapisanej kolejki" value={`${backlogProgress.checked}/${backlogProgress.total}`} /> : null}
-          <AutomationMetric label="Skierowano do weryfikacji" value={run && typeof run.checkpoint?.verificationQueuedCount === "number" && typeof run.checkpoint?.districtQueuedCount === "number" ? String(run.checkpoint.verificationQueuedCount + run.checkpoint.districtQueuedCount) : "—"} />
         </div>
         <p aria-live="polite" className="text-xs text-muted-foreground">
           {settingsSaving ? "Zapisywanie ustawień…" : settingsDirty ? "Zmiany oczekują na zapis." : "Godzina jest zapisana w ustawieniach Radaru. Po każdej porcji serwer sam kontynuuje ten sam checkpoint, więc zamknięcie aplikacji nie przerywa skanu portali HTTP (OLX obsługuje osobny worker)."}
@@ -792,84 +665,7 @@ export function PriceRadarPage() {
         ))}
       </section>
 
-      {districtQueueError ? (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{districtQueueError}</div>
-      ) : null}
-
-      {districtQueue && !districtQueue.available ? (
-        <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
-          Kolejka przypisania dzielnicy jest niedostępna. Wymaga zastosowania migracji <code>20261011154631_add_radar_district_queue.sql</code>; kandydaci nie są obecnie zapisywani do kolejki.
-        </div>
-      ) : null}
-
-      {districtQueue && (districtQueue.pending.length > 0 || districtQueue.rejected.length > 0) ? (
-        <section aria-label="Do przypisania dzielnicy" className="space-y-3">
-          <h2 className="text-lg font-semibold">Do przypisania dzielnicy ({districtQueue.pending.length})</h2>
-          <p className="text-xs text-muted-foreground">
-            Mieszkania spełniające pozostałe kryteria Radaru (cena, metraż, pokoje, rynek, blok/apartamentowiec, standard A/B), którym brakuje wyłącznie potwierdzonej dzielnicy.
-          </p>
-          <div className="grid gap-4 lg:grid-cols-2">
-            {districtQueue.pending.map((item) => (
-              <DistrictQueueRow
-                key={item.id}
-                item={item}
-                chosenDistrict={districtChoices[item.id] ?? ""}
-                onChooseDistrict={(district) => setDistrictChoices((current) => ({ ...current, [item.id]: district }))}
-                onAssign={() => void assignDistrict(item.id)}
-                onReject={() => void setDistrictQueueRejection(item.id, true)}
-                pending={districtQueuePending === item.id}
-              />
-            ))}
-          </div>
-
-          {districtQueue.rejected.length > 0 ? (
-            <div className="mt-6">
-              <h3 className="text-sm font-semibold text-muted-foreground">Odrzucone z kolejki dzielnic ({districtQueue.rejected.length})</h3>
-              <div className="mt-3 grid gap-4 lg:grid-cols-2">
-                {districtQueue.rejected.map((item) => (
-                  <DistrictQueueRow
-                    key={item.id}
-                    item={item}
-                    rejected
-                    chosenDistrict={districtChoices[item.id] ?? ""}
-                    onChooseDistrict={(district) => setDistrictChoices((current) => ({ ...current, [item.id]: district }))}
-                    onAssign={() => void assignDistrict(item.id)}
-                    onReject={() => void setDistrictQueueRejection(item.id, false)}
-                    pending={districtQueuePending === item.id}
-                  />
-                ))}
-              </div>
-            </div>
-          ) : null}
-        </section>
-      ) : null}
-
-      {verificationQueueError ? (
-        <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{verificationQueueError}</div>
-      ) : null}
-      {verificationQueue && !verificationQueue.available ? (
-        <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
-          Kolejka weryfikacji danych i standardu wymaga lokalnego draftu <code>20261012130000_add_price_radar_verification_queue.sql</code>. Nie została zastosowana w Production.
-        </div>
-      ) : null}
-      {verificationQueue?.available && pendingVerification.length > 0 ? (
-        <section aria-label="Do weryfikacji danych i standardu" className="space-y-3">
-          <h2 className="text-lg font-semibold">Do weryfikacji danych i standardu ({pendingVerification.length})</h2>
-          <p className="text-sm text-muted-foreground">Radar podczas zbierania automatycznie ponownie sprawdza zapisane ogłoszenia z obsługiwanych portali i dodaje potwierdzone oferty do porównań. Tutaj pozostają przypadki niejednoznaczne; nie należą jeszcze do próby statystycznej.</p>
-          <div aria-label="Automatyczna analiza zapisanych opisów" className="space-y-3 rounded-xl border p-4">
-            <h3 className="font-semibold">Automatyczna ocena standardu: {queueAssessmentCounts.assessed}/{pendingVerification.length} opisów</h3>
-            <p className="text-sm text-muted-foreground">Ocena opisu nie potwierdza jeszcze całej oferty. Automat najpierw ponownie sprawdza kandydatów po świeżym remoncie i gotowych w wysokim standardzie. Brak danych oraz planowany remont nie trafiają do porównań jako zakończone prace.</p>
-            <div className="flex flex-wrap gap-2">{[["promising","Kandydaci do ponownego odczytu",(queueAssessmentCounts.fresh_renovation??0)+(queueAssessmentCounts.ready_high_standard??0)],["all","Wszystkie",pendingVerification.length],["fresh_renovation","Świeży pełny remont",queueAssessmentCounts.fresh_renovation??0],["ready_high_standard","Gotowe — wysoki standard",queueAssessmentCounts.ready_high_standard??0],["renovated_unknown_recency","Remont — brak świeżości",queueAssessmentCounts.renovated_unknown_recency??0],["needs_work","Prace planowane / wymagane",queueAssessmentCounts.needs_work??0],["insufficient","Za mało danych",queueAssessmentCounts.insufficient??0]].map(([value,label,count])=><button key={value} type="button" aria-pressed={effectiveStandardQueueFilter===value} className="rounded-lg border px-3 py-2 text-sm" onClick={()=>setStandardQueueFilter(String(value))}>{label} ({count})</button>)}</div>
-            <Button variant="outline" disabled={runStarting||runStopping||runTerminating||isRunActuallyActive(run)||!settingsLoaded} onClick={()=>void startCollection()}>Uruchom ponowną weryfikację</Button>
-          </div>
-          <div className="grid gap-4 lg:grid-cols-2">
-            {visiblePendingVerification.map((item) => (
-              <VerificationQueueRow key={item.id} item={item} pending={verificationPending === item.id}
-                onResolve={(decision) => void resolveVerification(item.id, decision)} onReject={() => void setVerificationRejection(item.id, true)} />
-            ))}
-          </div>
-        </section>
-      ) : null}
+      <p className="text-sm text-muted-foreground">Radar działa automatycznie. Pokazujemy wyłącznie oferty z potwierdzonym standardem i wymaganymi danymi; niepewne przypadki są odrzucane z wyników.</p>
 
       <section aria-label="Oferty w próbie" className="space-y-3">
         <h2 className="text-lg font-semibold">Oferty w próbie ({sampleListings.length})</h2>
@@ -879,27 +675,7 @@ export function PriceRadarPage() {
           ))}
         </div>
 
-        {reviewListings.length > 0 ? (
-          <div className="mt-6">
-            <h3 className="text-sm font-semibold text-muted-foreground">Do weryfikacji · poza próbą A/B ({reviewListings.length})</h3>
-            <div className="mt-3 grid gap-4 lg:grid-cols-2">
-              {reviewListings.map((listing) => (
-                <ListingRow key={listing.id} listing={listing} onExclude={() => void setExclusion(listing.id, true)} pending={pendingExclusion === listing.id} />
-              ))}
-            </div>
-          </div>
-        ) : null}
 
-        {data && data.excludedListings.length > 0 ? (
-          <div className="mt-6">
-            <h3 className="text-sm font-semibold text-muted-foreground">Wykluczone z porównań ({data.excludedListings.length})</h3>
-            <div className="mt-3 grid gap-4 lg:grid-cols-2">
-              {data.excludedListings.map((listing) => (
-                <ListingRow key={listing.id} listing={listing} excluded onExclude={() => void setExclusion(listing.id, false)} pending={pendingExclusion === listing.id} />
-              ))}
-            </div>
-          </div>
-        ) : null}
       </section>
     </div>
   );
@@ -933,135 +709,6 @@ function ListingRow({ listing, excluded, onExclude, pending }: { listing: RadarL
         <Button size="sm" variant="outline" disabled={pending} onClick={onExclude}>
           {excluded ? "Przywróć do porównań" : "Wyklucz z porównań"}
         </Button>
-      </div>
-    </article>
-  );
-}
-
-function DistrictQueueRow({ item, rejected, chosenDistrict, onChooseDistrict, onAssign, onReject, pending }: {
-  item: RadarDistrictQueueItem; rejected?: boolean; chosenDistrict: string; onChooseDistrict: (district: string) => void;
-  onAssign: () => void; onReject: () => void; pending: boolean;
-}) {
-  const selectId = `district-queue-select-${item.id}`;
-  return (
-    <article className={`min-w-0 overflow-hidden rounded-xl border bg-card p-4 ${rejected ? "opacity-60" : ""}`}>
-      <div className="flex items-start justify-between gap-2">
-        <h3 className="min-w-0 break-words font-semibold [overflow-wrap:anywhere]">{item.title ?? "Oferta bez tytułu"}</h3>
-        <span className="max-w-32 break-words rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">{sourceLabel(item.source)}</span>
-      </div>
-      <p className="mt-1 break-words text-sm text-muted-foreground">
-        {item.city} · {item.marketType === "primary" ? "Pierwotny" : "Wtórny"} · {item.buildingType === "blok" ? "Blok" : "Apartamentowiec"} · {qualityCategoryLabel(item.qualityCategory, item.marketType)}
-      </p>
-      <p className="mt-1 break-words text-xs font-medium text-amber-700 dark:text-amber-300">Dzielnica wymaga przypisania</p>
-      {item.suggestedDistrict ? (
-        <p className="mt-1 break-words text-xs text-muted-foreground">
-          Podpowiedź ({item.suggestionSource === "gis" ? "mapa Łodzi" : "AI"}): <span className="font-medium text-foreground">{item.suggestedDistrict}</span>
-          {item.suggestionEvidence ? <> — „{item.suggestionEvidence}”</> : null}. Wymaga potwierdzenia operatora.
-        </p>
-      ) : null}
-      {item.description ? <p className="mt-1 line-clamp-2 break-words text-xs text-muted-foreground">{item.description}</p> : null}
-      <p className="type-financial-standard mt-3 text-sm font-medium tabular-nums">
-        {formatCurrency(item.price)} · {item.area} m² · {formatCurrency(item.pricePerSqm)}/m²{item.rooms ? ` · ${item.rooms} pok.` : ""}
-      </p>
-      <dl className="mt-3 grid gap-1 text-xs text-muted-foreground">
-        <DateRow label="Opublikowano" value={item.publishedAt} />
-        <DateRow label="Zmiana ogłoszenia" value={item.sourceUpdatedAt} />
-        <DateRow label="Pobrano" value={item.collectedAt} />
-      </dl>
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Button nativeButton={false} render={<a href={item.originalUrl} target="_blank" rel="noopener noreferrer" />} size="sm" variant="outline">
-          Otwórz ogłoszenie
-        </Button>
-        {!rejected ? (
-          <>
-            <label htmlFor={selectId} className="sr-only">Dzielnica</label>
-            <select
-              id={selectId}
-              className="h-9 rounded-lg border border-input bg-background px-2 text-sm"
-              value={chosenDistrict}
-              disabled={pending}
-              onChange={(event) => onChooseDistrict(event.target.value)}
-            >
-              <option value="">Wybierz dzielnicę</option>
-              {DEFAULT_RADAR_DISTRICTS.map((district) => (
-                <option key={district} value={district}>{district}</option>
-              ))}
-            </select>
-            <Button size="sm" disabled={pending || !chosenDistrict} onClick={onAssign}>
-              Dodaj do porównań
-            </Button>
-            <Button size="sm" variant="outline" disabled={pending} onClick={onReject}>
-              Odrzuć
-            </Button>
-          </>
-        ) : (
-          <Button size="sm" variant="outline" disabled={pending} onClick={onReject}>
-            Przywróć do kolejki
-          </Button>
-        )}
-      </div>
-    </article>
-  );
-}
-
-// Pokazuje wyłącznie pola operatora: nazwę, link, edytowalne dane i
-// potwierdzenie zgodności. Techniczne dowody źródłowe, powód skierowania i
-// sugestia AI pozostają w snapshocie (backend, testy), ale nie są tu
-// renderowane -- operator ocenia ofertę z samego ogłoszenia, nie z
-// diagnostyki parsera.
-function VerificationQueueRow({ item, pending, onResolve, onReject }: {
-  item: RadarVerificationQueueItem;
-  pending: boolean;
-  onResolve: (decision: RadarVerificationDecision) => void;
-  onReject: () => void;
-}) {
-  const [price, setPrice] = useState(item.snapshot.confirmedFields.includes("total_price") && item.snapshot.price ? String(item.snapshot.price) : "");
-  const [area, setArea] = useState(item.snapshot.confirmedFields.includes("area") && item.snapshot.area ? String(item.snapshot.area) : "");
-  const [rooms, setRooms] = useState(item.snapshot.confirmedFields.includes("rooms") && item.snapshot.rooms ? String(item.snapshot.rooms) : "");
-  const [city, setCity] = useState(item.snapshot.confirmedFields.includes("city_lodz") && item.snapshot.city === "Łódź" ? "Łódź" : "");
-  const [district, setDistrict] = useState(item.snapshot.confirmedFields.includes("district") ? item.snapshot.district ?? "" : item.snapshot.suggestedDistrict ?? "");
-  const [buildingType, setBuildingType] = useState(item.snapshot.confirmedFields.includes("building_type") && (item.snapshot.buildingType === "blok" || item.snapshot.buildingType === "apartamentowiec") ? item.snapshot.buildingType : "");
-  const [marketType, setMarketType] = useState(item.snapshot.confirmedFields.includes("market_type") && (item.snapshot.marketType === "primary" || item.snapshot.marketType === "secondary") ? item.snapshot.marketType : "");
-  const [qualityCategory, setQualityCategory] = useState(item.snapshot.confirmedFields.includes("standard") ? item.snapshot.qualityCategory ?? "" : "");
-  const [apartmentSaleConfirmed, setApartmentSaleConfirmed] = useState(false);
-  const parsedPrice = Number(price);
-  const parsedArea = Number(area);
-  const pricePerSqm = Number.isFinite(parsedPrice) && parsedPrice > 0 && Number.isFinite(parsedArea) && parsedArea > 0 ? parsedPrice / parsedArea : null;
-  const canSubmit = apartmentSaleConfirmed && pricePerSqm !== null && Number.isInteger(Number(rooms)) && Number(rooms) > 0
-    && city.trim().toLocaleLowerCase("pl-PL") === "łódź"
-    && (DEFAULT_RADAR_DISTRICTS as readonly string[]).includes(district)
-    && (buildingType === "blok" || buildingType === "apartamentowiec")
-    && (marketType === "primary" || marketType === "secondary")
-    && (qualityCategory === "fresh_renovation" || qualityCategory === "ready_high_standard");
-
-  return (
-    <article className="min-w-0 overflow-hidden rounded-xl border bg-card p-4">
-      <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
-        <h3 className="min-w-0 break-words font-semibold [overflow-wrap:anywhere]">{item.title ?? "Oferta bez tytułu"}</h3>
-        <span className="rounded-full bg-muted px-2 py-0.5 text-xs">{sourceLabel(item.source)}</span>
-      </div>
-      {item.snapshot.automaticStandardAssessment?<div className="mt-3 rounded-lg bg-muted/50 p-3 text-sm"><p className="font-medium">{item.snapshot.automaticStandardAssessment.label}</p><p className="mt-1 text-xs text-muted-foreground">{item.snapshot.automaticStandardAssessment.reason}</p></div>:null}
-      <a className="mt-2 block break-all text-xs text-primary underline" href={item.originalUrl} target="_blank" rel="noopener noreferrer">Otwórz konkretne ogłoszenie</a>
-      <div className="mt-4 grid min-w-0 gap-3 sm:grid-cols-2">
-        <label className="grid gap-1 text-xs">Cena całkowita, zł<input className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" type="number" min="1" step="1" value={price} disabled={pending} onChange={(event) => setPrice(event.target.value)} /></label>
-        <label className="grid gap-1 text-xs">Powierzchnia, m²<input className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" type="number" min="1" step="0.01" value={area} disabled={pending} onChange={(event) => setArea(event.target.value)} /></label>
-        <div className="grid gap-1 text-xs">
-          <span id={`${item.id}-price-per-sqm-label`}>Cena za m²</span>
-          <div aria-labelledby={`${item.id}-price-per-sqm-label`} className="flex h-9 min-w-0 items-center rounded-lg border border-input bg-muted/40 px-2 text-sm tabular-nums">
-            {pricePerSqm === null ? "Uzupełnij poprawną cenę i metraż" : `${formatCurrency(pricePerSqm)}/m²`}
-          </div>
-        </div>
-        <label className="grid gap-1 text-xs">Pokoje<input className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" type="number" min="1" max="20" step="1" value={rooms} disabled={pending} onChange={(event) => setRooms(event.target.value)} /></label>
-        <label className="grid gap-1 text-xs">Miasto — potwierdź z ogłoszenia<input className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" value={city} disabled={pending} onChange={(event) => setCity(event.target.value)} /></label>
-        <label className="grid gap-1 text-xs">Dzielnica<select className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" value={district} disabled={pending} onChange={(event) => setDistrict(event.target.value)}><option value="">Wybierz</option>{DEFAULT_RADAR_DISTRICTS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-        <label className="grid gap-1 text-xs">Typ budynku<select className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" value={buildingType} disabled={pending} onChange={(event) => setBuildingType(event.target.value)}><option value="">Wybierz</option><option value="blok">Blok</option><option value="apartamentowiec">Apartamentowiec</option></select></label>
-        <label className="grid gap-1 text-xs">Rynek<select className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" value={marketType} disabled={pending} onChange={(event) => setMarketType(event.target.value)}><option value="">Wybierz</option><option value="secondary">Wtórny</option><option value="primary">Pierwotny</option></select></label>
-        <label className="grid gap-1 text-xs">Standard<select className="h-9 min-w-0 rounded-lg border border-input bg-background px-2 text-sm" value={qualityCategory} disabled={pending} onChange={(event) => setQualityCategory(event.target.value)}><option value="">Wybierz</option><option value="fresh_renovation">A · świeży pełny remont</option><option value="ready_high_standard">B · gotowe, wysoki standard</option></select></label>
-        <label className="flex min-w-0 items-start gap-2 text-xs sm:col-span-2"><input type="checkbox" checked={apartmentSaleConfirmed} disabled={pending} onChange={(event) => setApartmentSaleConfirmed(event.target.checked)} /><span>Potwierdzam z ogłoszenia, że to konkretne mieszkanie na sprzedaż, a wybrane wartości i standard dotyczą tego lokalu.</span></label>
-        <div className="flex flex-wrap gap-2 sm:col-span-2">
-          <Button size="sm" disabled={pending || !canSubmit} onClick={() => onResolve({ apartmentSaleConfirmed: true, price: parsedPrice, area: parsedArea, rooms: Number(rooms), city: "Łódź", district: district as RadarVerificationDecision["district"], buildingType: buildingType as RadarVerificationDecision["buildingType"], marketType: marketType as RadarVerificationDecision["marketType"], qualityCategory: qualityCategory as RadarQualityCategory })}>Potwierdź i dodaj do porównań</Button>
-          <Button size="sm" variant="outline" disabled={pending} onClick={onReject}>Odrzuć</Button>
-        </div>
       </div>
     </article>
   );
@@ -1202,7 +849,7 @@ function radarSourceLabel(source: string): string {
 function qualificationRejectionLabel(reason: string): string {
   const labels: Record<string, string> = {
     detail_not_confirmed: "brak potwierdzonych danych szczegółowych",
-    detail_conflict: "sprzeczne dane o tym samym mieszkaniu; oferta wymaga weryfikacji",
+    detail_conflict: "sprzeczne dane o mieszkaniu — odrzucono",
     listing_identity_changed: "portalowe ID wskazuje istotnie zmienione mieszkanie; wymagana weryfikacja",
     price_missing: "brak ceny całkowitej",
     area_missing: "brak metrażu",
