@@ -499,3 +499,41 @@ jobs:
           path: candidate
           if-no-files-found: error
           retention-days: 30
+
+  publish-tested-0574:
+    name: Publish tested Android 0.5.74
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-dynamic-groups'
+    needs: [guard, build, instrumented, verified-apk]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: flip-watcher-gecko-poc-arm64-${{ github.run_number }}
+          path: tested-apk
+      - name: Publish the verified APK without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
+          test -n "$apk_path" && test -f "$apk_path"
+          cp "$apk_path" flip-watcher-0.5.74-arm64.apk
+          unzip -p flip-watcher-0.5.74-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.74")process.exit(1)})'
+          unzip -p flip-watcher-0.5.74-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
+          sha256sum flip-watcher-0.5.74-arm64.apk > SHA256SUMS
+          cat > release-notes.md <<'NOTES'
+          Android 0.5.74 naprawia zatrzymywanie automatu po dodaniu nowej grupy w Managerze.
+
+          - Aktywne grupy są pobierane ze sprawdzanej konfiguracji Managera; nowa grupa nie wymaga kolejnego wpisania ID w APK.
+          - Obsługuje FLIPERZY POLSKA (297408205383031), również w automacie działającym w tle.
+          - Zachowuje właściwe ID grupy i posta przy odczycie oraz oddzielne archiwa.
+          - Nieprawidłowa konfiguracja ma osobny komunikat zamiast ogólnego AUTOMATION_ERROR.
+
+          Serwer zachowuje zgodność z 0.5.73: nowa grupa nie zatrzymuje starszej aplikacji, ale jej skanowanie wymaga 0.5.74.
+          Instaluj jako aktualizację. Nie odinstalowuj poprzedniej wersji: ta sama tożsamość i klucz podpisu zachowują bazę, kolejkę i logowanie.
+
+          Opublikowano wyłącznie APK po testach parsera, kontraktu importu, JVM i emulatora Androida oraz kontroli podpisu. Testy emulatora korzystają z lokalnych stron testowych; dostęp do grup na telefonie zależy od sesji Facebooka.
+          NOTES
+          gh release create gecko-poc-0.5.74 flip-watcher-0.5.74-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.74 — grupy dodawane zdalnie i naprawa startu automatu' --prerelease --notes-file release-notes.md
