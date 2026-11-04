@@ -1,6 +1,7 @@
 package pl.jakubokruszek.flipwatcher.geckopoc
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Automatic local OCR of already exact-bound crops. It cannot replace DOM facts. */
 object BackgroundPosterOcr {
@@ -24,7 +25,7 @@ object BackgroundPosterOcr {
             for(slot in 0 until available(row.postId).coerceIn(0,3)){
                 if(!alive()||now()-start>=45000||count>=20)break
                 count++;progress("OCR")
-                val text=try{read(row.postId,slot)?.take(12000)?.trim()}catch(e:CancellationException){throw e}catch(_:Exception){null}
+                val text=try{withTimeoutOrNull((45000-(now()-start)).coerceIn(1,12000)){read(row.postId,slot)}?.take(12000)?.trim()}catch(e:CancellationException){throw e}catch(_:Exception){null}
                 if(!text.isNullOrBlank()&&texts.sumOf{it.length}+text.length<=24000)texts.add(text)
             }
             if(texts.isNotEmpty()&&alive()){
