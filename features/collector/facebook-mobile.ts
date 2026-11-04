@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 
 export class MobileInputError extends Error {}
+export class MobileQualityError extends Error {}
 export type MobilePost = {
+  postText: string | null;
   groupId: string;
   postId: string;
   permalink: string;
@@ -21,8 +23,13 @@ export function parseMobilePost(raw: string, deviceId: string, key: string): Mob
   check(Buffer.byteLength(raw) <= 512 * 1024);
   let j: unknown;
   try { j = JSON.parse(raw); } catch { throw new MobileInputError("INVALID_JSON"); }
-  check(record(j)); fields(j, ["version", "groupId", "row", "photos"]);
-  check(j.version === 1 && typeof j.groupId === "string" && /^[A-Za-z0-9_.-]{1,100}$/.test(j.groupId));
+  check(record(j));
+  check(j.version === 1 || j.version === 2);
+  fields(j, j.version === 2 ? ["version", "groupId", "row", "photos", "postText"] : ["version", "groupId", "row", "photos"]);
+  const postText = j.version === 2 ? j.postText : null;
+  check(postText === null || typeof postText === "string" && postText.trim().length > 0 && postText.length <= 12000 && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(postText));
+  check(j.version !== 2 || typeof postText === "string");
+  check(typeof j.groupId === "string" && /^[A-Za-z0-9_.-]{1,100}$/.test(j.groupId));
   const r = j.row; check(record(r));
   fields(r, ["postId", "permalink", "layer", "price", "priceSource", "area", "rooms", "district", "neighborhood", "street", "intent", "usable", "photos", "qualification"]);
   check(typeof r.postId === "string" && /^[0-9]{5,30}$/.test(r.postId));
@@ -42,6 +49,8 @@ export function parseMobilePost(raw: string, deviceId: string, key: string): Mob
   check(district === null || ["Bałuty", "Widzew", "Polesie", "Śródmieście", "Górna"].includes(district));
   const location = [district, text(r.neighborhood, 40), text(r.street, 80)].filter(Boolean).join(", ") || null;
   check(Array.isArray(j.photos) && j.photos.length <= 3);
+  if (r.intent !== "SELL_PROPERTY" || r.usable !== true || !["CLASSIFIER", "CANDIDATE", "MISSING_FIELDS"].includes(String(r.qualification))) throw new MobileQualityError("SALE_NOT_CONFIRMED");
+  if (j.photos.length < 1) throw new MobileQualityError("PHOTO_REQUIRED");
   const seen = new Set<number>();
   const photos = j.photos.map(p => {
     check(record(p)); fields(p, ["slot", "jpeg"]);
@@ -64,12 +73,13 @@ export function parseMobilePost(raw: string, deviceId: string, key: string): Mob
     check(valid);
     return { slot: p.slot, bytes, hash: hash(bytes) };
   });
-  return { groupId: j.groupId, postId: r.postId, permalink, price, area, rooms, location, photos };
+  return { postText: postText as string | null, groupId: j.groupId, postId: r.postId, permalink, price, area, rooms, location, photos };
 }
 
 type Dependencies = {
   authenticate(token: string): Promise<{ id: string }>;
   allowed(group: string): Promise<boolean>;
+  removed?(post:MobilePost):Promise<boolean>;
   upload(device: string, post: MobilePost): Promise<string[]>;
   importPost(device: string, key: string, post: MobilePost, images: string[]): Promise<{ listingId: string; status: string }>;
   authStatus(error: unknown): number | null;
@@ -90,10 +100,13 @@ export function createMobilePost(deps: Dependencies) {
       const key = request.headers.get("idempotency-key") ?? "";
       const post = parseMobilePost(raw, device.id, key);
       if (!await deps.allowed(post.groupId)) return Response.json({ code: "SOURCE_DISABLED" }, { status: 409 });
+      if (await deps.removed?.(post)) return Response.json({code:"POST_PREVIOUSLY_REMOVED"},{status:410});
       const images = await deps.upload(device.id, post);
+      if (images.length !== post.photos.length || images.some(url => !url.startsWith("https://"))) throw new Error("PHOTO_PERSISTENCE_INCOMPLETE");
       const result = await deps.importPost(device.id, key, post, images);
       return Response.json({ ...result, idempotencyKey: key }, { status: result.status === "created" ? 201 : 200 });
     } catch (error) {
+      if (error instanceof MobileQualityError) return Response.json({ code: error.message }, { status: 422 });
       const status = deps.authStatus(error) ?? (error instanceof MobileInputError ? 422 : 503);
       return Response.json({ code: status === 422 ? "INVALID_MOBILE_POST" : status === 401 ? "PAIRING_REQUIRED" : "MOBILE_IMPORT_RETRY" }, { status });
     }

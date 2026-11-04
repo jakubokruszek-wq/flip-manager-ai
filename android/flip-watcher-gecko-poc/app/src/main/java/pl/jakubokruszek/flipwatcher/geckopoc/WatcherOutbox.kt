@@ -67,7 +67,9 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
                 if(db.rawQuery("SELECT 1 FROM removed_posts WHERE source=? AND post=?",arrayOf(group.id,row.postId)).use{it.moveToFirst()})continue
                 val firstSaved=db.rawQuery("SELECT MIN(saved_at) FROM outbox WHERE source=? AND post=?",arrayOf(group.id,row.postId)).use{if(it.moveToFirst()&&!it.isNull(0))it.getLong(0)else value.savedAt}
                 val photos=value.photos.filter{it.postId==row.postId&&!it.crop}.sortedBy{it.slot}
-                val body=JSONObject().put("version",1).put("groupId",group.id).put("row",SavedResultCodec.row(row))
+                val text=value.postTexts[row.postId]
+                require(text==null||text.isNotBlank()&&text.length<=12000&&!Regex("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]").containsMatchIn(text))
+                val body=JSONObject().put("version",if(text==null)1 else 2).apply{if(text!=null)put("postText",text)}.put("groupId",group.id).put("row",SavedResultCodec.row(row))
                     .put("photos",JSONArray(photos.map{JSONObject().put("slot",it.slot).put("jpeg",Base64.encodeToString(it.jpeg,Base64.NO_WRAP))})).toString().toByteArray()
                 require(body.size<=512*1024)
                 val id="mobile-v1:"+AutomationPolicy.digest((device+"/"+group.id+"/"+row.postId+"/").toByteArray()+body)

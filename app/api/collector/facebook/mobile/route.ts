@@ -1,3 +1,4 @@
+import { verifyMobileJpeg } from "@/features/collector/mobile-jpeg";
 import { authenticateCollectorDevice, CollectorAuthError } from "@/features/collector/device-auth";
 import { createMobilePost } from "@/features/collector/facebook-mobile";
 import { importFacebookCollectorPayload } from "@/features/collector/facebook-import";
@@ -9,9 +10,15 @@ export const runtime = "nodejs";
 export const POST = createMobilePost({
   authenticate: authenticateCollectorDevice,
   allowed: group => isEnabledWatchedFacebookSource({ sourceId: group, type: "GROUP", url: `https://www.facebook.com/groups/${group}/` }),
+  removed: async post => {
+    const result=await createAdminClient().from("facebook_watcher_removed_posts").select("post_id").eq("post_id",post.postId).maybeSingle();
+    if(result.error)throw new Error("MOBILE_REMOVAL_CHECK_RETRY");
+    return Boolean(result.data);
+  },
   authStatus: error => error instanceof CollectorAuthError ? error.status : null,
   upload: async (device, post) => {
     if (!post.photos.length) return [];
+    for (const photo of post.photos) await verifyMobileJpeg(photo.bytes);
     const db = createAdminClient();
     await ensureFacebookImageBucket(db);
     const urls: string[] = [];
@@ -26,10 +33,10 @@ export const POST = createMobilePost({
   },
   importPost: async (device, key, post, images) => {
     const result = await importFacebookCollectorPayload(device, key, {
-      sourcePostUrl: post.permalink, title: "Oferta z Facebooka", content: null,
+      sourcePostUrl: post.permalink, title: "Oferta z Facebooka", content: post.postText,
       price: post.price, area: post.area, rooms: post.rooms, location: post.location,
       imageUrls: images, publishedAt: null, authorName: null, groupName: null,
-    }, { mobileSnapshot: true });
+    }, { mobileSnapshot: true, mobileSaleConfirmed: true });
     return { listingId: result.listingId, status: result.status };
   },
 });

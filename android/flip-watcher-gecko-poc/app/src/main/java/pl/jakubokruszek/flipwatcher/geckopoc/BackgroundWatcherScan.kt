@@ -76,7 +76,7 @@ class BackgroundWatcherScan(private val context:Context) {
                 gate=trial;initial=false;check(trial.begin(true));val nonce=UUID.randomUUID().toString()
                 observer=launch{var last="";while(true){val phase=if(trial.phase==DesktopTrial.Phase.READING)"READING"else"LOADING";if(phase!=last){last=phase;progress(phase)};delay(500)}}
                 channel.viewportBridge=DesktopViewportBridge(checkNotNull(surface),nonce,images,{live()&&trial.active&&trial.phase==DesktopTrial.Phase.READING})
-                val result=DesktopSessionPreview.run(browser,channel,trial,nonce,actualTarget,{current},{pageReady&&live()},fastScroll=true,fixture=fixture,groupId=group.id,alive=::live)
+                val result=DesktopSessionPreview.run(browser,channel,trial,nonce,actualTarget,{current},{pageReady&&live()},fastScroll=true,fixture=fixture,groupId=group.id,alive=::live,includePostText=true)
                 check(live()&&result.reason=="DONE"){stopReason?:"SCAN_"+result.reason}
                 val sourceRows=checkNotNull(result.reply).rows
                 val rows=BackgroundPosterOcr.run(sourceRows,::live,{images.ocrRows(it).size},
@@ -85,7 +85,7 @@ class BackgroundWatcherScan(private val context:Context) {
                     now={android.os.SystemClock.elapsedRealtime()},progress=progress)
                 check(live()){stopReason?:"CANCELLED"}
                 val photos=rows.flatMap{row->images.rows(row.postId).mapIndexed{slot,b->ResultArchive.photo(row.postId,slot,false,b)}}
-                SavedResult(System.currentTimeMillis(),rows,emptyList(),photos)
+                SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,checkNotNull(result.reply).postTexts)
             }finally {
                 observer?.cancel()
                 runCatching{channel.close()};runCatching{surface?.close()};images.clear()

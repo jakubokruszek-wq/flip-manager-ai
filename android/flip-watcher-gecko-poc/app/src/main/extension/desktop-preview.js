@@ -180,7 +180,7 @@ function posterSaleFields(f,text){
  // Area + an explicit total asking price + two independent residential facts.
  return anchors>=2?{...f,intent:'SELL_PROPERTY',usable:true,qualification:'CANDIDATE'}:f;
 }
-function createModel(core,fields,group){
+function createModel(core,fields,group,collectPostText=false){
  const rowKeys=['postId','permalink','layer','price','priceSource','area','rooms','district','neighborhood','street','intent','usable','photos','qualification'];
  const qualifications=['CANDIDATE','NO_TEXT','FOREIGN_CITY','NOT_PROPERTY','INTENT','MISSING_FIELDS','CONFLICT','CLASSIFIER'];
  const intents=['SELL_PROPERTY','BUY_PROPERTY','RENT_OFFER','RENT_WANTED','SERVICE','OTHER','UNKNOWN'];
@@ -193,7 +193,7 @@ function createModel(core,fields,group){
   return Object.fromEntries(rowKeys.map(k=>[k,r[k]]));
  }
 
- const rows=new Map(),blocked=new Map(),photoEvidence=new Map(),stats=zero();
+ const rows=new Map(),blocked=new Map(),photoEvidence=new Map(),postTexts=new Map(),stats=zero();
  function photos(record,layer){
   let evidence=photoEvidence.get(record.postId);
   if(!evidence){if(photoEvidence.size>=20)return 0;evidence={ids:new Set(),urls:new Map()};photoEvidence.set(record.postId,evidence);}
@@ -217,7 +217,7 @@ function createModel(core,fields,group){
   const partial=row.layer==='DOM'&&row.usable===true&&row.intent==='SELL_PROPERTY'&&row.qualification==='MISSING_FIELDS';
   const victim=eligible(row)||review||partial?[...rows.values()].find(old=>unresolved(old)&&!eligible(old)&&old.photos===0&&!blocked.get(old.postId)?.size&&(!partial||old.qualification==='NO_TEXT')):null;
   if(!victim){stats.rejected++;return false;}
-  rows.delete(victim.postId);blocked.delete(victim.postId);photoEvidence.delete(victim.postId);return true;
+  rows.delete(victim.postId);postTexts.delete(victim.postId);blocked.delete(victim.postId);photoEvidence.delete(victim.postId);return true;
  }
  function project(r,layer){
   if(!r||!/^\d{5,30}$/.test(r.postId)||exact(r.permalink,group)!==r.postId){stats.rejected++;return null;}
@@ -264,7 +264,14 @@ function createModel(core,fields,group){
   }else rows.set(row.postId,{...row});
   stats.candidates=rows.size;return true;
  }
- function add(record,layer){if(layer==='NETWORK'&&record?.__structuredDiagnostics?.ownFullText===true)stats.textFullRecords=Math.min(10000,stats.textFullRecords+1);const row=project(record,layer);if(row){stats[layer==='DOM'?'dom':layer==='HYDRATION'?'hydration':'network']++;merge(row);const stored=rows.get(row.postId);if(stored&&row.photos>0)stored.photos=row.photos;}}
+ function add(record,layer){if(layer==='NETWORK'&&record?.__structuredDiagnostics?.ownFullText===true)stats.textFullRecords=Math.min(10000,stats.textFullRecords+1);const row=project(record,layer);if(row){stats[layer==='DOM'?'dom':layer==='HYDRATION'?'hydration':'network']++;merge(row);const stored=rows.get(row.postId);if(stored&&row.photos>0)stored.photos=row.photos;
+   // Only the own message read from an exactly bound article. Network/quoted
+   // text and OCR transcriptions never become the original post description.
+   if(collectPostText&&stored&&layer==='DOM'&&typeof record.text==='string'){
+    const text=record.text.trim().slice(0,12000);
+    if(text&&!/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(text))postTexts.set(row.postId,text);
+   }
+  }}
  function hydration(texts){const source={sourceType:'GROUP',sourceId:group,sourceUrl:'https://www.facebook.com/groups/'+group+'/',allowGroupRedirect:false};
   for(const body of texts.slice(0,64)){if(typeof body!=='string'||body.length>524288)continue;stats.scripts++;const ids=explicitIds(body,group);
    let found=[];try{found=core.extractStructuredRecordsFromText(body,'HYDRATION',source,0)||[];}catch{stats.rejected++;}
@@ -276,7 +283,9 @@ function createModel(core,fields,group){
   for(const [postId,e] of photoEvidence)if(rows.has(postId))result.push({postId,ids:[...e.ids],urls:[...e.urls.keys()]});
   return result;
  }
- return {add,merge,hydration,mediaBindings,stats,rows:()=>[...rows.values()].map(r=>({...r})),clear(){rows.clear();blocked.clear();photoEvidence.clear();Object.assign(stats,zero());}};
+ return {add,merge,hydration,mediaBindings,stats,postTexts:()=>{
+  let chars=0;return [...postTexts].filter(([id,text])=>rows.has(id)&&(chars+=text.length)<=64000).map(([postId,text])=>({postId,permalink:'https://www.facebook.com/groups/'+group+'/posts/'+postId+'/',text}));
+ },rows:()=>[...rows.values()].map(r=>({...r})),clear(){rows.clear();postTexts.clear();blocked.clear();photoEvidence.clear();Object.assign(stats,zero());}};
 }
 // Snapshot signatures belong only to the currently retained bounded rows.
 function mergeSnapshot(model,cache,row){
@@ -505,7 +514,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   uuid.test(m.previousDocumentId||'')&&uuid.test(documentId||'')&&documentId!==m.previousDocumentId&&Number.isFinite(m.previousTimeOrigin)&&m.previousTimeOrigin>0&&Number.isFinite(origin)&&origin>=m.previousTimeOrigin:
   Number.isSafeInteger(m.documentAfter)&&Number.isFinite(origin)&&origin>m.documentAfter;
  if(!fresh)return {status:'WAIT_FRESH',reason:'FRESHNESS',rows:[],stats:zero()};
- const model=createModel(core,fields,m.groupId);let invalid=false,dispose=null,noticeDispose=null,gestureWatch=null;const end=w.performance.now()+Math.min(60000,Math.max(0,Number(m.remainingMs)||0));
+ const model=createModel(core,fields,m.groupId,m.includePostText===true);let invalid=false,dispose=null,noticeDispose=null,gestureWatch=null;const end=w.performance.now()+Math.min(60000,Math.max(0,Number(m.remainingMs)||0));
  let wake;const cancelled=new Promise(r=>{wake=r;});
  const abort=()=>{if(invalid)return;invalid=true;model.clear();wake();notify({type:'desktopPreviewStop',nonce:m.nonce});void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});};
  const pause=ms=>Promise.race([new Promise(r=>w.setTimeout(r,ms)),cancelled]);setAbort(abort);
@@ -655,7 +664,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   model.stats.dataLocation=finalRows.filter(r=>[r.district,r.neighborhood,r.street].some(v=>v!==null)).length;
   model.stats.dataNoText=finalRows.filter(r=>r.qualification==='NO_TEXT').length;
   for(const k of statKeys)model.stats[k]=Math.max(0,Math.min(k==='bytes'?4194304:k==='scrollElapsedMs'?30000:k==='gestureWaitMs'?15000:10000,Math.floor(model.stats[k])));
-  return {status:'OK',reason:'DONE',rows:model.rows(),stats:{...model.stats}};
+  return {status:'OK',reason:'DONE',rows:model.rows(),stats:{...model.stats},...(m.includePostText===true?{postTexts:model.postTexts()}:{} )};
  }catch{return empty('ERROR');}
  finally{noticeDispose?.();gestureWatch?.stop();setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }

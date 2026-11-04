@@ -22,6 +22,21 @@ class WatcherAutomationInstrumentedTest {
     private fun result(price:Double=430000.0)=SavedResult(System.currentTimeMillis(),listOf(
         DesktopRow("550000000000091",group.url+"posts/550000000000091/","DOM",price,"EXPLICIT_TOTAL",42.0,2,"Bałuty",null,null,"SELL_PROPERTY",true,0)
     ),emptyList(),listOf(photo()))
+    @Test fun boundedPostTextRequiresOptInAndExactRowIdentityAndSurvivesFrozenQueue(){
+        val row=result().rows.single();val nonce=java.util.UUID.randomUUID().toString()
+        val stats=DesktopProtocol.emptyStats().toMutableMap().apply{put("candidates",1);put("verified",1)}
+        fun reply(id:String=row.postId,text:String="NA SPRZEDAŻ:\n339.000 do negocjacji")=org.json.JSONObject().put("type","desktopPreviewResult").put("nonce",nonce).put("status","OK").put("reason","DONE").put("rows",org.json.JSONArray().put(SavedResultCodec.row(row))).put("stats",org.json.JSONObject(stats)).put("postTexts",org.json.JSONArray().put(org.json.JSONObject().put("postId",id).put("permalink",row.permalink).put("text",text)))
+        assertNull(DesktopProtocol.parse(reply(),nonce,group.id))
+        val valid=checkNotNull(DesktopProtocol.parse(reply(),nonce,group.id,true));assertTrue(valid.postTexts.getValue(row.postId).contains("339.000"))
+        assertNull(DesktopProtocol.parse(reply("999999"),nonce,group.id,true))
+        assertNull(DesktopProtocol.parse(reply(text="x".repeat(12001)),nonce,group.id,true))
+        assertNull(DesktopProtocol.parse(reply(text="bad\u0000text"),nonce,group.id,true))
+        context.deleteDatabase("watcher-outbox-v1.db")
+        try{
+            val frozen=WatcherOutbox(context).use{q->q.enqueue(device,group,result().copy(postTexts=valid.postTexts));checkNotNull(q.next(device,Long.MAX_VALUE))}
+            WatcherOutbox(context).use{q->val reopened=checkNotNull(q.next(device,Long.MAX_VALUE));assertEquals(frozen.id,reopened.id);assertEquals(frozen.body,reopened.body);val body=org.json.JSONObject(reopened.body);assertEquals(2,body.getInt("version"));assertEquals(valid.postTexts.getValue(row.postId),body.getString("postText"))}
+        }finally{context.deleteDatabase("watcher-outbox-v1.db")}
+    }
     @Test fun encryptedQueueSurvivesReopenLostReceiptAndRepeatedScan() {
         context.deleteDatabase("watcher-outbox-v1.db")
         val first=WatcherOutbox(context).use{q->q.enqueue(device,group,result());checkNotNull(q.next(device,Long.MAX_VALUE))}
@@ -101,6 +116,9 @@ class WatcherAutomationInstrumentedTest {
         val server=LoopbackFixtureServer(pages=mapOf(path to "desktop-text-posters")){name->runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}
         try {
             val saved=BackgroundWatcherScan(context).runFixture("http://127.0.0.1:${server.port}$path"){true}
+            val retkinia=checkNotNull(saved.rows.find{it.postId=="1655103482946825"})
+            assertEquals(339000.0,retkinia.price);assertEquals(42.42,retkinia.area);assertEquals(2,retkinia.rooms)
+            val sourceText=checkNotNull(saved.postTexts[retkinia.postId]);assertTrue(sourceText.contains("339.000 do negocjacji"));assertFalse(sourceText.contains("FOREIGN COMMENT"))
             for(id in listOf("1655103482946823","1655103482946824")){
                 val row=checkNotNull(saved.rows.find{it.postId==id})
                 assertEquals("SELL_PROPERTY",row.intent);assertEquals(368000.0,row.price);assertEquals(62.4,row.area);assertNull(row.rooms)

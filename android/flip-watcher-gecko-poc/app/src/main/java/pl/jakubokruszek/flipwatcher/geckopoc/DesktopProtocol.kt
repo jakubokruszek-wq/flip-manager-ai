@@ -4,7 +4,7 @@ import org.json.JSONObject
 
 /** Selected fields; private archive never restores a live browser grant or document proof. */
 data class DesktopRow(val postId:String,val permalink:String,val layer:String,val price:Double?,val priceSource:String,val area:Double?,val rooms:Int?,val district:String?,val neighborhood:String?,val street:String?,val intent:String,val usable:Boolean,val photos:Int,val qualification:String="CLASSIFIER")
-data class DesktopReply(val status:String,val reason:String,val rows:List<DesktopRow>,val stats:Map<String,Int>)
+data class DesktopReply(val status:String,val reason:String,val rows:List<DesktopRow>,val stats:Map<String,Int>,val postTexts:Map<String,String> = emptyMap())
 data class DesktopDocumentProof(val documentId:String,val timeOrigin:Double) {
     override fun toString()="DesktopDocumentProof(redacted)"
 }
@@ -25,9 +25,9 @@ object DesktopProtocol {
     private val rowKeys=setOf("postId","permalink","layer","price","priceSource","area","rooms","district","neighborhood","street","intent","usable","photos","qualification")
     val qualifications=setOf("CANDIDATE","NO_TEXT","FOREIGN_CITY","NOT_PROPERTY","INTENT","MISSING_FIELDS","CONFLICT","CLASSIFIER")
     val intents=setOf("SELL_PROPERTY","BUY_PROPERTY","RENT_OFFER","RENT_WANTED","SERVICE","OTHER","UNKNOWN")
-    fun parse(message:Any?,nonce:String,group:String=PocPolicy.APPROVED_GROUP_ID):DesktopReply? = runCatching {
+    fun parse(message:Any?,nonce:String,group:String=PocPolicy.APPROVED_GROUP_ID,allowPostText:Boolean=false):DesktopReply? = runCatching {
         val j=ScanProtocol.asJson(message)?:return null
-        if(j.keys().asSequence().toSet()!=setOf("type","nonce","status","reason","rows","stats")||j.opt("type")!="desktopPreviewResult"||j.opt("nonce")!=nonce)return null
+        if(j.keys().asSequence().toSet() !in (if(allowPostText)setOf(setOf("type","nonce","status","reason","rows","stats"),setOf("type","nonce","status","reason","rows","stats","postTexts"))else setOf(setOf("type","nonce","status","reason","rows","stats")))||j.opt("type")!="desktopPreviewResult"||j.opt("nonce")!=nonce)return null
         val status=j.optString("status");val reason=j.optString("reason")
         if(status !in setOf("OK","STOP","WAIT_FRESH")||reason !in setOf("DONE","CONTEXT","ERROR","BUSY","FRESHNESS","NOTICE_BLOCKED"))return null
         if((status=="OK")!=(reason=="DONE")||(status=="WAIT_FRESH")!=(reason=="FRESHNESS"))return null
@@ -51,7 +51,19 @@ object DesktopProtocol {
             DesktopRow(id,link,layer,price,source,area,rooms?.toInt(),district,text("neighborhood",40),text("street",80),intent,r.getBoolean("usable"),r.getInt("photos"),qualification)
         }
         if(stats.getValue("candidates")!=rows.size)return null
-        DesktopReply(status,reason,rows,stats)
+        val postTexts=linkedMapOf<String,String>()
+        if(j.has("postTexts")){
+            val texts=j.getJSONArray("postTexts");if(texts.length()>rows.size||status!="OK")return null
+            var chars=0
+            for(i in 0 until texts.length()){
+                val t=texts.getJSONObject(i);if(t.keys().asSequence().toSet()!=setOf("postId","permalink","text"))return null
+                val id=t.getString("postId");val text=t.getString("text")
+                if(id !in seen||postTexts.containsKey(id)||t.getString("permalink")!="https://www.facebook.com/groups/$group/posts/$id/"||text.isBlank()||text.length>12000||Regex("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]").containsMatchIn(text))return null
+                chars+=text.length;if(chars>64000)return null
+                postTexts[id]=text
+            }
+        }
+        DesktopReply(status,reason,rows,stats,postTexts)
     }.getOrNull()
     fun parseStats(j:JSONObject):Map<String,Int>? {
         if(j.keys().asSequence().toSet()!=statKeys.toSet())return null

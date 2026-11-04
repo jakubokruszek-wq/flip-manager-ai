@@ -180,3 +180,14 @@ test('Retkinia sale uses its own 339.000 negotiation line without treating phone
  assert.equal(check(text+'\n💰350.000 do negocjacji').price,null);
  assert.notEqual(check(text.replace('NA SPRZEDAŻ','DO WYNAJĘCIA')).intent,'SELL_PROPERTY');
 });
+
+test('post text requires explicit collection, exact own DOM binding, bounded retention and cleanup',()=>{
+ const core=globalThis.FlipFacebookCollectorCore;
+ const m=preview.createModel(core,fields,group,true),disabled=model();
+ const r=record();m.add(r,'DOM');disabled.add(r,'DOM');assert.deepEqual(disabled.postTexts(),[]);
+ assert.equal(m.postTexts()[0].text,r.text);assert.equal(m.postTexts()[0].postId,r.postId);
+ m.add({...record('550000000000002'),text:'NETWORK PRIVATE'},'NETWORK');
+ m.add({...record('550000000000003'),permalink:'https://www.facebook.com/groups/foreign/posts/550000000000003/',text:'FOREIGN PRIVATE'},'DOM');
+ assert.equal(m.postTexts().length,1);assert(!JSON.stringify(m.postTexts()).includes('PRIVATE'));
+ m.clear();assert.deepEqual(m.postTexts(),[]);
+});
