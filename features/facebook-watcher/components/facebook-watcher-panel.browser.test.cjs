@@ -788,4 +788,14 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     assertNoUnexpectedNoise(handle);
   });
 
+  await t.test("J: verified pair with no location renders one card and keeps both source links",async(t)=>{
+    const ids=[NORMAL_ID,"00000000-0000-4000-8000-000000000006"];
+    const handle=await setupWatcherPage(browser,baseUrl,{listingsPayload:()=>({listings:ids.map((listingId,i)=>makeListing({listingId,price:299000,area:60,rooms:3,description:null,city:null,district:null,neighborhood:null,street:null,images:[],confirmedDuplicateGroupId:"verified-pair",sourcePostUrl:`https://www.facebook.com/groups/group${i+1}/posts/123456789/`}))})});
+    const {page}=handle;t.after(()=>Promise.all([page.close(),handle.context.close()]));
+    await page.getByText("Duplikaty: 1 · Powiązane publikacje (2)",{exact:true}).click();
+    assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(),1);
+    for(let i=0;i<2;i++)assert.equal(await page.locator(`a[href="https://www.facebook.com/groups/group${i+1}/posts/123456789/"]`).count()>=1,true);
+    assertNoUnexpectedNoise(handle);
+  });
+
 });

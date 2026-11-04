@@ -41,6 +41,7 @@ function fakeAdmin() {
       const builder = {
         select: () => builder,
         order: () => builder,
+        range: () => builder,
         limit: async () => {
           adminCalls.push({ op: "select", table, filters: { ...filters } });
           return { data: table === "price_radar_settings" ? ownerRows : [], error: null };

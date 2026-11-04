@@ -79,6 +79,7 @@ function postgrest(db: PGlite) {
         lte: (column: string, value: unknown) => { where.push((next) => `${column} <= ${next(value)}`); return builder; },
         in: (column: string, values: unknown[]) => { where.push((next) => `${column} in (${values.map(next).join(", ")})`); return builder; },
         order: () => builder,
+        range: () => builder,
         limit: () => builder,
         maybeSingle: async () => { const result = await run(); return { data: result.data?.[0] ?? null, error: result.error }; },
         single: async () => { const result = await run(); return { data: result.data?.[0] ?? null, error: result.error }; },

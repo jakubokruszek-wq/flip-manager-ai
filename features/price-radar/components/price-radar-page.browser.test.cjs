@@ -470,6 +470,16 @@ test("automatic Radar persists settings, separates markets, hides discarded list
   assert.equal(await page.getByText(/The requested Radar run is no longer resumable/u).count(), 0, "starting a new run clears the stale resumability error");
   assert.equal(await page.getByText(/Do weryfikacji danych i standardu/).count(),0);
   assert.equal(await page.getByRole("button",{name:"Potwierdź i dodaj do porównań"}).count(),0);
+  radarRun={...radarRun,status:"partial",finishedAt:new Date().toISOString(),leaseUntil:null,sourceStatuses:{gratka:"failed",allegro_lokalnie:"partial",otodom:"completed"},sourceErrors:{gratka:"TERMINAL_ACCESS_ERROR: CAPTCHA_OR_ACCESS_DENIED",allegro_lokalnie:"SOURCE_COOLDOWN_UNTIL:2099-01-01T00:00:00.000Z | HTTP 429"}};
+  await page.reload({waitUntil:"domcontentloaded"});
+  await page.getByText("Portal odmówił dostępu",{exact:false}).waitFor();
+  await page.getByText("Portal ograniczył liczbę zapytań",{exact:false}).waitFor();
+  assert.equal(await page.getByText("Gratka: portal blokuje dostęp",{exact:true}).count(),1);
+  const technical=page.getByLabel("Diagnostyka błędów źródeł");
+  assert.equal(await technical.getAttribute("open"),null,"raw adapter errors stay collapsed but accessible");
+  await technical.locator("summary").click();
+  await page.getByText("gratka: TERMINAL_ACCESS_ERROR: CAPTCHA_OR_ACCESS_DENIED",{exact:true}).waitFor();
+
 
 });
 

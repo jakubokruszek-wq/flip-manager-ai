@@ -73,6 +73,7 @@ export type FacebookProperty = {
 
 export type FacebookWatcherListing = FacebookProperty & {
   listingId: string;
+  confirmedDuplicateGroupId?: string | null;
   relatedPostMatch?: "confirmed" | "possible";
   relatedPosts?: Array<{ listingId: string; url: string | null; groupName: string | null }>;
   externalListingId?: string | null;

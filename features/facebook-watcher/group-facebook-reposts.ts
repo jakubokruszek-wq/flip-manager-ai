@@ -50,6 +50,7 @@ function mobilePhotoHashes(images: string[]): string[] {
 /** Exact repeated own text + matching property facts can identify reposts
  * even when Facebook recompresses photographs into different byte hashes. */
 function sameEvidence(a: FacebookWatcherListing,b: FacebookWatcherListing): boolean {
+  if(a.confirmedDuplicateGroupId && a.confirmedDuplicateGroupId===b.confirmedDuplicateGroupId)return true;
   const hashes=mobilePhotoHashes(a.images);
   if(mobilePhotoHashes(b.images).some(hash=>hashes.includes(hash))) return true;
   const text=(value:string|null)=>value?.normalize("NFKC").toLocaleLowerCase("pl").replace(/\s+/gu," ").trim()??"";

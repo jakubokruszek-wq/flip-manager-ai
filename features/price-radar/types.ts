@@ -174,6 +174,7 @@ export type RadarRunMetrics = {
 };
 
 export type RadarCheckpoint = {
+  sourceCooldownChecked?: boolean;
   sourceQueue: RadarSource[];
   currentSourceIndex: number;
   /** Per-source adapter cursor state (page number, continuation token, ...), opaque to collect.ts itself. */
