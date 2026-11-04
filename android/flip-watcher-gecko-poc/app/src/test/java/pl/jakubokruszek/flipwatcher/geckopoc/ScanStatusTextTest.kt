@@ -16,7 +16,7 @@ class ScanStatusTextTest {
     @Test fun slowStageShowsHeartbeatSeparatelyFromActualProgress(){
         val state=ScanState(phase="READING",heartbeat=now,changed=now-120_000,total=11,done=3,position=4,group="Grupa testowa",posts=8,photos=5,started=now-130_000)
         val text=ScanStatusText.details(state,true,now,now+1000,true,true,"uruchomione",true,ZoneId.of("Europe/Warsaw"))
-        assertTrue(text.contains("Grupy ukończone: 3/11"));assertTrue(text.contains("posty 8 • zdjęcia 5"));assertTrue(text.contains("nie oznacza znalezienia nowych postów"));assertFalse(text.contains("%"))
+        assertTrue(text.contains("Grupy z zakończoną próbą: 3/11"));assertTrue(text.contains("posty 8 • zdjęcia 5"));assertTrue(text.contains("nie oznacza znalezienia nowych postów"));assertFalse(text.contains("%"))
     }
     @Test fun blockedStartHasSpecificReasonAndNoInventedAndroidDiagnosis(){
         val text=ScanStatusText.details(ScanState(phase="QUEUED"),true,now,now+1000,false,false,"zadanie oczekuje",false,pendingWindow=now-60_000)

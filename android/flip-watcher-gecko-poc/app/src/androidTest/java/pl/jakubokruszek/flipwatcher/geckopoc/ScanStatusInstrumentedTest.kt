@@ -76,14 +76,14 @@ class ScanStatusInstrumentedTest {
             val deadline=android.os.SystemClock.elapsedRealtime()+10_000
             var shown=false
             while(!shown&&android.os.SystemClock.elapsedRealtime()<deadline){
-                scenario.onActivity{a->shown=a.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.widget.TextView>("scan.live.status").text.toString().contains("Grupy ukończone: 1/11")}
+                scenario.onActivity{a->shown=a.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.widget.TextView>("scan.live.status").text.toString().contains("Grupy z zakończoną próbą: 1/11")}
                 if(!shown)Thread.sleep(100)
             }
             assertTrue(shown);assertFalse("Read-only progress must not pause background scanning",WatcherAutomation.uiVisible)
             WatcherScanStatus.update(context,"live-test"){it.copy(done=2,photos=5)}
             var refreshed=false
             while(!refreshed&&android.os.SystemClock.elapsedRealtime()<deadline){
-                scenario.onActivity{a->refreshed=a.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.widget.TextView>("scan.live.status").text.toString().contains("Grupy ukończone: 2/11")}
+                scenario.onActivity{a->refreshed=a.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.widget.TextView>("scan.live.status").text.toString().contains("Grupy z zakończoną próbą: 2/11")}
                 if(!refreshed)Thread.sleep(100)
             }
             assertTrue(refreshed);assertFalse(WatcherAutomation.uiVisible)

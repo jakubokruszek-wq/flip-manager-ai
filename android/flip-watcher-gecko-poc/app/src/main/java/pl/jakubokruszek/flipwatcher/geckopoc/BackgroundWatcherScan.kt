@@ -85,7 +85,7 @@ class BackgroundWatcherScan(private val context:Context) {
                     now={android.os.SystemClock.elapsedRealtime()},progress=progress)
                 check(live()){stopReason?:"CANCELLED"}
                 val photos=rows.flatMap{row->images.rows(row.postId).mapIndexed{slot,b->ResultArchive.photo(row.postId,slot,false,b)}}
-                SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,checkNotNull(result.reply).postTexts)
+                SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,checkNotNull(result.reply).postTexts,checkNotNull(result.reply).stats)
             }finally {
                 observer?.cancel()
                 runCatching{channel.close()};runCatching{surface?.close()};images.clear()

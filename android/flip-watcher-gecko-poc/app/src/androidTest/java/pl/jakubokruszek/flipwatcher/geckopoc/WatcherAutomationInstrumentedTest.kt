@@ -152,6 +152,42 @@ class WatcherAutomationInstrumentedTest {
             }
         }finally{server.close()}
     }
+    @Test fun diagnosticsSurviveVersionTwoUpgradeWithoutReplayingBusinessBodies(){
+        context.deleteDatabase("watcher-outbox-v1.db")
+        try{
+            val frozen=WatcherOutbox(context).use{q->q.enqueue(device,group,result());val item=checkNotNull(q.next(device,Long.MAX_VALUE));q.acknowledge(item.id,"keep-receipt");q.writableDatabase.execSQL("DROP TABLE capture_reports");q.writableDatabase.version=2;item}
+            val slot=WatcherCaptureReport.cycle("2026-11-04/20")
+            val stats=DesktopProtocol.emptyStats().toMutableMap().apply{put("pageVisible",1);put("scrollMoves",5)}
+            val value=result().copy(captureStats=stats)
+            assertEquals("",WatcherCaptureReport.issue(value));assertEquals("SALE_PHOTO_MISSING",WatcherCaptureReport.issue(value.copy(photos=emptyList())))
+            assertEquals("PAGE_HIDDEN",WatcherCaptureReport.issue(value.copy(captureStats=stats+mapOf("pageVisible" to 0))))
+            val report=WatcherCaptureReport.create(context,slot,java.util.UUID.randomUUID().toString(),group,value,"")
+            WatcherOutbox(context).use{q->
+                assertNull("Schema-only upgrade must preserve sent state",q.next(device,Long.MAX_VALUE))
+                q.readableDatabase.rawQuery("SELECT id,receipt FROM outbox",null).use{assertTrue(it.moveToFirst());assertEquals(frozen.id,it.getString(0));assertEquals("keep-receipt",it.getString(1))}
+                q.report(device,slot,group.id,report);q.completeScan("2026-11-04/20",group.id);assertFalse(q.scanned(slot,group.id))
+                assertFalse(report.toString().contains("SPRZEDAM"));assertFalse(report.toString().contains("jpeg"))
+                q.readableDatabase.rawQuery("SELECT body FROM capture_reports",null).use{assertTrue(it.moveToFirst());assertFalse(String(it.getBlob(0)).contains(group.id))}
+            }
+            WatcherOutbox(context).use{q->assertEquals(report.toString(),q.nextReport(device)?.body);assertEquals(1,q.cycleReports(slot).size);q.reportSent(report.getString("batchId"));assertNull(q.nextReport(device));assertTrue(WatcherCaptureReport.summary(q.cycleReports(slot)).contains("posty 1"))}
+        }finally{context.deleteDatabase("watcher-outbox-v1.db")}
+    }
+    @Test fun colouredPosterBackgroundCaptureWorksWithDisplayAsleep()=runBlocking {
+        val instrumentation=androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
+        val power=context.getSystemService(android.os.PowerManager::class.java)
+        @Suppress("DEPRECATION") val wake=power.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK,"flipwatcher:fixture").apply{acquire(300_000)}
+        val path="/groups/$FIXTURE_GROUP_ID/"
+        val server=LoopbackFixtureServer(pages=mapOf(path to "desktop-text-posters")){name->runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}
+        fun shell(command:String){instrumentation.uiAutomation.executeShellCommand(command).use{android.os.ParcelFileDescriptor.AutoCloseInputStream(it).use{input->input.readBytes()}}}
+        try{
+            shell("input keyevent KEYCODE_HOME");shell("input keyevent KEYCODE_SLEEP");kotlinx.coroutines.delay(1000)
+            assertFalse("Fixture must genuinely run with the display asleep",power.isInteractive)
+            val saved=BackgroundWatcherScan(context).runFixture("http://127.0.0.1:${server.port}$path"){true}
+            val id="1655103482946823";assertTrue(saved.photos.any{it.postId==id})
+            assertEquals(368000.0,saved.rows.find{it.postId==id}?.price)
+            assertEquals(1,saved.captureStats["pageVisible"])
+        }finally{shell("input keyevent KEYCODE_WAKEUP");shell("wm dismiss-keyguard");if(wake.isHeld)wake.release();server.close()}
+    }
     @Test fun workerDrains31QueuedOffersWhileUiVisibleAndReplaysLostReceiptWithoutDuplicates()=runBlocking {
         context.deleteDatabase("watcher-outbox-v1.db")
         val prefs=WatcherAutomation.preferences(context)

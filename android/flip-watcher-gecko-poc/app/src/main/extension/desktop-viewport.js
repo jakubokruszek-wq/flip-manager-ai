@@ -1,5 +1,6 @@
 /* Official native-view requests only. Media URLs stay inside the extension; no fetch, persistence or public bridge. */
 (function(root){'use strict';
+const containers=root.FlipPostContainers||(typeof require==='function'?require('./post-containers.js'):null);
 const uuid=/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
 function transport(port,w){
  const pending=new Map();
@@ -15,16 +16,16 @@ function transport(port,w){
  }};
 }
 function cards(w,core,group){
- const all=Array.from(w.document.querySelectorAll('[role="article"],article'));if(all.length>100)return[];
- return all.filter(c=>!c.parentElement?.closest('[role="article"],article')&&c.isConnected!==false&&c.ownerDocument===w.document&&!c.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"])')).flatMap(card=>{
-  const links=Array.from(card.querySelectorAll('a[href]')).slice(0,100).filter(a=>a.closest('[role="article"],article')===card).map(a=>core.parsePostLink(a.href)).filter(Boolean);
+ const all=Array.from(containers.list(w.document));if(all.length>100)return[];
+ return all.filter(c=>!containers.owner(c.parentElement)&&c.isConnected!==false&&c.ownerDocument===w.document&&!c.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"])')).flatMap(card=>{
+  const links=Array.from(card.querySelectorAll('a[href]')).slice(0,100).filter(a=>containers.owner(a)===card).map(a=>core.parsePostLink(a.href)).filter(Boolean);
   if(!links.length||links.some(p=>p.sourceType!=='GROUP'||p.sourceId!==group)||new Set(links.map(p=>p.postId)).size!==1)return[];
   return [{card,id:links[0].postId}];
  });
 }
 function scrollCards(w,core,group){
- const all=Array.from(w.document.querySelectorAll('[role="article"],article'));if(all.length>100)return[];
- return all.filter(card=>card.isConnected!==false&&card.ownerDocument===w.document&&!card.parentElement?.closest('[role="article"],article')&&!card.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"])')).filter(card=>
+ const all=Array.from(containers.list(w.document));if(all.length>100)return[];
+ return all.filter(card=>card.isConnected!==false&&card.ownerDocument===w.document&&!containers.owner(card.parentElement)&&!card.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"])')).filter(card=>
   !Array.from(card.querySelectorAll('a[href]')).slice(0,100).some(a=>{const p=core.parsePostLink(a.href);return p&&(p.sourceType!=='GROUP'||p.sourceId!==group);})).map(card=>({card}));
 }
 // A top ancestor hit proves delegated input only along the actual, unclipped
@@ -53,10 +54,10 @@ function point(w,core,group,lastMoved=null,audit=null){
   const r=modal.getBoundingClientRect?.(),style=w.getComputedStyle?.(modal);
   if(r&&r.width>0&&r.height>0&&r.right>left&&r.bottom>top&&r.left<left+width&&r.top<top+height&&style?.display!=='none'&&style?.visibility!=='hidden'&&style?.visibility!=='collapse'&&Number(style?.opacity??1)>0&&modal.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true})!==false){diag.pointDialog++;return finish(null);}
  }
- const all=Array.from(w.document.querySelectorAll('[role="article"],article')).slice(0,100);
+ const all=Array.from(containers.list(w.document)).slice(0,100);
  const bound=scrollCards(w,core,group);
  const recent=lastMoved&&lastMoved.isConnected!==false&&lastMoved.ownerDocument===w.document&&!lastMoved.closest?.('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]')?
-  all.filter(card=>card.ownerDocument===w.document&&card.isConnected!==false&&!card.parentElement?.closest('[role="article"],article')&&!card.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"])')&&lastMoved.contains(card)).map(card=>({card})):[];
+  all.filter(card=>card.ownerDocument===w.document&&card.isConnected!==false&&!containers.owner(card.parentElement)&&!card.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"])')&&lastMoved.contains(card)).map(card=>({card})):[];
  diag.pointCacheCards=recent.length;
  const inputCards=[...bound,...recent],regions=[],probes=[];
  const clipped=r=>{if(!r)return null;const l=Math.max(left+width*.1,r.left),right=Math.min(left+width*.9,r.right),t=Math.max(top+height*.1,r.top),bottom=Math.min(top+height*.9,r.bottom);return right-l>=20&&bottom-t>=20?{left:l,right,top:t,bottom}:null;};
@@ -107,7 +108,7 @@ function point(w,core,group,lastMoved=null,audit=null){
 }
 function trace(w){
  const vp=w.visualViewport,positions=[];
- for(const card of Array.from(w.document.querySelectorAll('[role="article"],article')).slice(0,100))if(card.isConnected!==false&&typeof card.getBoundingClientRect==='function')positions.push([card,card.getBoundingClientRect().top]);
+ for(const card of Array.from(containers.list(w.document)).slice(0,100))if(card.isConnected!==false&&typeof card.getBoundingClientRect==='function')positions.push([card,card.getBoundingClientRect().top]);
  const sy=Number(w.scrollY)||0,vy=Number(vp?.offsetTop)||0;
  return ()=>Number(w.scrollY)>sy+1||Number(w.visualViewport?.offsetTop)>vy+1||positions.some(([c,y])=>c.isConnected!==false&&c.getBoundingClientRect().top<y-1);
 }
@@ -136,7 +137,7 @@ function documentImages(w,core,group,helpers,owners,allowedIds,audit){
  const images=doc.querySelectorAll('img');
  for(let index=0;index<Math.min(500,images.length);index++){const node=images[index];
   count('photoDocumentNodes');
-  if(node.tagName!=='IMG'||node.ownerDocument!==doc||node.isConnected===false||node.closest('[role="article"],article')||node.closest(forbidden))continue;
+  if(node.tagName!=='IMG'||node.ownerDocument!==doc||node.isConnected===false||containers.owner(node)||node.closest(forbidden))continue;
   const region=node.closest('[role="feed"],[data-pagelet*="Feed"],main,[role="main"]');if(!region)continue;
   const anchor=node.closest('a[href]'),href=helpers.photoAnchorHref(anchor),mediaId=helpers.photoLinkId(href);
   let linkedPostId=null;
@@ -154,7 +155,7 @@ function documentImages(w,core,group,helpers,owners,allowedIds,audit){
   const ownUnit=()=>{if(!unit)return true;const nodes=unit.querySelectorAll('a[href]');if(nodes.length>100)return false;const links=Array.from(nodes);return !links.map(a=>core.parsePostLink(helpers.photoAnchorHref(a))).filter(Boolean).some(p=>p.sourceType!=='GROUP'||p.sourceId!==group||p.postId!==id);};
   if(!ownUnit())continue;
   const rect=node.getBoundingClientRect();if(rect.width<200||rect.height<100){count('photoSizeRejected');continue;}
-  const ready=()=>node.isConnected!==false&&node.ownerDocument===doc&&!node.closest('[role="article"],article')&&!node.closest(forbidden)&&node.closest('[role="feed"],[data-pagelet*="Feed"],main,[role="main"]')===region&&node.closest('[data-pagelet*="FeedUnit"],[data-testid="post_container"]')===unit&&node.closest('a[href]')===anchor&&helpers.photoAnchorHref(anchor)===href&&ownUnit()&&node.complete===true&&node.naturalWidth>0;
+  const ready=()=>node.isConnected!==false&&node.ownerDocument===doc&&!containers.owner(node)&&!node.closest(forbidden)&&node.closest('[role="feed"],[data-pagelet*="Feed"],main,[role="main"]')===region&&node.closest('[data-pagelet*="FeedUnit"],[data-testid="post_container"]')===unit&&node.closest('a[href]')===anchor&&helpers.photoAnchorHref(anchor)===href&&ownUnit()&&node.complete===true&&node.naturalWidth>0;
   count('photoDocumentBound');result.push({node,item,source,ready,container:region,id});
  }
  return result;

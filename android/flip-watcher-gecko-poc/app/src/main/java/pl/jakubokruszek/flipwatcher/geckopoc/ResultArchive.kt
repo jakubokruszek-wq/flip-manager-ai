@@ -16,7 +16,7 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /** Historical data only: loading this file never restores a browser grant or document proof. */
-data class SavedResult(val savedAt:Long,val rows:List<DesktopRow>,val ocr:List<DesktopRow>,val photos:List<SavedPhoto>,val postTexts:Map<String,String> = emptyMap())
+data class SavedResult(val savedAt:Long,val rows:List<DesktopRow>,val ocr:List<DesktopRow>,val photos:List<SavedPhoto>,val postTexts:Map<String,String> = emptyMap(),val captureStats:Map<String,Int> = emptyMap())
 data class SavedPhoto(val postId:String,val slot:Int,val crop:Boolean,val jpeg:ByteArray)
 
 /** Strict typed-row codec shared with the browser protocol, without manufacturing live proof. */

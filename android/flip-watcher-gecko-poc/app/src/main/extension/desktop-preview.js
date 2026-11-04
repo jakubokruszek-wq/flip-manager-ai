@@ -1,6 +1,7 @@
 /* Isolated/native-consented local projection. No storage, upload or public page bridge. */
 (function(root){
 'use strict';
+const containers=root.FlipPostContainers||(typeof require==='function'?require('./post-containers.js'):null);
 const statKeys=['candidates','dom','hydration','network','duplicates','rejected','ambiguous','scripts','scrollSteps','scrollMoves','requests','bytes','verified','desktop','filtered','completed','streamErrors','decodeErrors','oversize','limitSkipped','articles','mobile','scrollSeen','scrollNoRange','scrollHidden','scrollOffscreen','scrollUnbound','scrollRoot','scrollInner','scrollHit','scrollElapsedMs','scrollStalls','scrollAtEnd','scrollNoTarget','scrollTailAttempts','scrollTailMoves','pageFocused','pageVisible','scrollNativeSteps','scrollNativeMoves','photoPreviewFrames','photoPreviews','viewportHeight','visualViewportHeight','rootRemaining','viewportModule','viewportGranted','viewportReady','viewportProbeCode','nativeRequests','nativeRejected','nativeTimeout','pointMisses','mediaBindingPosts','pointProbes','pointEmpty','pointFrame','pointForeign','pointForm','pointDialog','pointComment','pointCommentable','pointChrome','pointUnbound','pointWidget','pointCache','pointCacheCards','pointRects','viewportWidth','visualWidth','visualOffsetX','visualOffsetY','visualScale100','gestureRequested','gestureTouches','gestureAnchored','gestureRejected','gestureWaitMs','gestureScrollSteps','gestureScrollMoves','noticeDetected','noticeClosed','noticeReason','noticeModals','noticeVisible','noticeNameSource','photoExactCards','photoNetworkCards','photoSources','photoIdentityRejected','photoUnready','photoGeometryRejected','photoOccluded','photoAlreadyDone','photoSelected','photoRawImg','photoRawSvg','photoRawCss','photoOwnerRejected','photoScopeRejected','photoAnchorRejected','photoSizeRejected','photoSourceRejected','photoCssUnready','scrollFast','scrollCadenceMs','photoNetworkAnchors','photoSvgBounds','photoTinyBound','photoDocumentNodes','photoDocumentBound','photoDocumentSelected','textExpandAttempts','textExpanded','textExpandRejected','textFullRecords','textExpandArmed','textCardsBound','textMessageNodes','textControlNodes','textRecognized','dataPrice','dataArea','dataRooms','dataLocation','dataNoText'];
 const zero=()=>Object.fromEntries(statKeys.map(k=>[k,0]));
 function groupURL(raw,group,fixture){try{const u=new URL(raw);return /^[A-Za-z0-9._-]{1,100}$/.test(group)&&!u.username&&!u.password&&!u.hash&&(fixture||!u.search)&&u.pathname.replace(/\/$/,'')==='/groups/'+group&&((u.protocol==='https:'&&!u.port&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname))||(fixture===true&&u.protocol==='http:'&&u.hostname==='127.0.0.1'));}catch{return false;}}
@@ -122,13 +123,14 @@ function textPosterNodes(card,postId){
  const doc=card.ownerDocument,w=doc?.defaultView,result=[];
  if(!w?.getComputedStyle)return result;
  for(const n of Array.from(card.querySelectorAll('[style*="background"],[data-ad-preview="message"],[data-ad-comet-preview="message"]')).slice(0,100)){
-  const own=()=>n.closest('[role="article"],article')===card&&!n.closest('[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],video,form,header,nav,[role="button"]');
+  const own=()=>containers.owner(n)===card&&!n.closest('[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],video,form,header,nav');
   if(!own())continue;
   const message=n.matches?.('[data-ad-preview="message"],[data-ad-comet-preview="message"]')?n:n.querySelector?.('[data-ad-preview="message"],[data-ad-comet-preview="message"]')||n.closest('[data-ad-preview="message"],[data-ad-comet-preview="message"]');
-  if(!message||message.closest('[role="article"],article')!==card)continue;
+  if(!message||containers.owner(message)!==card)continue;
   const source=()=>n.innerText?.trim()||'',text=source(),style=w.getComputedStyle(n),rect=n.getBoundingClientRect();
+  const largeText=()=>[message,...Array.from(message.querySelectorAll?.('span,div,p')||[]).slice(0,32)].some(e=>e.innerText?.trim()&&Number.parseFloat(w.getComputedStyle(e).fontSize)>=18);
   const painted=()=>{const s=w.getComputedStyle(n);return s.backgroundImage&&s.backgroundImage!=='none'||s.backgroundColor&&!['transparent','rgba(0, 0, 0, 0)'].includes(s.backgroundColor);};
-  if(!painted()||rect.width<200||rect.height<120||Number.parseFloat(style.fontSize)<18||text.length<25||text.length>2000||text!==(message.innerText?.trim()||'')||!/\d+(?:[.,]\d+)?\s*m\s*[²2]/iu.test(text))continue;
+  if(!painted()||rect.width<200||rect.height<120||!largeText()||text.length<25||text.length>2000||text!==(message.innerText?.trim()||'')||!/\d+(?:[.,]\d+)?\s*m\s*[²2]/iu.test(text))continue;
   if(result.some(p=>p.node.contains(n)||n.contains(p.node)))continue;
   result.push({node:n,source,ready:()=>n.isConnected!==false&&own()&&painted()&&source()===text,item:{posterKey:'poster:'+postId,exactPostId:postId,exactAssociation:true,domPhoto:true,networkRequired:false}});
  }
@@ -141,7 +143,7 @@ function photoNodes(card,postId,group,core,audit=null){
  const css=Array.from(card.querySelectorAll('[style*="background"],[role="img"]')).slice(0,100).filter(n=>!native.includes(n));
  for(const n of [...native,...css]){
   const background=css.includes(n);count(background?'photoRawCss':n.tagName==='IMG'?'photoRawImg':'photoRawSvg');
-  if(n.closest('[role="article"],article')!==card){count('photoOwnerRejected');continue;}
+  if(containers.owner(n)!==card){count('photoOwnerRejected');continue;}
   if(n.closest('[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],video')){count('photoScopeRejected');continue;}
   const svg=photoSvgRoot(n),renderNode=svg||n;const rect=renderNode.getBoundingClientRect();const a=n.closest('a[href]'),anchorHref=photoAnchorHref(a);const mediaId=photoLinkId(anchorHref);let linkedPostId=null,networkAnchor=false;
   if(a&&!mediaId){const p=core.parsePostLink(anchorHref);
@@ -159,7 +161,7 @@ function photoNodes(card,postId,group,core,audit=null){
   const networkRequired=networkAnchor||rect.width<80||rect.height<80||(!mediaId&&!linkedPostId&&(rect.width<200||rect.height<100));
   if(networkRequired&&!url){count('photoSourceRejected');continue;}
   if(networkAnchor)count('photoNetworkAnchors');if(svg)count('photoSvgBounds');if(rect.width<80||rect.height<80)count('photoTinyBound');
-  result.push({node:renderNode,source,ready:()=>n.isConnected!==false&&n.closest('[role="article"],article')===card&&n.closest('a[href]')===a&&photoAnchorHref(a)===anchorHref&&!n.closest('[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],video')&&(!svg||photoSvgRoot(n)===svg)&&(!background||cssPhotoLoaded(n,source())),item:{url,mediaId,linkedPostId,networkRequired,exactPostId:postId,exactAssociation:postId!==null,domPhoto:true}});if(result.length===20)break;
+  result.push({node:renderNode,source,ready:()=>n.isConnected!==false&&containers.owner(n)===card&&n.closest('a[href]')===a&&photoAnchorHref(a)===anchorHref&&!n.closest('[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],video')&&(!svg||photoSvgRoot(n)===svg)&&(!background||cssPhotoLoaded(n,source())),item:{url,mediaId,linkedPostId,networkRequired,exactPostId:postId,exactAssociation:postId!==null,domPhoto:true}});if(result.length===20)break;
  }
  return result.concat(textPosterNodes(card,postId));
 }
@@ -300,7 +302,7 @@ function mergeSnapshot(model,cache,row){
 // Never scroll dialogs, comments or an arbitrary overflow widget.
 function scrollContainer(w,stats=null){
  const doc=w.document,root=doc.scrollingElement;
- const cards=Array.from(doc.querySelectorAll('[role="article"],article')).filter(c=>!c.parentElement?.closest('[role="article"],article')).slice(0,100);
+ const cards=Array.from(containers.list(doc)).filter(c=>!containers.owner(c.parentElement)).slice(0,100);
  const candidates=new Set();const add=node=>{if(node&&candidates.size<512)candidates.add(node);};
  const ancestors=node=>{for(let p=node,depth=0;p&&depth<32;depth++,p=p.parentElement)add(p);};
  add(root);add(doc.body);add(doc.documentElement);
@@ -342,11 +344,11 @@ function scrollContainer(w,stats=null){
 // when the chosen inner feed has reached its end. Use only ordinary DOM scrolling.
 function boundTail(w,core,group){
  const doc=w.document;
- const cards=Array.from(doc.querySelectorAll('[role="article"],article')).filter(c=>!c.parentElement?.closest('[role="article"],article'));
+ const cards=Array.from(containers.list(doc)).filter(c=>!containers.owner(c.parentElement));
  if(cards.length>100)return null;
  for(const card of cards.slice().reverse()){
  if(!card||card.isConnected===false||card.ownerDocument!==doc||typeof card.scrollIntoView!=='function'||card.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]'))continue;
- const links=Array.from(card.querySelectorAll('a[href]')).filter(a=>a.closest('[role="article"],article')===card).slice(0,100).map(a=>core.parsePostLink(a.href)).filter(Boolean);
+ const links=Array.from(card.querySelectorAll('a[href]')).filter(a=>containers.owner(a)===card).slice(0,100).map(a=>core.parsePostLink(a.href)).filter(Boolean);
  if(!links.length||links.some(l=>l.sourceType!=='GROUP'||l.sourceId!==group)||new Set(links.map(l=>l.postId)).size!==1)continue;
  return card;
  }return null;
@@ -375,11 +377,11 @@ function recoveryContainer(w,core,group){
 // 0.5.7 (40a236f) tail alignment, with the later fail-closed 100-card cap.
 function baselineTailTarget(w,core,group){
  const doc=w.document;
- const cards=Array.from(doc.querySelectorAll('[role="article"],article')).filter(c=>!c.parentElement?.closest('[role="article"],article'));
+ const cards=Array.from(containers.list(doc)).filter(c=>!containers.owner(c.parentElement));
  if(cards.length>100)return null;
  const card=cards.at(-1);
  if(!card||card.isConnected===false||card.ownerDocument!==doc||typeof card.scrollIntoView!=='function'||card.closest('[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]'))return null;
- const links=Array.from(card.querySelectorAll('a[href]')).filter(a=>a.closest('[role="article"],article')===card).slice(0,100).map(a=>core.parsePostLink(a.href)).filter(Boolean);
+ const links=Array.from(card.querySelectorAll('a[href]')).filter(a=>containers.owner(a)===card).slice(0,100).map(a=>core.parsePostLink(a.href)).filter(Boolean);
  if(!links.length||links.some(l=>l.sourceType!=='GROUP'||l.sourceId!==group)||new Set(links.map(l=>l.postId)).size!==1)return null;
  const rect=card.getBoundingClientRect();
  const vp=w.visualViewport,top=Number(vp?.offsetTop)||0,height=Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight);
@@ -404,7 +406,7 @@ const textForbidden='[role="dialog"],[role="alertdialog"],[role="comment"],[data
 function messageText(value){return typeof value==='string'?value.replace(/\r\n?/g,'\n').replace(/[^\S\n]+/gu,' ').replace(/ *\n */g,'\n').trim():'';}
 function ownMessageNodes(card){
  const nodes=card.querySelectorAll(messageSelector);if(nodes.length>30)return[];
- return Array.from(nodes).filter(n=>n.closest('[role="article"],article')===card&&!n.closest(textForbidden));
+ return Array.from(nodes).filter(n=>containers.owner(n)===card&&!n.closest(textForbidden));
 }
 function ownMessageNodeText(n,card){
  const doc=n.ownerDocument,w=doc?.defaultView;
@@ -431,7 +433,7 @@ function ownMessageText(card){
 }
 function ownCardId(card,core,group){
  const nodes=card.querySelectorAll('a[href]');if(nodes.length>100)return null;
- const anchors=Array.from(nodes).filter(a=>a.closest('[role="article"],article')===card);const links=anchors.map(a=>core.parsePostLink(a.href)).filter(Boolean);
+ const anchors=Array.from(nodes).filter(a=>containers.owner(a)===card);const links=anchors.map(a=>core.parsePostLink(a.href)).filter(Boolean);
  const ids=new Set(links.map(p=>p.postId));return links.length&&ids.size===1&&links.every(p=>p.sourceType==='GROUP'&&p.sourceId===group)&&anchors.some(a=>exact(a.href,group)===links[0].postId)?links[0].postId:null;
 }
 function disclosureLabel(raw){return messageText(raw).replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069]/gu,'').replace(/^(?:\.{3}|…)\s*|\s*(?:\.{3}|…)$/gu,'').trim().toLocaleLowerCase('pl-PL');}
@@ -450,9 +452,9 @@ function disclosureBinding(button,message,card){
 }
 // Only an explicitly consented in-place message disclosure; never follow links.
 async function expandOwnMessage(w,core,group,allowed,state,stats,active,safe){
- if(state.size>=20)return 'NONE';const nodes=w.document.querySelectorAll('[role="article"],article');if(nodes.length>100)return 'NONE';
+ if(state.size>=20)return 'NONE';const nodes=containers.list(w.document);if(nodes.length>100)return 'NONE';
  for(const card of Array.from(nodes)){
-  if(card.parentElement?.closest('[role="article"],article')||card.ownerDocument!==w.document||card.isConnected===false||card.closest(textForbidden))continue;
+  if(containers.owner(card.parentElement)||card.ownerDocument!==w.document||card.isConnected===false||card.closest(textForbidden))continue;
   const id=ownCardId(card,core,group);if(!id||!allowed.has(id)||state.has(id))continue;
   stats.textCardsBound=Math.min(10000,stats.textCardsBound+1);
   const candidates=[],messages=ownMessageNodes(card);
@@ -468,7 +470,7 @@ async function expandOwnMessage(w,core,group,allowed,state,stats,active,safe){
   const reject=()=>{stats.textExpandRejected=Math.min(10000,stats.textExpandRejected+1);};
   if(unique.length!==1){reject();continue;}const {button,message}=unique[0];
   const valid=()=>{
-   if(typeof button.click!=='function'||!safe()||w.document.hidden===true||w.document.visibilityState!=='visible'||w.document.hasFocus?.()!==true||button.isConnected===false||button.ownerDocument!==w.document||button.disabled||String(button.getAttribute?.('aria-disabled')||'').toLowerCase()==='true'||button.closest('a[href]')||button.hasAttribute?.('href')||button.closest(textForbidden)||button.closest('[role="article"],article')!==card||!disclosureBinding(button,message,card)||!ownMessageNodes(card).includes(message)||ownCardId(card,core,group)!==id)return false;
+   if(typeof button.click!=='function'||!safe()||w.document.hidden===true||w.document.visibilityState!=='visible'||w.document.hasFocus?.()!==true||button.isConnected===false||button.ownerDocument!==w.document||button.disabled||String(button.getAttribute?.('aria-disabled')||'').toLowerCase()==='true'||button.closest('a[href]')||button.hasAttribute?.('href')||button.closest(textForbidden)||containers.owner(button)!==card||!disclosureBinding(button,message,card)||!ownMessageNodes(card).includes(message)||ownCardId(card,core,group)!==id)return false;
    if(!disclosureBinding(button,message,card))return false;
    const style=w.getComputedStyle(button),r=button.getBoundingClientRect(),vp=w.visualViewport,left=vp?.offsetLeft||0,top=vp?.offsetTop||0,width=vp?.width||w.innerWidth,height=Math.min(w.innerHeight,vp?.height||w.innerHeight);
    if(style.display==='none'||/hidden|collapse/.test(style.visibility)||Number(style.opacity??1)<=0||r.width<=0||r.height<=0||r.left<left||r.top<top||r.right>left+width||r.bottom>top+height)return false;
@@ -492,10 +494,10 @@ function readDOM(w,model,core,group){
  let bytes=0;const texts=[];for(const s of Array.from(w.document.querySelectorAll('script:not([src])')).slice(0,120)){
   const t=s.textContent||'';if(!t||t.length>524288||bytes+t.length>2097152)continue;bytes+=t.length;texts.push(t);
  }model.hydration(texts);
- const cards=Array.from(w.document.querySelectorAll('[role="article"],article')).filter(c=>!c.parentElement?.closest('[role="article"],article')).slice(0,100);
+ const cards=Array.from(containers.list(w.document)).filter(c=>!containers.owner(c.parentElement)).slice(0,100);
  model.stats.articles=Math.max(model.stats.articles,cards.length);
  model.stats.mobile=Math.max(model.stats.mobile,Math.min(10000,w.document.querySelectorAll('[data-mcomponent]').length));
- for(const card of cards){const links=Array.from(card.querySelectorAll('a[href]')).filter(a=>a.closest('[role="article"],article')===card).slice(0,100).map(a=>core.parsePostLink(a.href)).filter(Boolean);
+ for(const card of cards){const links=Array.from(card.querySelectorAll('a[href]')).filter(a=>containers.owner(a)===card).slice(0,100).map(a=>core.parsePostLink(a.href)).filter(Boolean);
   const own=links.filter(l=>l.sourceType==='GROUP'&&l.sourceId===group),ids=[...new Set(own.map(l=>l.postId))];
   if(ids.length!==1||links.some(l=>l.sourceType!=='GROUP'||l.sourceId!==group)){if(ids.length)model.stats.ambiguous++;continue;}
   const text=ownMessageText(card);
@@ -571,8 +573,8 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
     if(expanded==='CONTEXT')return empty('CONTEXT');
     if(expanded&&typeof expanded==='object'){
      await pause(Math.min(150,Math.max(0,scrollEnd-w.performance.now())));if(!await active())return empty('CONTEXT');
-     const cards=w.document.querySelectorAll('[role="article"],article');if(cards.length>100)return empty('CONTEXT');
-     const current=Array.from(cards).filter(c=>c.ownerDocument===w.document&&c.isConnected!==false&&!c.parentElement?.closest('[role="article"],article')&&!c.closest(textForbidden)&&ownCardId(c,core,m.groupId)===expanded.id);
+     const cards=containers.list(w.document);if(cards.length>100)return empty('CONTEXT');
+     const current=Array.from(cards).filter(c=>c.ownerDocument===w.document&&c.isConnected!==false&&!containers.owner(c.parentElement)&&!c.closest(textForbidden)&&ownCardId(c,core,m.groupId)===expanded.id);
      if(current.length!==1)return empty('CONTEXT');
      if(ownMessageText(current[0]).length>expanded.before.length)model.stats.textExpanded++;
      readDOM(w,model,core,m.groupId);

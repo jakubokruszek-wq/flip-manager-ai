@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Isolation guard of the GeckoView POC (run from the repo root in CI):
 #  1. changes stay in Watcher, its workflow and the explicit mobile import boundary;
-#     no Radar, OLX, OFFLINE_TEST or database schema changes;
+#     no Radar, OLX or OFFLINE_TEST changes; only the explicit private diagnostics schema;
 #  2. only WatcherLink/WatcherUpload make bounded fixed-origin paired requests;
 #  3. collector-core.js is byte-identical to the base branch (reused, not forked).
 set -euo pipefail
@@ -10,7 +10,7 @@ poc="android/flip-watcher-gecko-poc"
 
 changed="$(git diff --name-only "$base"...HEAD)"
 echo "Changed files vs $base:"; echo "$changed" | sed 's/^/  /'
-outside="$(echo "$changed" | grep -v -E "^($poc/|\.github/workflows/android-gecko-poc\.yml$|app/api/collector/facebook/mobile/route\.ts$|features/collector/facebook-(mobile(\.test)?|import(\.test)?)\.ts$)" || true)"
+outside="$(echo "$changed" | grep -v -E "^($poc/|\.github/workflows/android-gecko-poc\.yml$|app/api/collector/facebook/mobile/(scan/)?route\.ts$|features/collector/facebook-(mobile(-scan)?(\.test)?|import(\.test)?)\.ts$|supabase/migrations/20261104201506_collector_mobile_scan_reports\.sql$)" || true)"
 if [ -n "$outside" ]; then echo "FAIL: files outside the POC were changed:"; echo "$outside"; exit 1; fi
 
 src="$poc/app/src/main"

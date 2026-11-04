@@ -198,3 +198,13 @@ test('automated collector retains 50 exact posts while manual preview remains at
  assert.equal(automatic.rows().length,50);assert.equal(automatic.postTexts().length,50);assert.equal(manual.rows().length,20);
  assert(automatic.rows().some(r=>r.postId==='550000000000049'));assert(!automatic.rows().some(r=>r.postId==='550000000000050'));
 });
+
+test('clickable painted message uses descendant text size rather than the background container font',()=>{
+ const text='Łódź mieszkanie 62,4m2, niski blok, balkon. Cena 368K';let comment=false;
+ const doc={defaultView:{getComputedStyle:n=>({fontSize:n===span?'30px':'15px',backgroundImage:n===panel?'linear-gradient(pink,cyan)':'none',backgroundColor:'rgba(0, 0, 0, 0)'})}};
+ const card={ownerDocument:doc,querySelectorAll:()=>[panel,message]};
+ const message={innerText:text,getBoundingClientRect:()=>({width:600,height:240}),matches:()=>true,querySelectorAll:()=>[span],closest:s=>s==='[role="article"],article'?card:comment?{}:null};
+ const span={innerText:text};
+ const panel={innerText:text,ownerDocument:doc,isConnected:true,matches:()=>false,querySelector:()=>message,closest:s=>s==='[role="article"],article'?card:s.includes('role="button"')?panel:comment?{}:null,getBoundingClientRect:()=>({width:600,height:240})};
+ const found=preview.textPosterNodes(card,'1655103482946823');assert.equal(found.length,1);assert(found[0].ready());comment=true;assert(!found[0].ready());
+});

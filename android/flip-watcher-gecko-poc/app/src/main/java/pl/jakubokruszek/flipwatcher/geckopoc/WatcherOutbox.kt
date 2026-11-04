@@ -16,15 +16,16 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /** Independent of the existing encrypted local archive and Gecko profile. No token is stored here. */
-class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1.db",null,2) {
+class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1.db",null,3) {
     override fun onCreate(db:SQLiteDatabase) {
         db.execSQL("CREATE TABLE outbox (id TEXT PRIMARY KEY, device TEXT NOT NULL, body BLOB NOT NULL, state TEXT NOT NULL DEFAULT 'pending', attempt INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0, receipt TEXT, source TEXT, post TEXT, saved_at INTEGER)")
         db.execSQL("CREATE TABLE journal (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, code TEXT NOT NULL, count INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE scans (slot TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY(slot, source))")
         db.execSQL("CREATE TABLE removed_posts (source TEXT NOT NULL, post TEXT NOT NULL, PRIMARY KEY(source,post))")
+        createReports(db)
     }
     override fun onUpgrade(db:SQLiteDatabase,old:Int,new:Int){
-        check(old==1&&new==2)
+        if(old<2){
         db.execSQL("ALTER TABLE outbox ADD COLUMN source TEXT")
         db.execSQL("ALTER TABLE outbox ADD COLUMN post TEXT")
         db.execSQL("ALTER TABLE outbox ADD COLUMN saved_at INTEGER")
@@ -42,6 +43,11 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
                     put("state",if(ready)"pending"else"quality_hold");put("next_at",0);put("attempt",0)
                 },"id=?",arrayOf(c.getString(0)))}
         }}
+        }
+        createReports(db)
+    }
+    private fun createReports(db:SQLiteDatabase){
+        db.execSQL("CREATE TABLE IF NOT EXISTS capture_reports (id TEXT PRIMARY KEY, device TEXT NOT NULL, slot TEXT NOT NULL, source TEXT NOT NULL, body BLOB NOT NULL, sent INTEGER NOT NULL DEFAULT 0)")
     }
     private fun key():SecretKey = synchronized(KEY_LOCK) {
         val store=KeyStore.getInstance("AndroidKeyStore").apply{load(null)}
@@ -105,6 +111,16 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
     fun retry(){writableDatabase.execSQL("UPDATE outbox SET state='pending',next_at=0,attempt=0 WHERE state NOT IN ('sent','deleted')")}
     fun scanned(slot:String,group:String)=readableDatabase.rawQuery("SELECT 1 FROM scans WHERE slot=? AND source=?",arrayOf(slot,group)).use{it.moveToFirst()}
     fun completeScan(slot:String,group:String){writableDatabase.execSQL("INSERT OR IGNORE INTO scans(slot,source) VALUES(?,?)",arrayOf(slot,group))}
+    /** Bounded encrypted diagnostics; never contains post bodies, photos or credentials. */
+    fun report(device:String,slot:String,source:String,report:JSONObject){
+        val id=report.getString("batchId");val bytes=report.toString().toByteArray(Charsets.UTF_8)
+        require(bytes.size<=65536)
+        writableDatabase.insertOrThrow("capture_reports",null,ContentValues().apply{put("id",id);put("device",device);put("slot",slot);put("source",source);put("body",seal(id,bytes))})
+        writableDatabase.execSQL("DELETE FROM capture_reports WHERE rowid NOT IN (SELECT rowid FROM capture_reports ORDER BY rowid DESC LIMIT 256)")
+    }
+    fun nextReport(device:String):Item?=readableDatabase.rawQuery("SELECT id,body FROM capture_reports WHERE device=? AND sent=0 ORDER BY rowid LIMIT 1",arrayOf(device)).use{if(!it.moveToFirst())null else Item(it.getString(0),open(it.getString(0),it.getBlob(1)),0)}
+    fun reportSent(id:String){writableDatabase.execSQL("UPDATE capture_reports SET sent=1 WHERE id=?",arrayOf(id))}
+    fun cycleReports(slot:String):List<JSONObject> = readableDatabase.rawQuery("SELECT id,body FROM capture_reports WHERE rowid IN (SELECT MAX(rowid) FROM capture_reports WHERE slot=? GROUP BY source)",arrayOf(slot)).use{c->buildList{while(c.moveToNext())add(JSONObject(open(c.getString(0),c.getBlob(1))))}}
     fun log(code:String,count:Int=0) {
         require(code.matches(Regex("[A-Z0-9_]{1,60}")))
         writableDatabase.insertOrThrow("journal",null,ContentValues().apply{put("at",System.currentTimeMillis());put("code",code);put("count",count)})
@@ -132,7 +148,7 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
     fun status():String=buildString {
         appendLine("quality_hold: czekają na potwierdzoną sprzedaż lub przypisane zdjęcie. deleted: usunięte dane, zachowany klucz ponowień.")
         readableDatabase.rawQuery("SELECT state,COUNT(*) FROM outbox GROUP BY state",null).use{while(it.moveToNext())appendLine("${it.getString(0)}: ${it.getInt(1)}")}
-        readableDatabase.rawQuery("SELECT at,code,count FROM journal ORDER BY id DESC LIMIT 12",null).use{while(it.moveToNext())appendLine("${java.time.Instant.ofEpochMilli(it.getLong(0))}: ${it.getString(1)} (${it.getInt(2)})")}
+        readableDatabase.rawQuery("SELECT at,code,count FROM journal ORDER BY id DESC LIMIT 12",null).use{while(it.moveToNext())appendLine("${ScanStatusText.time(it.getLong(0),java.time.ZoneId.systemDefault())}: ${it.getString(1)} (${it.getInt(2)})")}
     }
     companion object {private val KEY_LOCK=Any()}
 }

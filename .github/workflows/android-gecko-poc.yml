@@ -49,7 +49,7 @@ jobs:
       - name: Verify reused desktop property rules
         run: node android/flip-watcher-gecko-poc/scripts/desktop-fields.cjs --check
       - name: Mobile Manager contract tests
-        run: node --test features/collector/facebook-mobile.test.ts
+        run: node --test features/collector/facebook-mobile.test.ts features/collector/facebook-mobile-scan.test.ts
       - name: Preserve existing Manager records on mobile import
         run: node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/collector/facebook-import.test.ts
       - name: Existing collector-core tests (the parser the POC reuses)
@@ -500,9 +500,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  publish-tested-0576:
-    name: Publish tested Android 0.5.76
-    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-negotiable-price'
+  publish-tested-0577:
+    name: Publish tested Android 0.5.77
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-scan-evidence'
     needs: [guard, build, instrumented, verified-apk]
     runs-on: ubuntu-24.04
     permissions:
@@ -517,24 +517,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-negotiable-price --jq .object.sha)" = '${{ github.sha }}'
+          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-scan-evidence --jq .object.sha)" = '${{ github.sha }}'
           apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
           test -n "$apk_path" && test -f "$apk_path"
-          cp "$apk_path" flip-watcher-0.5.76-arm64.apk
-          unzip -p flip-watcher-0.5.76-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.76")process.exit(1)})'
-          unzip -p flip-watcher-0.5.76-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
-          sha256sum flip-watcher-0.5.76-arm64.apk > SHA256SUMS
+          cp "$apk_path" flip-watcher-0.5.77-arm64.apk
+          unzip -p flip-watcher-0.5.77-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.77")process.exit(1)})'
+          unzip -p flip-watcher-0.5.77-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
+          sha256sum flip-watcher-0.5.77-arm64.apk > SHA256SUMS
           cat > release-notes.md <<'NOTES'
-          Android 0.5.76 uzupełnia cenę i opis ofert w Watcherze.
+          Android 0.5.77 poprawia odczyt postów i pokazuje dowody pracy automatu.
 
-          - Rozpoznaje cenę w formacie „339.000 do negocjacji” bez waluty; numery telefonów, opłaty i sprzeczne kwoty nie są ceną.
-          - Przesyła treść własnego posta przypisaną do dokładnego ID grupy i posta. Komentarze i OCR nie są przedstawiane jako oryginalny opis.
-          - Zachowuje zgodność ze starszą kolejką. Nowe importy uzupełniają braki bez kasowania istniejących opisów, cen i zdjęć.
-          - Priorytet pierwszego przypisanego zdjęcia każdego posta; istniejące galerie pozostają zachowane.
-          - Automat zachowuje do 50 postów na grupę i przewija do 45 sekund; odczyt oraz zdjęcia pozostają ograniczone pamięciowo.
-          - Zachowuje automatyczny lokalny OCR i pobieranie kolorowych grafik z tekstem z 0.5.75.
+          - Rozpoznaje klikane kolorowe grafiki z dużym tekstem wewnątrz tła i własne kontenery FeedUnit.
+          - Rozróżnia cały cykl od ostatniej próby; nie oznacza braków odczytu jako udanego skanu.
+          - Raz ponawia grupy bez potwierdzonego przewijania lub zdjęć ofert; później pokazuje skan częściowy.
+          - Nowy algorytm ponownie sprawdza grupy zamiast pomijać je na podstawie ukończeń starej wersji.
+          - Przesyła prywatną diagnostykę: wersję, liczniki i ID postów, bez ich tekstów, zdjęć i danych logowania.
+          - Dziennik używa czasu telefonu. Oferty, zdjęcia, logowanie i stare klucze wysyłki pozostają zachowane.
 
-          Instaluj jako aktualizację, bez odinstalowywania. Następny skan odczyta dane z postów ponownie; sama instalacja nie tworzy brakujących danych.
-          Publikowany APK przeszedł pełne testy parsera, importu, JVM i emulatora Androida 16. Testy korzystają z lokalnych stron, nie potwierdzają dostępu do konkretnej oferty w prywatnej sesji Facebooka na telefonie.
+          Instaluj jako aktualizację, bez odinstalowywania. Testy lokalnych stron nie potwierdzają znalezienia konkretnego posta w prywatnej sesji Facebooka na telefonie. Nie zmieniono harmonogramu.
           NOTES
-          gh release create gecko-poc-0.5.76 flip-watcher-0.5.76-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.76 — cena i opis oferty' --prerelease --notes-file release-notes.md
+          gh release create gecko-poc-0.5.77 flip-watcher-0.5.77-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.77 — odczyt i diagnostyka skanu' --prerelease --notes-file release-notes.md

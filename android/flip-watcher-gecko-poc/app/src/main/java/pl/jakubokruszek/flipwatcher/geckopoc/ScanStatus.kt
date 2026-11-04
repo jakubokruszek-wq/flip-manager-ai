@@ -39,6 +39,9 @@ object ScanStatusText {
         "ANDROID_FOREGROUND_START_DENIED"->"Android odmówił uruchomienia usługi w tle."
         "ANDROID_PERMISSION_DENIED"->"Android odmówił uprawnienia potrzebnego do pracy."
         "BATCH_CONTINUE"->"Osiągnięto limit czasu partii. Pozostałe grupy czekają na kolejną próbę."
+        "SLOT_PARTIAL"->"Cykl został wykonany z brakami odczytu. Szczegóły są zachowane w diagnostyce; następny termin ponowi odczyt."
+        "CAPTURE_PARTIAL"->"Część grup nie potwierdziła przewijania, widoczności strony lub zdjęć ofert, także po ponowieniu."
+        "PAGE_HIDDEN","NO_POST_EVIDENCE","SCROLL_NOT_CONFIRMED","SALE_PHOTO_MISSING","CAPTURE_NOT_MEASURED"->"Odczyt grupy nie został potwierdzony ($code). Zaplanowano jedno ponowienie."
         "SLOT_COMPLETED"->"To okno zostało już wykonane. Automat czeka na następny termin."
         "WINDOW_NOT_DUE"->"Nowy termin skanu jeszcze nie nastąpił."
         "INTERRUPTED"->"Praca została przerwana. Zapisane wyniki i kolejka pozostają zachowane."
@@ -67,7 +70,7 @@ object ScanStatusText {
     fun time(at:Long,zone:ZoneId):String=if(at<=0)"brak" else Instant.ofEpochMilli(at).atZone(zone).format(DateTimeFormatter.ofPattern("dd.MM HH:mm:ss"))
     fun details(s:ScanState,enabled:Boolean,now:Long,next:Long,network:Boolean,notifications:Boolean,work:String,running:Boolean?,zone:ZoneId=ZoneId.systemDefault(),pendingWindow:Long=0):String=buildString {
         appendLine(title(s,enabled,now,running))
-        if(s.total>0){appendLine("Grupy ukończone: ${s.done}/${s.total}");if(s.group.isNotEmpty())appendLine("Grupa ${s.position}/${s.total}: ${s.group}")}
+        if(s.total>0){appendLine("Grupy z zakończoną próbą: ${s.done}/${s.total}");if(s.group.isNotEmpty())appendLine("Grupa ${s.position}/${s.total}: ${s.group}")}
         if(s.started>0){appendLine("Z tej próby: posty ${s.posts} • zdjęcia ${s.photos} • wysłane ${s.uploads}");appendLine("Start próby: ${time(s.started,zone)}")}
         if(s.changed>0)appendLine("Ostatnia zmiana etapu: ${time(s.changed,zone)}")
         if(s.active){
@@ -76,7 +79,7 @@ object ScanStatusText {
             else if(now-s.changed>60_000)appendLine("Etap trwa ponad minutę; aktualne potwierdzenie pracy nie oznacza znalezienia nowych postów.")
         }
         if(s.ended>0)appendLine("Koniec próby: ${time(s.ended,zone)}")
-        appendLine("Ostatni pełny skan: ${time(s.lastSuccess,zone)}")
+        appendLine("Ostatni cykl bez wykrytych braków odczytu: ${time(s.lastSuccess,zone)}")
         if(s.reason.isNotEmpty())appendLine("Powód: ${reason(s.reason)}")
         if(enabled){
             if(pendingWindow>0)appendLine("Bieżące okno: ${time(pendingWindow,zone)} — ukończenie nie zostało potwierdzone.")
@@ -138,7 +141,9 @@ object WatcherScanStatus {
         val next=AutomationPolicy.next(Instant.ofEpochMilli(now),ZoneId.systemDefault(),WatcherAutomation.schedule(context)).toEpochMilli()
         val window=AutomationPolicy.current(Instant.ofEpochMilli(now),ZoneId.systemDefault(),WatcherAutomation.schedule(context))
         val prefs=WatcherAutomation.preferences(context)
-        val due=enabled&&window.at.toEpochMilli()>=prefs.getLong("schedule_since",0)&&prefs.getString("completed_slot",null)!=window.key
-        return ScanStatusText.details(read(context),enabled,now,next,network,notifications,work,running,pendingWindow=if(due)window.at.toEpochMilli()else 0)
+        val due=enabled&&window.at.toEpochMilli()>=prefs.getLong("schedule_since",0)&&prefs.getString("completed_slot",null)!=WatcherCaptureReport.cycle(window.key)
+        val cycle=prefs.getString("capture_cycle",null)
+        val evidence=if(cycle==null)"" else WatcherOutbox(context).use{WatcherCaptureReport.summary(it.cycleReports(cycle))}
+        return (if(evidence.isEmpty())""else evidence+"\n\n")+ScanStatusText.details(read(context),enabled,now,next,network,notifications,work,running,pendingWindow=if(due)window.at.toEpochMilli()else 0)
     }
 }

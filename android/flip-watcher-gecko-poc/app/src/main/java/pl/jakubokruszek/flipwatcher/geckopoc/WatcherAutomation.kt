@@ -85,6 +85,7 @@ object WatcherAutomation {
 open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):CoroutineWorker(context,parameters) {
     internal open fun credentials(context:Context)=WatcherLink.load(context)
     internal open fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=WatcherUpload.send(credentials,item)
+    internal open fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=WatcherUpload.report(credentials,item)
     internal open fun groups(credentials:WatcherLink.Credentials)=WatcherLink.groups(credentials,verifyDevice=true)
     internal open suspend fun scan(group:WatcherGroup,progress:(String)->Unit)=BackgroundWatcherScan(applicationContext).run(group,{!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(applicationContext)},progress)
     override suspend fun doWork():Result {
@@ -110,11 +111,16 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                         val prefs=WatcherAutomation.preferences(context)
                         val window=AutomationPolicy.current(Instant.now(),ZoneId.systemDefault(),WatcherAutomation.schedule(context))
                         val requested=prefs.getString("requested_scan",null)
-                        val slot=if(requested==null)window.key else "manual/"+requested
+                        val windowKey=WatcherCaptureReport.cycle(window.key)
+                        val slot=if(requested==null)windowKey else WatcherCaptureReport.cycle("manual/"+requested)
+                        check(prefs.edit().putString("capture_cycle",slot).commit())
                         val scheduleDue=requested!=null||window.at.toEpochMilli()>=prefs.getLong("schedule_since",0)
+                        // Diagnostics retry independently and never prevent business queue delivery.
+                        repeat(3){val diagnostic=queue.nextReport(credentials.deviceId)?:return@repeat
+                            try{sendReport(credentials,diagnostic);queue.reportSent(diagnostic.id)}catch(_:Exception){return@repeat}}
                         val alreadyCompleted=requested==null&&prefs.getString("completed_slot",null)==slot
                         if(!scheduleDue&&!queue.hasDue(credentials.deviceId,System.currentTimeMillis())){WatcherScanStatus.checked(context,"WINDOW_NOT_DUE");return@withTimeout}
-                        if(alreadyCompleted&&!queue.hasDue(credentials.deviceId,System.currentTimeMillis())){WatcherScanStatus.checked(context,"SLOT_COMPLETED");return@withTimeout}
+                        if(alreadyCompleted&&!queue.hasDue(credentials.deviceId,System.currentTimeMillis())){WatcherScanStatus.checked(context,if(prefs.getBoolean("completed_capture_ok",false))"SLOT_COMPLETED"else"SLOT_PARTIAL");return@withTimeout}
                         begin()
                         suspend fun flush(){
                             repeat(220){
@@ -170,8 +176,15 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                 // Frozen independent encrypted copies survive later scans and process death.
                                 queue.enqueue(credentials.deviceId,group,result)
                             }
-                            queue.completeScan(slot,group.id)
-                            if(requested!=null)queue.completeScan(window.key,group.id)
+                            val issue=WatcherCaptureReport.issue(scanned)
+                            val prior=queue.cycleReports(slot).any{it.getString("groupId")==group.id}
+                            val evidence=WatcherCaptureReport.create(context,slot,run,group,scanned,issue)
+                            queue.report(credentials.deviceId,slot,group.id,evidence)
+                            // One bounded retry for degraded capture; do not spin forever on the same source.
+                            if(issue.isEmpty()||prior){queue.completeScan(slot,group.id);if(requested!=null)queue.completeScan(windowKey,group.id)}
+                            else{lastIssue=issue;queue.log(issue)}
+                            val diagnostic=queue.nextReport(credentials.deviceId)
+                            if(diagnostic!=null)runCatching{sendReport(credentials,diagnostic);queue.reportSent(diagnostic.id)}
                             queue.log("SCAN_SAVED",result.rows.size)
                             WatcherScanStatus.update(context,run){it.copy(done=groups.count{g->queue.scanned(slot,g.id)},posts=it.posts+result.rows.size,photos=it.photos+result.photos.size)}
                             flush()
@@ -180,21 +193,24 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                 if(e is WatcherUpload.HttpFailure&&e.status in setOf(401,403))throw e
                                 lastIssue=if(WatcherAutomation.uiVisible)"WAITING_FOR_BACKGROUND"else WatcherAutomation.errorCode(e)
                                 queue.log(lastIssue)
+                                val evidence=WatcherCaptureReport.create(context,slot,run,group,null,lastIssue)
+                                runCatching{queue.report(credentials.deviceId,slot,group.id,evidence)}
                                 WatcherScanStatus.update(context,run){it.copy(phase="PREPARING",reason=lastIssue)}
                                 // A single unavailable group cannot starve every later source.
                                 if(e.message in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA"))break
                             }
                         }
+                        val captureOk=queue.cycleReports(slot).let{r->r.size==groups.size&&r.all{it.optString("issue").isEmpty()}}
                         val allDone=groups.isNotEmpty()&&groups.all{queue.scanned(slot,it.id)}
                         if(!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(context)){
                             if(groups.isEmpty()){lastIssue="NO_ACTIVE_GROUPS";queue.log(lastIssue)}
-                            if(groups.isNotEmpty()&&groups.all{queue.scanned(window.key,it.id)})check(prefs.edit().putString("completed_slot",window.key).commit())
+                            if(groups.isNotEmpty()&&groups.all{queue.scanned(windowKey,it.id)})check(prefs.edit().putString("completed_slot",windowKey).putBoolean("completed_capture_ok",captureOk).commit())
                             if(allDone&&requested!=null&&prefs.getString("requested_scan",null)==requested)
                                 check(prefs.edit().remove("requested_scan").commit())
                         }
                         retryNeeded=!allDone&&!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(context)&&groups.isNotEmpty()&&lastIssue !in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA")
-                        val reason=when{!WatcherAutomation.enabled(context)->"AUTOMATION_DISABLED";WatcherAutomation.uiVisible->"WAITING_FOR_BACKGROUND";budgetReached->"BATCH_CONTINUE";else->lastIssue}
-                        val phase=when{!WatcherAutomation.enabled(context)->"ERROR";allDone->"DONE";WatcherAutomation.uiVisible->"WAITING_UI";budgetReached||retryNeeded->"RETRY";else->"PARTIAL"}
+                        val reason=when{!WatcherAutomation.enabled(context)->"AUTOMATION_DISABLED";WatcherAutomation.uiVisible->"WAITING_FOR_BACKGROUND";budgetReached->"BATCH_CONTINUE";allDone&&!captureOk->"CAPTURE_PARTIAL";else->lastIssue}
+                        val phase=when{!WatcherAutomation.enabled(context)->"ERROR";allDone&&captureOk->"DONE";allDone->"PARTIAL";WatcherAutomation.uiVisible->"WAITING_UI";budgetReached||retryNeeded->"RETRY";else->"PARTIAL"}
                         WatcherScanStatus.finish(context,run,phase,reason)
                     }
                     if(budgetReached||retryNeeded){if(budgetReached)queue.log("BATCH_CONTINUE");Result.retry()}else Result.success()
