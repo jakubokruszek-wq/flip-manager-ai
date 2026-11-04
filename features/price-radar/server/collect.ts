@@ -6,7 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { activeSources } from "@/features/flip-finder/server/search-source-registry";
 import { isDisabledSource, SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
 import { isRadarQualificationRejectionReason, normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
-import { activeRadarListingExternalIds, markExistingRadarListingForReview, persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
+import { markExistingRadarListingForReview, persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
 import { rejectedRadarDistrictQueueExternalIds } from "@/features/price-radar/server/radar-district-queue";
 import { rejectedRadarVerificationExternalIds } from "@/features/price-radar/server/radar-verification-queue";
 import { findRadarOwnListingConflicts } from "@/features/price-radar/own-listing-consistency";
@@ -529,10 +529,9 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
             writesInBatch += 1;
           };
           const lookupsStartedAt = Date.now();
-          const [rejectedVerificationIds, rejectedDistrictIds, activeAnalysisIds] = await Promise.all([
+          const [rejectedVerificationIds, rejectedDistrictIds] = await Promise.all([
             rejectedRadarVerificationExternalIds(supabase, input.ownerId, sourceId, batchExternalIds),
             rejectedRadarDistrictQueueExternalIds(supabase, input.ownerId, sourceId, batchExternalIds),
-            activeRadarListingExternalIds(supabase, input.ownerId, sourceId, batchExternalIds),
           ]);
           attemptMetrics.dbMs += Date.now() - lookupsStartedAt;
           let writeMs = 0;
@@ -577,13 +576,8 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
               // Automatic-only Radar: an unqualified candidate is rejected,
               // never offered as manual district/standard work. Existing saved
               // seeds may still be read again when a later source supplies proof.
-              const scopeOnlyRejection = ["price_per_sqm_below_minimum", "area_outside_selected_range", "district_not_in_selected_scope"].includes(outcome.reason);
-              if (!scopeOnlyRejection && activeAnalysisIds.has(listing.externalListingId) && !(outcome.reason === "detail_conflict" && ["oferty_net","domiporta"].includes(listing.source))) {
-                await beforeWrite();
-                await markExistingRadarListingForReview(supabase, {
-                  ownerId: input.ownerId, runId: input.runId, leaseToken: input.leaseToken, seenAt: new Date().toISOString(),
-                }, { source: listing.source, externalListingId: listing.externalListingId, issueFields: ["qualification"] }, controller.signal);
-              }
+              // A failed reread is not evidence that an accepted snapshot was invalid.
+              // Preserve its facts and sample membership; only qualified data updates it.
               batchRejectionReasons.push(outcome.reason);
               continue;
             }

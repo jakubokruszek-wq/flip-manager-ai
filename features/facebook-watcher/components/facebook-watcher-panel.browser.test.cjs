@@ -208,7 +208,7 @@ async function collectGeometry(page) {
  * nothing extra once contexts are already isolated, and would only slow the
  * suite down further).
  */
-async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode = "success" } = {}) {
+async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode = "success", listingsPayload = freshListingsPayload } = {}) {
   const context = await browser.newContext();
   const page = await context.newPage();
   await context.addCookies([{ name: "sb-127-auth-token", value: JSON.stringify(operatorSession), url: baseUrl, httpOnly: true, sameSite: "Lax" }]);
@@ -268,7 +268,7 @@ async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode 
     if (url.pathname === "/api/facebook-watcher/listings" && route.request().method() === "GET") {
       listingsRequestCount += 1;
       resolveListingsRequest();
-      return route.fulfill({ contentType: "application/json", body: JSON.stringify(freshListingsPayload()), status: 200 });
+      return route.fulfill({ contentType: "application/json", body: JSON.stringify(listingsPayload()), status: 200 });
     }
     if (url.pathname.startsWith("/api/facebook-watcher/listings/") && route.request().method() === "PATCH") {
       const request = { body: JSON.parse(route.request().postData() || "{}"), status: null };
@@ -733,6 +733,22 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     await page.locator(`#facebook-inbox-${NORMAL_ID}`).waitFor({state:"hidden"});
     await page.locator(`#facebook-inbox-${MAX_ACTIONS_ID}`).waitFor({state:"visible"});
     assert.equal(await page.locator(`#facebook-inbox-${FACEBOOK_LINK_ID}`).count(),0,"a known price above the limit is excluded while the missing value remains");
+    assertNoUnexpectedNoise(handle);
+  });
+
+  await t.test("G: three cross-group reposts render one card with duplicate count and each publication link",async(t)=>{
+    const description="Sprzedam bezpośrednio mieszkanie przy ulicy Przykładowej na Widzewie w Łodzi. Trzy ustawne pokoje, oddzielna kuchnia i balkon. Lokal posiada piwnicę, wymienione instalacje oraz wyposażenie widoczne na zdjęciach. Zapraszam do kontaktu i obejrzenia nieruchomości.";
+    const ids=[NORMAL_ID,"00000000-0000-4000-8000-000000000006","00000000-0000-4000-8000-000000000007"];
+    const handle=await setupWatcherPage(browser,baseUrl,{listingsPayload:()=>({listings:ids.map((listingId,i)=>makeListing({listingId,description,groupName:`Grupa ${i+1}`,sourcePostUrl:`https://www.facebook.com/groups/group${i+1}/posts/123456789/`}))})});
+    const {page}=handle;
+    t.after(()=>Promise.all([page.close(),handle.context.close()]));
+    await page.setViewportSize({width:360,height:800});
+    const representative=page.locator(`#facebook-inbox-${NORMAL_ID}`);
+    await representative.waitFor();
+    assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(),1);
+    await representative.getByText("Duplikaty: 2 · Powiązane publikacje (3)",{exact:true}).click();
+    for(let i=0;i<3;i++)assert.equal(await representative.locator(`a[href="https://www.facebook.com/groups/group${i+1}/posts/123456789/"]`).count()>=1,true);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth),true);
     assertNoUnexpectedNoise(handle);
   });
 
