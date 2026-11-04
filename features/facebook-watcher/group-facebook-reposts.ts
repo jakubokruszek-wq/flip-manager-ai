@@ -7,12 +7,14 @@ export function groupFacebookReposts(records: FacebookWatcherListing[]): Faceboo
   for (const item of records) {
     const target = groups.find(candidate => {
       const previous = members.get(candidate)!;
-      return previous.every(member => compatible(member,item)) && previous.some(member => sameEvidence(member,item));
+      return previous.every(member => compatible(member,item)) && previous.some(member => sameEvidence(member,item) || possibleRepost(member,item));
     });
     if (!target) { const copy={ ...item }; groups.push(copy); members.set(copy,[item]); continue; }
     const publications = [...(target.relatedPosts ?? [publication(target)]), publication(item)];
     // Keep the first result in the requested sort order; never combine photos
     // bound to separate posts or propagate a workflow decision across them.
+    const confirmed = members.get(target)!.some(member=>sameEvidence(member,item));
+    target.relatedPostMatch = target.relatedPostMatch === "possible" || !confirmed ? "possible" : "confirmed";
     target.relatedPosts = publications;
     members.get(target)!.push(item);
   }
@@ -27,7 +29,7 @@ function compatible(a: FacebookWatcherListing, b: FacebookWatcherListing): boole
   if (a.source !== "facebook" || b.source !== "facebook" || !a.price || !a.area || a.price !== b.price || a.area !== b.area) return false;
   if (a.workflowStatus !== b.workflowStatus || a.status !== b.status || a.lifecycleStatus !== b.lifecycleStatus) return false;
   for (const key of ["rooms", "floor", "city", "district", "neighborhood", "street"] as const) {
-    if (a[key] !== null && b[key] !== null && a[key] !== b[key]) return false;
+    if (a[key] != null && b[key] != null && fact(a[key],key) !== fact(b[key],key)) return false;
   }
   return true;
 }
@@ -55,4 +57,22 @@ function sameEvidence(a: FacebookWatcherListing,b: FacebookWatcherListing): bool
   if(own.length<120 || own.split(" ").length<20 || own!==text(b.description)) return false;
   return Boolean(a.city && b.city && text(a.city)===text(b.city) && a.rooms && a.rooms===b.rooms &&
     (["street","neighborhood","district"] as const).some(key=>a[key] && b[key] && text(a[key])===text(b[key])));
+}
+
+function fact(value:string|number,key:string): string|number {
+  if(typeof value!=="string")return value;
+  const normalized=value.normalize("NFKC").toLocaleLowerCase("pl").replace(/\s+/gu," ").trim();
+  // Android sometimes appends the city and the start of the advertisement
+  // to the extracted street. Do not let that suffix invent a second address.
+  return key==="street" ? normalized.replace(/\s+w łodzi\s+na sprzedaż(?:\s|$).*$/u,"") : normalized;
+}
+
+/** A reversible candidate group, explicitly NOT a confirmed property identity.
+ * Android snapshots often have no description, city or rooms and recompressed
+ * photos. Keep them together for review only when their exact price and area
+ * also share location evidence, or a fractional area and known room count. */
+function possibleRepost(a:FacebookWatcherListing,b:FacebookWatcherListing):boolean {
+  if(!compatible(a,b) || (a.description?.trim() && b.description?.trim()))return false;
+  const location=(["street","neighborhood","district"] as const).some(key=>a[key] && b[key] && fact(a[key],key)===fact(b[key],key));
+  return Boolean(location || (a.area && !Number.isInteger(a.area) && a.rooms && a.rooms===b.rooms));
 }

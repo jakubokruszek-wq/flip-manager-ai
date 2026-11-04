@@ -752,4 +752,19 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     assertNoUnexpectedNoise(handle);
   });
 
+  await t.test("H: real Android snapshots with no description render as possible duplicates with every source link",async(t)=>{
+    const ids=[NORMAL_ID,"00000000-0000-4000-8000-000000000006","00000000-0000-4000-8000-000000000007"];
+    const handle=await setupWatcherPage(browser,baseUrl,{listingsPayload:()=>({listings:ids.map((listingId,i)=>makeListing({listingId,title:"Oferta z Facebooka",price:699000,area:75,pricePerSqm:9320,description:null,city:null,district:null,neighborhood:null,rooms:null,floor:null,street:"Dębowej",groupName:null,images:[],sourcePostUrl:`https://www.facebook.com/groups/group${i+1}/posts/123456789/`}))})});
+    const {page}=handle;
+    t.after(()=>Promise.all([page.close(),handle.context.close()]));
+    await page.setViewportSize({width:360,height:800});
+    const representative=page.locator(`#facebook-inbox-${NORMAL_ID}`);
+    await representative.waitFor();
+    assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(),1);
+    await representative.getByText("Możliwe duplikaty: 2 · Powiązane publikacje (3)",{exact:true}).click();
+    for(let i=0;i<3;i++)assert.equal(await representative.locator(`a[href="https://www.facebook.com/groups/group${i+1}/posts/123456789/"]`).count()>=1,true);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth),true);
+    assertNoUnexpectedNoise(handle);
+  });
+
 });

@@ -50,3 +50,21 @@ test("short shared boilerplate and unknown location cannot join distinct homes",
   const description="Sprzedam mieszkanie. Zapraszam do kontaktu.";
   assert.equal(groupFacebookReposts([item("123456",{description}),item("234567",{description,images:[]})]).length,2);
 });
+
+test("real Android snapshot shape: null descriptions/city/rooms and recompressed photos form a clearly possible group",()=>{
+  const snapshots=["2391919654676416","29887029747566186","3001324956895261","1720514219592972"].map((id,i)=>item(id,{title:"Oferta z Facebooka",price:699000,area:75,description:null,city:null,rooms:null,floor:null,street:i===2?"Dębowej w ŁODZI Na sprzedaż przestronne":"Dębowej",images:[image(id,String(i+1).repeat(64))]}));
+  const grouped=groupFacebookReposts(snapshots);
+  assert.equal(grouped.length,1);
+  assert.equal(grouped[0].relatedPosts?.length,4);
+  assert.equal(grouped[0].relatedPostMatch,"possible","matching parameters are never presented as confirmed image identity");
+  assert.deepEqual(snapshots.map(i=>i.relatedPosts),[undefined,undefined,undefined,undefined]);
+});
+
+test("real Android fractional area and rooms can create a possible group without manufacturing location",()=>{
+  const snapshots=["123456","234567","345678"].map((id,i)=>item(id,{price:337500,area:48.24,rooms:3,city:null,description:null,images:[image(id,String(i+1).repeat(64))]}));
+  const grouped=groupFacebookReposts(snapshots);
+  assert.equal(grouped.length,1);assert.equal(grouped[0].relatedPostMatch,"possible");
+  assert.equal(grouped[0].city,null);assert.equal(grouped[0].street,null);
+  assert.equal(groupFacebookReposts([snapshots[0],{...snapshots[1],rooms:2}]).length,2);
+  assert.equal(groupFacebookReposts([snapshots[0],{...snapshots[1],workflowStatus:"crm"}]).length,2);
+});
