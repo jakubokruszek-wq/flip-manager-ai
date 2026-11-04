@@ -1035,7 +1035,7 @@ class PocActivity : ComponentActivity() {
                 text="Ustawienia Androida";setOnClickListener{startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:$packageName")))}
             })
             actions.addView(android.widget.TextView(this).apply{
-                tag="automation.status";text="Godziny: $hours\nNastępne okno: $next (czas telefonu).\n\nAutomat skanuje w tle po opuszczeniu aplikacji. Skan ręczny wymaga otwartego ekranu aplikacji. Android może opóźnić start; po wymuszonym zatrzymaniu trzeba ponownie otworzyć aplikację.\n\nOferty i przypisane miniatury trafiają do sparowanego Managera. Kolejka ponawia wysyłkę bez duplikatów. Logowanie i baza pozostają na telefonie. CAPTCHA wymaga ręcznej obsługi.\n\n"+status
+                tag="automation.status";text="Godziny: $hours\nNastępne okno: $next (czas telefonu).\n\nAutomat skanuje w tle po opuszczeniu aplikacji. Skan ręczny wymaga otwartego ekranu aplikacji. Android może opóźnić start; po wymuszonym zatrzymaniu trzeba ponownie otworzyć aplikację.\n\nOferty i przypisane miniatury trafiają do sparowanego Managera. Automat odczytuje też tekst ze zdjęć lokalnym OCR i uzupełnia brakujące dane; nie nadpisuje sprzecznych danych tekstowych. Kolejka ponawia wysyłkę bez duplikatów. Logowanie i baza pozostają na telefonie. CAPTCHA wymaga ręcznej obsługi.\n\n"+status
                 setTextIsSelectable(true)
             })
             automationStatusDialog?.dismiss();automationStatusDialog=dialog
