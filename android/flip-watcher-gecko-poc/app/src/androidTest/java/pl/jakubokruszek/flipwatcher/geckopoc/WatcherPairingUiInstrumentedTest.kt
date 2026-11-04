@@ -25,6 +25,8 @@ class WatcherPairingUiInstrumentedTest {
         assertTrue(ResultArchive(context).save(SavedResult(1,listOf(row),emptyList(),emptyList())))
         val path=File(context.noBackupFilesDir,"saved-search-v1.bin");val before=path.readBytes()
         try{ActivityScenario.launch(PocActivity::class.java).use{scenario->
+            var catalogBefore:List<WatcherGroup> = emptyList()
+            scenario.onActivity{catalogBefore=WatcherGroups.active.toList()}
             scenario.onActivity{activity->activity.findViewById<View>(android.R.id.content).findViewWithTag<Button>("poc.tool.tools").performClick()}
             scenario.onActivity{activity->activity.diagnosticsDialog!!.window!!.decorView.findViewWithTag<Button>("poc.tool.watcherConnect").performClick()}
             instrumentation.waitForIdleSync()
@@ -48,7 +50,7 @@ class WatcherPairingUiInstrumentedTest {
                 assertTrue(activity.findViewById<View>(android.R.id.content).findViewWithTag<Button>("poc.tool.open").isEnabled)
                 assertTrue(activity.findViewById<View>(android.R.id.content).findViewWithTag<Button>("poc.tool.tools").isEnabled)
             }
-            assertArrayEquals(before,path.readBytes());assertEquals(11,WatcherGroups.active.size)
+            assertArrayEquals(before,path.readBytes());assertEquals("Invalid pairing must preserve the loaded catalog, including a server-selected subset",catalogBefore,WatcherGroups.active)
         }}finally{ArchiveTestSupport.clear(context)}
     }
 }
