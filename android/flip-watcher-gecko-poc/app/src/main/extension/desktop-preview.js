@@ -164,6 +164,14 @@ function photoNodes(card,postId,group,core,audit=null){
  return result.concat(textPosterNodes(card,postId));
 }
 function domPhotos(card,postId,group,core){return photoNodes(card,postId,group,core).filter(p=>!p.item.networkRequired).map(p=>p.item);}
+// Currency-less asking prices require explicit negotiation context on their own line.
+// Dotted thousands alone may be a phone, measurement, fee or unrelated number.
+function negotiableSaleFields(f,text){
+ if(f.intent!=='SELL_PROPERTY'||f.price!==null||f.qualification==='FOREIGN_CITY'||!(f.area>=10))return f;
+ const amounts=[...text.matchAll(/^[^\p{L}\d\r\n]*(\d{2,3}(?:[. \u00a0]\d{3}){1,2})[ \t]+do[ \t]+negocjacji[ \t]*[.!]?[ \t]*$/gimu)].map(m=>Number(m[1].replace(/[. \u00a0]/g,''))).filter(n=>n>=50000&&n<=20000000);
+ const unique=[...new Set(amounts)];
+ return unique.length===1?{...f,price:unique[0],priceSource:'EXPLICIT_TOTAL'}:f;
+}
 function posterSaleFields(f,text){
  if(f.intent!=='UNKNOWN'||f.qualification==='FOREIGN_CITY'||!['EXPLICIT_TOTAL','THOUSANDS_TOTAL'].includes(f.priceSource)||!(f.price>=100000&&f.area>=10&&f.area<=500))return f;
  const t=text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/ł/g,'l').toLowerCase();
@@ -217,7 +225,7 @@ function createModel(core,fields,group){
   const path=r.__structuredDiagnostics?.structuredTextPath;
   const borrowed=layer!=='DOM'&&typeof path==='string'&&/(?:^|\.)(?:[^.]*shared[^.]*|[^.]*quoted[^.]*|crosspost[^.]*|reshare[^.]*|original_story|attached_story)(?:\.|$)/i.test(path);
   const ownText=!borrowed&&typeof r.text==='string'?r.text.slice(0,12000):'';
-  const f=posterSaleFields(fields.previewFields({postText:ownText}),ownText);
+  const f=posterSaleFields(negotiableSaleFields(fields.previewFields({postText:ownText}),ownText),ownText);
   const row={postId:r.postId,permalink:'https://www.facebook.com/groups/'+group+'/posts/'+r.postId+'/',layer,
    price:bounded(f.price,1,20000000),priceSource:bounded(f.price,1,20000000)!==null?f.priceSource:'NONE',area:bounded(f.area,1,9999),rooms:bounded(f.rooms,1,20),
    district:f.district,neighborhood:f.neighborhood,street:typeof f.street==='string'?f.street.slice(0,80):null,intent:f.intent,usable:f.usable===true,

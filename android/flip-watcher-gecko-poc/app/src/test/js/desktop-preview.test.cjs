@@ -169,3 +169,14 @@ test('coloured text crop is limited to own exact message panel, not UI comments 
  changed=true;assert(!result[0].ready());changed=false;transparent=true;assert.equal(preview.textPosterNodes(card,'1655103482946823').length,0);transparent=false;
  n.innerText='63 metry od przystanku';assert.equal(preview.textPosterNodes(card,'1655103482946823').length,0);assert.equal(preview.textPosterNodes(card,null).length,0);
 });
+
+test('Retkinia sale uses its own 339.000 negotiation line without treating phone as price',()=>{
+ const body='NA SPRZEDAŻ:\n🎯Retkinia ul. Kostki Napierskiego 7, wieżowiec\n🌳2 pokoje, 42.42m2, instalacja miedziana\n☑️ Balkon zabudowany\n☑️ 9 piętro, winda od „0”\n💰339.000 do negocjacji\n☎️888 990 888'.replaceAll('\\n','\n');
+ // The fixture uses actual line boundaries from the source post.
+ const text=body.replaceAll('\\n','\n').replaceAll('\\','');
+ const check=t=>{const m=model();m.add(record(undefined,t),'DOM');return m.rows()[0];};
+ const actual=check(text);assert.equal(actual.price,339000);assert.equal(actual.area,42.42);assert.equal(actual.rooms,2);assert.equal(actual.neighborhood,'Retkinia');
+ for(const amount of ['888 990 888','339.000','339.00 do negocjacji','339.000 EUR do negocjacji','czynsz 339.000 do negocjacji'])assert.equal(check(text.replace('💰339.000 do negocjacji',amount)).price,null,amount);
+ assert.equal(check(text+'\n💰350.000 do negocjacji').price,null);
+ assert.notEqual(check(text.replace('NA SPRZEDAŻ','DO WYNAJĘCIA')).intent,'SELL_PROPERTY');
+});
