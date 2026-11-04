@@ -31,7 +31,7 @@ object WatcherCaptureReport {
     }
     fun summary(reports:List<JSONObject>):String=buildString {
         if(reports.isEmpty())return@buildString
-        appendLine("Cały cykl tej wersji: sprawdzone grupy ${reports.size} • posty ${reports.sumOf{it.getJSONArray("posts").length()}} • zapisane zdjęcia ${reports.sumOf{r->val p=r.getJSONArray("posts");(0 until p.length()).sumOf{p.getJSONObject(it).getInt("photos")}}}")
+        appendLine("Ostatni odczyt każdej grupy w cyklu: grupy ${reports.size} • posty ${reports.sumOf{it.getJSONArray("posts").length()}} • zapisane zdjęcia ${reports.sumOf{r->val p=r.getJSONArray("posts");(0 until p.length()).sumOf{p.getJSONObject(it).getInt("photos")}}}")
         val gaps=reports.filter{it.optString("issue").isNotEmpty()}
         if(gaps.isNotEmpty())appendLine("Grupy z niepotwierdzonym odczytem: ${gaps.size}. Brak wyniku nie oznacza braku ofert.")
         append("Wersja: ${BuildConfig.VERSION_NAME}. Limit: 50 zachowanych postów na grupę, do 45 s przewijania; raport nie potwierdza odczytu całej historii Facebooka.")

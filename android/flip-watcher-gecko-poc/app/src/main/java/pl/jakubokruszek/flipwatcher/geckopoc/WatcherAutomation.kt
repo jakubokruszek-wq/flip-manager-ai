@@ -116,8 +116,8 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                         check(prefs.edit().putString("capture_cycle",slot).commit())
                         val scheduleDue=requested!=null||window.at.toEpochMilli()>=prefs.getLong("schedule_since",0)
                         // Diagnostics retry independently and never prevent business queue delivery.
-                        repeat(3){val diagnostic=queue.nextReport(credentials.deviceId)?:return@repeat
-                            try{sendReport(credentials,diagnostic);queue.reportSent(diagnostic.id)}catch(_:Exception){return@repeat}}
+                        for(attempt in 0 until 3){val diagnostic=queue.nextReport(credentials.deviceId)?:break
+                            try{sendReport(credentials,diagnostic);queue.reportSent(diagnostic.id)}catch(_:Exception){break}}
                         val alreadyCompleted=requested==null&&prefs.getString("completed_slot",null)==slot
                         if(!scheduleDue&&!queue.hasDue(credentials.deviceId,System.currentTimeMillis())){WatcherScanStatus.checked(context,"WINDOW_NOT_DUE");return@withTimeout}
                         if(alreadyCompleted&&!queue.hasDue(credentials.deviceId,System.currentTimeMillis())){WatcherScanStatus.checked(context,if(prefs.getBoolean("completed_capture_ok",false))"SLOT_COMPLETED"else"SLOT_PARTIAL");return@withTimeout}

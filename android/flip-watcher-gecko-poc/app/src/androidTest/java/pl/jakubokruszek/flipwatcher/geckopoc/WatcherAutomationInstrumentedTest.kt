@@ -188,6 +188,48 @@ class WatcherAutomationInstrumentedTest {
             assertEquals(1,saved.captureStats["pageVisible"])
         }finally{shell("input keyevent KEYCODE_WAKEUP");shell("wm dismiss-keyguard");if(wake.isHeld)wake.release();server.close()}
     }
+    @Test fun calendarIgnoresOldRevisionAndManualCycleRechecksWhileDegradedReadGetsExactlyOneRetry()=runBlocking {
+        context.deleteDatabase("watcher-outbox-v1.db")
+        val prefs=WatcherAutomation.preferences(context);val backup=prefs.all.toMap()
+        val visible=WatcherAutomation.uiVisible;val oldGroups=WatcherGroups.active.toList()
+        val catalog=context.getSharedPreferences("gecko_poc",Context.MODE_PRIVATE);val oldCatalog=catalog.getString("watcher_active_groups",null)
+        val selected=WatcherGroups.configured.take(2);assertEquals(2,selected.size)
+        val window=AutomationPolicy.current(java.time.Instant.now(),java.time.ZoneId.systemDefault(),WatcherAutomation.schedule(context))
+        val credentials=WatcherLink.Credentials(device,"fixture-unused-credential")
+        var calls=0;var degraded=false;var reports=0
+        val factory=object:androidx.work.WorkerFactory(){
+            override fun createWorker(appContext:Context,name:String,parameters:androidx.work.WorkerParameters):androidx.work.ListenableWorker =
+                object:WatcherAutomationWorker(appContext,parameters){
+                    override fun credentials(context:Context)=credentials
+                    override fun groups(credentials:WatcherLink.Credentials)=selected
+                    override fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+                    override fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item){reports++;assertFalse(item.body.contains("jpeg"))}
+                    override suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult {
+                        calls++;val value=result();val row=value.rows.single().copy(permalink=group.url+"posts/"+value.rows.single().postId+"/")
+                        return value.copy(rows=listOf(row),photos=if(degraded)emptyList()else value.photos,captureStats=DesktopProtocol.emptyStats()+mapOf("pageVisible" to 1,"scrollMoves" to 1))
+                    }
+                }
+        }
+        fun worker()=androidx.work.testing.TestListenableWorkerBuilder<WatcherAutomationWorker>(context).setWorkerFactory(factory).build()
+        try{
+            prefs.edit().putBoolean("enabled",true).putLong("schedule_since",0).putString("completed_slot",window.key).remove("requested_scan").commit();WatcherAutomation.uiVisible=false
+            WatcherOutbox(context).use{q->selected.forEach{q.completeScan(window.key,it.id)}}
+            assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork());assertEquals(2,calls);assertEquals("DONE",WatcherScanStatus.read(context).phase)
+            assertEquals(2,WatcherScanStatus.read(context).done);assertEquals(2,reports)
+            worker().doWork();assertEquals("Calendar must reuse only this revision's valid completion",2,calls)
+            prefs.edit().putString("requested_scan",java.util.UUID.randomUUID().toString()).commit()
+            worker().doWork();assertEquals("Manual request must re-read both sources",4,calls)
+            degraded=true;prefs.edit().putString("requested_scan",java.util.UUID.randomUUID().toString()).commit()
+            assertEquals(androidx.work.ListenableWorker.Result.retry(),worker().doWork());assertEquals(6,calls)
+            assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork());assertEquals(8,calls)
+            assertEquals("PARTIAL",WatcherScanStatus.read(context).phase);assertEquals("CAPTURE_PARTIAL",WatcherScanStatus.read(context).reason)
+            worker().doWork();assertEquals("Degraded sources must not spin forever",8,calls)
+        }finally{
+            WatcherAutomation.configure(context,false)
+            val edit=prefs.edit().clear();for((k,v)in backup)when(v){is String->edit.putString(k,v);is Boolean->edit.putBoolean(k,v);is Long->edit.putLong(k,v);is Int->edit.putInt(k,v)};edit.commit()
+            WatcherAutomation.uiVisible=visible;WatcherGroups.setActive(oldGroups);catalog.edit().putString("watcher_active_groups",oldCatalog).commit();context.deleteDatabase("watcher-outbox-v1.db")
+        }
+    }
     @Test fun workerDrains31QueuedOffersWhileUiVisibleAndReplaysLostReceiptWithoutDuplicates()=runBlocking {
         context.deleteDatabase("watcher-outbox-v1.db")
         val prefs=WatcherAutomation.preferences(context)
