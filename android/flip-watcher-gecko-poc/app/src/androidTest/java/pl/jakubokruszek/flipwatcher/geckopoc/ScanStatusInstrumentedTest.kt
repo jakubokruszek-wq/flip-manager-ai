@@ -39,6 +39,7 @@ class ScanStatusInstrumentedTest {
                 object:WatcherAutomationWorker(appContext,parameters){
                     override fun credentials(context:Context)=if(missingCredentials)null else this@ScanStatusInstrumentedTest.credentials
                     override fun groups(credentials:WatcherLink.Credentials)=groups
+                    override fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item){}
                     override suspend fun scan(group:WatcherGroup,progress:(String)->Unit)=scan.invoke(group,progress)
                 }
         }).build()
@@ -48,7 +49,9 @@ class ScanStatusInstrumentedTest {
         suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult {
             calls+=group.id;progress("READING")
             if(group==first&&fail){fail=false;error("GROUP_LOAD_ERROR")}
-            return SavedResult(System.currentTimeMillis(),emptyList(),emptyList(),emptyList())
+            // Measured non-offer post proves a healthy read, unlike an unmeasured empty stub.
+            val row=DesktopRow("550000000000099",group.url+"posts/550000000000099/","DOM",null,"NONE",null,null,null,null,null,"OTHER",false,0,"INTENT")
+            return SavedResult(System.currentTimeMillis(),listOf(row),emptyList(),emptyList(),captureStats=DesktopProtocol.emptyStats()+mapOf("pageVisible" to 1,"scrollMoves" to 1))
         }
         assertEquals(androidx.work.ListenableWorker.Result.retry(),worker(scan=::scan).doWork())
         val partial=WatcherScanStatus.read(context)
