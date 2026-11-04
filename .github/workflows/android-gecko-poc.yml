@@ -517,6 +517,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-negotiable-price --jq .object.sha)" = '${{ github.sha }}'
           apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
           test -n "$apk_path" && test -f "$apk_path"
           cp "$apk_path" flip-watcher-0.5.76-arm64.apk
@@ -529,6 +530,7 @@ jobs:
           - Rozpoznaje cenę w formacie „339.000 do negocjacji” bez waluty; numery telefonów, opłaty i sprzeczne kwoty nie są ceną.
           - Przesyła treść własnego posta przypisaną do dokładnego ID grupy i posta. Komentarze i OCR nie są przedstawiane jako oryginalny opis.
           - Zachowuje zgodność ze starszą kolejką. Nowe importy uzupełniają braki bez kasowania istniejących opisów, cen i zdjęć.
+          - Priorytet pierwszego przypisanego zdjęcia każdego posta; istniejące galerie pozostają zachowane.
           - Automat zachowuje do 50 postów na grupę i przewija do 45 sekund; odczyt oraz zdjęcia pozostają ograniczone pamięciowo.
           - Zachowuje automatyczny lokalny OCR i pobieranie kolorowych grafik z tekstem z 0.5.75.
 

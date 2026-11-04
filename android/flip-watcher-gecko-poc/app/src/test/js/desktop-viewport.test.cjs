@@ -109,3 +109,13 @@ test('an uncaptured post still precedes extra crops of an already captured post'
  assert.deepEqual(fresh.tiles.map(t=>t.postId),[nextId]);assert(fresh.valid());fresh.keys.forEach(k=>k.done=true);
  const extra=v.photos(h.w,core,group,nodes,slots,allowed,[],null,null,new Set([id,nextId]));assert.deepEqual(extra.tiles.map(t=>t.postId),[id]);assert.equal(extra.tiles[0].slot,1);
 });
+
+test('background first-photo mode reserves frames for later posts rather than more of one gallery',()=>{
+ const h=env(),id='550000000000091',slots=new Map();
+ const nodes=()=>[{node:h.image,item:{mediaId:'880000000000001'}},{node:h.image,item:{mediaId:'880000000000002'}}];
+ const args=[h.w,core,group,nodes,slots,new Set([id]),[],null,null,new Set([id]),false,true];
+ const first=v.photos(...args);assert.equal(first.tiles.length,1);first.keys.forEach(k=>k.done=true);
+ assert.equal(v.photos(...args),null);
+ // The same remaining gallery is still available in manual capture mode.
+ assert(v.photos(...args.slice(0,-1),false));
+});

@@ -37,6 +37,16 @@ class WatcherAutomationInstrumentedTest {
             WatcherOutbox(context).use{q->val reopened=checkNotNull(q.next(device,Long.MAX_VALUE));assertEquals(frozen.id,reopened.id);assertEquals(frozen.body,reopened.body);val body=org.json.JSONObject(reopened.body);assertEquals(2,body.getInt("version"));assertEquals(valid.postTexts.getValue(row.postId),body.getString("postText"))}
         }finally{context.deleteDatabase("watcher-outbox-v1.db")}
     }
+    @Test fun fiftyBackgroundThumbnailOwnersFitWithoutRelaxingManualOrOcrMemoryBounds(){
+        val background=DesktopThumbnails(50);val manual=DesktopThumbnails()
+        try{
+            for(i in 0..50){val id=(550000000000100L+i).toString()
+                assertEquals(i<50,background.put(id,0,android.graphics.Bitmap.createBitmap(10,10,android.graphics.Bitmap.Config.ARGB_8888)))
+                assertEquals(i<20,manual.put(id,0,android.graphics.Bitmap.createBitmap(10,10,android.graphics.Bitmap.Config.ARGB_8888)))
+            }
+            assertEquals(50,background.count);assertEquals(20,manual.count);assertTrue(background.ocrBytes<=24*1024*1024)
+        }finally{background.clear();manual.clear()}
+    }
     @Test fun fiftyBackgroundRowsStayBoundedAndEachFrozenPacketHasItsOwnDescription(){
         context.deleteDatabase("watcher-outbox-v1.db")
         try{
