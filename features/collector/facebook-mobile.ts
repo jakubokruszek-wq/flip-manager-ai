@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 export class MobileInputError extends Error {}
 export class MobileQualityError extends Error {}
 export type MobilePost = {
+  postText: string | null;
   groupId: string;
   postId: string;
   permalink: string;
@@ -22,8 +23,13 @@ export function parseMobilePost(raw: string, deviceId: string, key: string): Mob
   check(Buffer.byteLength(raw) <= 512 * 1024);
   let j: unknown;
   try { j = JSON.parse(raw); } catch { throw new MobileInputError("INVALID_JSON"); }
-  check(record(j)); fields(j, ["version", "groupId", "row", "photos"]);
-  check(j.version === 1 && typeof j.groupId === "string" && /^[A-Za-z0-9_.-]{1,100}$/.test(j.groupId));
+  check(record(j));
+  check(j.version === 1 || j.version === 2);
+  fields(j, j.version === 2 ? ["version", "groupId", "row", "photos", "postText"] : ["version", "groupId", "row", "photos"]);
+  const postText = j.version === 2 ? j.postText : null;
+  check(postText === null || typeof postText === "string" && postText.trim().length > 0 && postText.length <= 12000 && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(postText));
+  check(j.version !== 2 || typeof postText === "string");
+  check(typeof j.groupId === "string" && /^[A-Za-z0-9_.-]{1,100}$/.test(j.groupId));
   const r = j.row; check(record(r));
   fields(r, ["postId", "permalink", "layer", "price", "priceSource", "area", "rooms", "district", "neighborhood", "street", "intent", "usable", "photos", "qualification"]);
   check(typeof r.postId === "string" && /^[0-9]{5,30}$/.test(r.postId));
@@ -67,7 +73,7 @@ export function parseMobilePost(raw: string, deviceId: string, key: string): Mob
     check(valid);
     return { slot: p.slot, bytes, hash: hash(bytes) };
   });
-  return { groupId: j.groupId, postId: r.postId, permalink, price, area, rooms, location, photos };
+  return { postText: postText as string | null, groupId: j.groupId, postId: r.postId, permalink, price, area, rooms, location, photos };
 }
 
 type Dependencies = {

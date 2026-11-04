@@ -33,7 +33,7 @@ export const POST = createMobilePost({
   },
   importPost: async (device, key, post, images) => {
     const result = await importFacebookCollectorPayload(device, key, {
-      sourcePostUrl: post.permalink, title: "Oferta z Facebooka", content: null,
+      sourcePostUrl: post.permalink, title: "Oferta z Facebooka", content: post.postText,
       price: post.price, area: post.area, rooms: post.rooms, location: post.location,
       imageUrls: images, publishedAt: null, authorName: null, groupName: null,
     }, { mobileSnapshot: true, mobileSaleConfirmed: true });
