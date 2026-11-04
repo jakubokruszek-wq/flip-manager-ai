@@ -34,8 +34,21 @@ test("missing, malformed and revoked tokens cannot read the registry", async () 
 test("authentication precedes reading, no cached success on database failure", async () => {
   const order: string[] = [];
   const get = createCollectorGroupsGet({ authenticate: async () => { order.push("auth"); }, list: async () => { order.push("read"); return [group()]; }, authStatus: () => 503 });
-  const response = await get(request()); assert.equal(response.status, 200); assert.equal(response.headers.get("vary"), "Authorization");
+  const response = await get(request()); assert.equal(response.status, 200); assert.equal(response.headers.get("vary"), "Authorization, X-Watcher-Group-Protocol");
   assert.deepEqual(order, ["auth", "read"]); assert.equal((await response.json()).groups.length, 1);
   const failed = createCollectorGroupsGet({ authenticate: async () => {}, list: async () => { throw Error("SQL private"); }, authStatus: () => 503 });
   assert.deepEqual(await (await failed(request())).json(), { code: "GROUPS_UNAVAILABLE" });
+});
+
+
+test("adding FLIPERZY POLSKA cannot break the closed eleven-group Android feed",async()=>{
+  const rows=[group(),group({id:"new",sourceId:"297408205383031",url:"https://www.facebook.com/groups/297408205383031/",name:"FLIPERZY POLSKA"})];
+  const get=createCollectorGroupsGet({authenticate:async()=>{},list:async()=>rows,authStatus:()=>503});
+  const legacy=await(await get(request())).json();
+  assert.deepEqual(legacy.groups.map((g:{groupId:string})=>g.groupId),["lodzsprzedazzakupwynajem"]);
+  assert.equal(legacy.compatibility.omittedGroupCount,1);
+  const modernRequest=request();modernRequest.headers.set("x-watcher-group-protocol","2");
+  const modern=await(await get(modernRequest)).json();
+  assert.equal(modern.groups.length,2);assert.equal(modern.groups[1].groupId,"297408205383031");
+  assert.equal(modern.compatibility.omittedGroupCount,0);
 });
