@@ -15,7 +15,7 @@ object WatcherCaptureReport {
         if(s["pageVisible"]!=1)return "PAGE_HIDDEN"
         if(value.rows.isEmpty())return "NO_POST_EVIDENCE"
         if((s["scrollMoves"]?:0)==0&&value.rows.size<50)return "SCROLL_NOT_CONFIRMED"
-        if(value.rows.any{it.intent=="SELL_PROPERTY"&&value.photos.none{p->p.postId==it.postId}})return "SALE_PHOTO_MISSING"
+        if(value.rows.any{(DesktopSummary.eligible(it)||DesktopPresentation.reviewable(it))&&value.photos.none{p->p.postId==it.postId}})return "SALE_PHOTO_MISSING"
         return ""
     }
     fun create(context:Context,cycle:String,run:String,group:WatcherGroup,value:SavedResult?,issue:String):JSONObject {

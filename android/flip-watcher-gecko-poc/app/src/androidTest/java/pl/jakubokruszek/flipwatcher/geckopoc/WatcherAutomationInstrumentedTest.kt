@@ -160,6 +160,8 @@ class WatcherAutomationInstrumentedTest {
             val stats=DesktopProtocol.emptyStats().toMutableMap().apply{put("pageVisible",1);put("scrollMoves",5)}
             val value=result().copy(captureStats=stats)
             assertEquals("",WatcherCaptureReport.issue(value));assertEquals("SALE_PHOTO_MISSING",WatcherCaptureReport.issue(value.copy(photos=emptyList())))
+            val unknown=value.copy(rows=value.rows.map{it.copy(intent="UNKNOWN",qualification="NO_TEXT",usable=false)},photos=emptyList())
+            assertEquals("SALE_PHOTO_MISSING",WatcherCaptureReport.issue(unknown))
             assertEquals("PAGE_HIDDEN",WatcherCaptureReport.issue(value.copy(captureStats=stats+mapOf("pageVisible" to 0))))
             val report=WatcherCaptureReport.create(context,slot,java.util.UUID.randomUUID().toString(),group,value,"")
             WatcherOutbox(context).use{q->
