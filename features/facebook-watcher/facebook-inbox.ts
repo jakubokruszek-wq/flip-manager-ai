@@ -19,7 +19,7 @@ export const EMPTY_FACEBOOK_INBOX_FILTERS: FacebookInboxFilters = { query: "", n
 export function filterFacebookInbox(items: FacebookWatcherListing[], status: FacebookWorkflowStatus | "all", filters: FacebookInboxFilters, now = Date.now()): FacebookWatcherListing[] {
   const query = normalize(filters.query);
   return items.filter((item) => {
-    if (status !== "all" && item.workflowStatus !== status) return false;
+    if (status === "all" ? item.workflowStatus === "rejected" : item.workflowStatus !== status) return false;
     if (query && ![item.title, item.description, item.street, item.neighborhood, item.groupName].some((value) => normalize(value).includes(query))) return false;
     if (filters.neighborhood && normalize(item.neighborhood) !== normalize(filters.neighborhood)) return false;
     if (filters.district && normalize(item.district) !== normalize(filters.district)) return false;

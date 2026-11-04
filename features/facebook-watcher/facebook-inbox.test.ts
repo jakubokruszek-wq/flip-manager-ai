@@ -20,3 +20,11 @@ test("unit-price ceiling keeps missing values, includes the boundary and rejects
   assert.deepEqual(filterFacebookInbox(items,"all",{...EMPTY_FACEBOOK_INBOX_FILTERS,maxPricePerSqm:7000}).map(item=>item.listingId),["unknown","at"]);
   assert.deepEqual(filterFacebookInbox(items,"all",{...EMPTY_FACEBOOK_INBOX_FILTERS,maxPricePerSqm:7000,minArea:60}).map(item=>item.listingId),[],"other selected conditions still apply to an unknown unit price");
 });
+
+test("manual rejection disappears from the default inbox but remains recoverable in rejected",()=>{
+ const rejected={...base,listingId:"rejected",workflowStatus:"rejected" as const};
+ const finderRejected={...base,listingId:"finder-rejected",finderStatus:"REJECTED" as const};
+ assert.deepEqual(filterFacebookInbox([base,rejected,finderRejected],"all",EMPTY_FACEBOOK_INBOX_FILTERS).map(i=>i.listingId),["1","finder-rejected"]);
+ assert.deepEqual(filterFacebookInbox([base,rejected],"rejected",EMPTY_FACEBOOK_INBOX_FILTERS).map(i=>i.listingId),["rejected"]);
+ assert.equal(filterFacebookInbox([{...rejected,workflowStatus:"review"}],"all",EMPTY_FACEBOOK_INBOX_FILTERS).length,1);
+});
