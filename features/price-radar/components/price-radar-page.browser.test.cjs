@@ -573,7 +573,7 @@ test("an expired nonterminal Radar run resumes automatically in place without a 
   assert.match(automationSummary, /Sprawdzono\s+29/u);
   assert.match(automationSummary, /Zakwalifikowano\s+0/u);
   assert.match(automationSummary, /Odrzucono\s+12/u);
-  assert.match(automationSummary, /Skierowano do weryfikacji\s+6/u);
+  assert.doesNotMatch(automationSummary, /Skierowano do weryfikacji/u);
   const rejectionDetails = page.getByLabel("Powody odrzucenia ofert");
   await rejectionDetails.locator("summary").click();
   await page.getByText("brak potwierdzonej dzielnicy Łodzi · 7", { exact: false }).waitFor();
