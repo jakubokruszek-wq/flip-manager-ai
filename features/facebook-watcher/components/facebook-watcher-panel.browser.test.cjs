@@ -306,6 +306,7 @@ async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode 
     context,
     page,
     patchRequests,
+    getListingsRequestCount: () => listingsRequestCount,
     waitForPatchCount,
     setPatchMode,
     releasePendingPatches,
@@ -764,6 +765,26 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     await representative.getByText("Możliwe duplikaty: 2 · Powiązane publikacje (3)",{exact:true}).click();
     for(let i=0;i<3;i++)assert.equal(await representative.locator(`a[href="https://www.facebook.com/groups/group${i+1}/posts/123456789/"]`).count()>=1,true);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth),true);
+    assertNoUnexpectedNoise(handle);
+  });
+
+  await t.test("I: refresh and returning online update grouped counters without restarting the phone app",async(t)=>{
+    let records=[makeListing({listingId:NORMAL_ID})];
+    const handle=await setupWatcherPage(browser,baseUrl,{listingsPayload:()=>({listings:records})});
+    const {page}=handle;
+    t.after(()=>Promise.all([page.close(),handle.context.close()]));
+    const ids=[NORMAL_ID,"00000000-0000-4000-8000-000000000006","00000000-0000-4000-8000-000000000007"];
+    records=ids.map((listingId,i)=>makeListing({listingId,price:699000,area:75,description:null,city:null,rooms:null,street:"Dębowej",images:[],sourcePostUrl:`https://www.facebook.com/groups/group${i+1}/posts/123456789/`}));
+    await page.getByRole("button",{name:"Odśwież oferty",exact:true}).click();
+    await page.getByText("Oferty: 1 · Publikacje: 3 · Powtórki: 2",{exact:true}).waitFor();
+    assert.match(await page.getByRole("navigation",{name:"Status ofert Facebook"}).getByRole("button",{name:/Wszystkie/}).innerText(),/Wszystkie\s*1/u);
+    await page.getByText("Ostatnie pobranie:",{exact:false}).waitFor();
+    records=[...records,makeListing({listingId:FACEBOOK_LINK_ID,price:400000,area:52})];
+    const before=handle.getListingsRequestCount();
+    await page.evaluate(()=>{window.dispatchEvent(new Event("online"));window.dispatchEvent(new Event("focus"));});
+    await page.getByText("Oferty: 2 · Publikacje: 4 · Powtórki: 2",{exact:true}).waitFor();
+    assert.equal(handle.getListingsRequestCount(),before+1,"simultaneous foreground/network events share one refresh");
+    assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(),2);
     assertNoUnexpectedNoise(handle);
   });
 
