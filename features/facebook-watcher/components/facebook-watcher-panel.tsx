@@ -180,6 +180,7 @@ function FilterControls({filters,listings,setFilters}:{filters:FacebookInboxFilt
     <NumberFilter label="Powierzchnia min. (m²)" value={filters.minArea??null} onChange={value=>update("minArea",value)}/>
     <NumberFilter label="Powierzchnia maks. (m²)" value={filters.maxArea??null} onChange={value=>update("maxArea",value)}/>
     <NumberFilter label="Maks. cena za m² (PLN)" value={filters.maxPricePerSqm} onChange={value=>update("maxPricePerSqm",value)}/>
+    <p className="text-xs text-muted-foreground">Przy limicie zł/m² oferty bez ceny za m² pozostają widoczne.</p>
     <fieldset className="min-w-0"><legend className="mb-1 text-xs text-muted-foreground">Pokoje</legend><div className="flex flex-wrap gap-2">{[1,2,3,4,5,6].map(room=><label key={room} className="flex min-h-11 items-center gap-1 rounded-lg border px-2 text-sm"><input type="checkbox" checked={filters.roomOptions?.includes(room)??false} onChange={()=>setFilters(current=>({...current,rooms:null,roomOptions:current.roomOptions?.includes(room)?current.roomOptions.filter(value=>value!==room):[...(current.roomOptions??[]),room]}))}/>{room}</label>)}</div></fieldset>
     <NumberFilter label="Piętro minimalne" value={filters.minFloor??null} onChange={value=>update("minFloor",value)}/>
     <NumberFilter label="Piętro maksymalne" value={filters.maxFloor??null} onChange={value=>update("maxFloor",value)}/>

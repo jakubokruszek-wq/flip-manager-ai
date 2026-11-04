@@ -5,11 +5,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { activeSources } from "@/features/flip-finder/server/search-source-registry";
 import { isDisabledSource, SCHEMA_READY_SOURCE_IDS } from "@/features/flip-finder/source-availability";
-import { assessRadarDistrictOnlyCandidate, isRadarQualificationRejectionReason, normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
+import { isRadarQualificationRejectionReason, normalizeRadarQualificationRejections, qualifyRadarCandidate, recordRadarQualificationRejection } from "@/features/price-radar/qualification";
 import { activeRadarListingExternalIds, markExistingRadarListingForReview, persistRadarListing } from "@/features/price-radar/server/persist-radar-listing";
-import { radarDistrictQueueFailureWarning, rejectedRadarDistrictQueueExternalIds, upsertPendingDistrictCandidate } from "@/features/price-radar/server/radar-district-queue";
-import { createRadarDistrictAiBudget } from "@/features/price-radar/server/radar-district-ai";
-import { applyRadarVerificationDecision, confirmedRadarVerificationDecisions, isReviewableRadarVerificationCandidate, rejectedRadarVerificationExternalIds, upsertPendingRadarVerificationCandidate } from "@/features/price-radar/server/radar-verification-queue";
+import { rejectedRadarDistrictQueueExternalIds } from "@/features/price-radar/server/radar-district-queue";
+import { rejectedRadarVerificationExternalIds } from "@/features/price-radar/server/radar-verification-queue";
 import { findRadarOwnListingConflicts } from "@/features/price-radar/own-listing-consistency";
 import { fetchRadarQueuedDetails } from "@/features/flip-finder/external-source-adapters";
 import { RADAR_BACKLOG_SOURCES, readRadarVerificationBacklog } from "./radar-verification-backlog";
@@ -412,7 +411,6 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
   };  // One shared cap on AI district-suggestion calls for this whole portion
   // (not per candidate) -- bounds cost/latency the same way the portion's
   // own time budget already bounds a single invocation's work.
-  const districtAiBudget = createRadarDistrictAiBudget();
   // Independent portals (different hosts) run in a small pool of lanes; one
   // portal is never read by two lanes and its own requests stay sequential,
   // so no portal sees more traffic than before. All lanes share this run's
@@ -521,8 +519,6 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           emittedBatches = true;
           const batchRejectionReasons = [...(batch.rejectionReasons ?? [])];
           let batchQualified = 0;
-          let batchVerificationQueued = 0;
-          let batchDistrictQueued = 0;
           const batchExternalIds = batch.listings.map((listing) => listing.externalListingId);
           let writesInBatch = 0;
           // The batch start was just checked; before every further write in
@@ -533,8 +529,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
             writesInBatch += 1;
           };
           const lookupsStartedAt = Date.now();
-          const [verificationDecisions, rejectedVerificationIds, rejectedDistrictIds, activeAnalysisIds] = await Promise.all([
-            confirmedRadarVerificationDecisions(supabase, input.ownerId, sourceId, batchExternalIds),
+          const [rejectedVerificationIds, rejectedDistrictIds, activeAnalysisIds] = await Promise.all([
             rejectedRadarVerificationExternalIds(supabase, input.ownerId, sourceId, batchExternalIds),
             rejectedRadarDistrictQueueExternalIds(supabase, input.ownerId, sourceId, batchExternalIds),
             activeRadarListingExternalIds(supabase, input.ownerId, sourceId, batchExternalIds),
@@ -543,8 +538,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           let writeMs = 0;
           let qualifyMs = 0;
           for (const sourceListing of batch.listings) {
-            const manualDecision = verificationDecisions.get(sourceListing.externalListingId);
-            const listing = manualDecision ? applyRadarVerificationDecision(sourceListing, manualDecision) : sourceListing;
+            const listing = sourceListing;
             controller.signal.throwIfAborted();
             if (userTerminationDetected) throw new Error(RADAR_TERMINATED_BY_USER);
             if (operatorStopDetected) throw new Error(RADAR_STOPPED_BY_OPERATOR);
@@ -557,7 +551,7 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
               propertyType: typeof listing.rawPayload.propertyType === "string" ? listing.rawPayload.propertyType : null,
               rawPayload: listing.rawPayload, contentHash: listing.contentHash,
             };
-            const outcome = qualifyRadarCandidate(qualificationCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1, manualDecision, checkpoint.searchCriteria?.minPricePerSqm, checkpoint.searchCriteria?.districts, checkpoint.searchCriteria?.areaMin, checkpoint.searchCriteria?.areaMax);
+            const outcome = qualifyRadarCandidate(qualificationCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1, undefined, checkpoint.searchCriteria?.minPricePerSqm, checkpoint.searchCriteria?.districts, checkpoint.searchCriteria?.areaMin, checkpoint.searchCriteria?.areaMax);
             qualifyMs += Date.now() - qualifyStartedAt;
             const writeStartedAt = Date.now();
             try {
@@ -580,54 +574,15 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
                   ownerId: input.ownerId, runId: input.runId, leaseToken: input.leaseToken, seenAt: new Date().toISOString(),
                 }, { source: listing.source, externalListingId: listing.externalListingId, issueFields: conflicts }, controller.signal);
               }
-              const verificationInput = {
-                listing,
-                reason: outcome.reason,
-                detailUnconfirmedFields: isRecord(listing.rawPayload.detailEvidence) && Array.isArray(listing.rawPayload.detailEvidence.unconfirmedFields)
-                  ? listing.rawPayload.detailEvidence.unconfirmedFields.filter((field): field is string => typeof field === "string") : [],
-                detailContradictoryFields: Array.isArray(listing.rawPayload.detailContradictions)
-                  ? listing.rawPayload.detailContradictions.filter((field): field is string => typeof field === "string") : [],
-                seenAt: new Date().toISOString(),
-              };
-              const isReviewable = isReviewableRadarVerificationCandidate(verificationInput);
-              // A listing already represented by an active row in the comparison analysis must
-              // never be queued again for manual review -- that would just duplicate a decision
-              // the operator already made (or never needed to make) for the same listing.
-              if (isReviewable && activeAnalysisIds.has(listing.externalListingId)) {
-                batchRejectionReasons.push("already_in_analysis");
-                continue;
-              }
-              // A candidate missing ONLY its district (every other criterion
-              // already confirmed) goes to the manual district-assignment
-              // queue instead of a dead-end rejection count -- it is an
-              // actionable item for the operator, not a failure. Anything
-              // that would still fail on a different ground (building,
-              // market, finish, rental, ...) keeps its normal rejection
-              // reason and is never queued.
-              if (outcome.reason === "district_not_confirmed") {
-                const districtAssessment = assessRadarDistrictOnlyCandidate(qualificationCandidate, checkpoint.searchCriteria?.qualityRulesVersion ?? 1, checkpoint.searchCriteria?.minPricePerSqm, checkpoint.searchCriteria?.districts, checkpoint.searchCriteria?.areaMin, checkpoint.searchCriteria?.areaMax);
-                if (districtAssessment.eligible) {
-                  await beforeWrite();
-                  const queueResult = await upsertPendingDistrictCandidate(supabase, input.ownerId, {
-                    source: listing.source, externalListingId: listing.externalListingId, originalUrl: listing.originalUrl, normalizedUrl: listing.normalizedUrl,
-                    title: listing.title, description: listing.description, price: listing.price!, area: listing.area!, rooms: listing.rooms,
-                    city: listing.city!, contentHash: listing.contentHash, crossSourceIdentity: listing.crossSourceIdentity ?? null,
-                    publishedAt: listing.publishedAt ?? null, sourceUpdatedAt: sourceDate(listing.rawPayload, ["updatedAt", "modifiedAt", "updated_at", "modified_at"]),
-                    rawPayload: listing.rawPayload,
-                  }, districtAssessment.confirmed, new Date().toISOString(), districtAiBudget);
-                  if (!queueResult.ok) {
-                    recordRadarSourceWarnings(checkpoint, sourceId, [radarDistrictQueueFailureWarning(queueResult.reason)]);
-                  } else batchDistrictQueued += 1;
-                  continue;
-                }
-              }
-              if (isReviewable) {
+              // Automatic-only Radar: an unqualified candidate is rejected,
+              // never offered as manual district/standard work. Existing saved
+              // seeds may still be read again when a later source supplies proof.
+              const scopeOnlyRejection = ["price_per_sqm_below_minimum", "area_outside_selected_range", "district_not_in_selected_scope"].includes(outcome.reason);
+              if (!scopeOnlyRejection && activeAnalysisIds.has(listing.externalListingId) && !(outcome.reason === "detail_conflict" && ["oferty_net","domiporta"].includes(listing.source))) {
                 await beforeWrite();
-                const queueResult = await upsertPendingRadarVerificationCandidate(supabase, input.ownerId, verificationInput, districtAiBudget);
-                if (!queueResult.ok) recordRadarSourceWarnings(checkpoint, sourceId, [queueResult.reason === "schema_unavailable"
-                  ? "RADAR_VERIFICATION_QUEUE_UNAVAILABLE: kolejka wymaga lokalnego draftu 20261012130000_add_price_radar_verification_queue.sql"
-                  : "RADAR_VERIFICATION_QUEUE_SAVE_FAILED: kandydat nie został zapisany do weryfikacji"]);
-                if (queueResult.ok) { batchVerificationQueued += 1; continue; }
+                await markExistingRadarListingForReview(supabase, {
+                  ownerId: input.ownerId, runId: input.runId, leaseToken: input.leaseToken, seenAt: new Date().toISOString(),
+                }, { source: listing.source, externalListingId: listing.externalListingId, issueFields: ["qualification"] }, controller.signal);
               }
               batchRejectionReasons.push(outcome.reason);
               continue;
@@ -672,8 +627,6 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
           }
           const sourceRejectedCount = Object.values(batch.sourceRejectionCounts ?? sourceRejectionCountsFromWarnings(batch.warnings)).reduce((sum, count) => sum + (Number.isFinite(count) && count > 0 ? count : 0), 0);
           if (typeof checkpoint.rejectedCount === "number") checkpoint.rejectedCount += batchRejectionReasons.length + sourceRejectedCount;
-          if (typeof checkpoint.verificationQueuedCount === "number") checkpoint.verificationQueuedCount += batchVerificationQueued;
-          if (typeof checkpoint.districtQueuedCount === "number") checkpoint.districtQueuedCount += batchDistrictQueued;
           recordRadarSourceWarnings(checkpoint, sourceId, batch.warnings);
           addSourceRejectionCounts(checkpoint, sourceId, batch.sourceRejectionCounts ?? {});
           if (batch.diagnostics?.length) appendDetailDiagnostics(checkpoint, sourceId, batch.diagnostics);

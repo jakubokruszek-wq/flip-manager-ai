@@ -22,7 +22,7 @@ const districtQueueAssignments = [];
 const districtQueueRejections = [];
 function defaultFilters() { return { districts, market: "both", areaMin: null, areaMax: null, rooms: [], sources: [], minPricePerSqm: null, automaticScanEnabled: true, automaticScanTime: "05:00" }; }
 function listing(id, marketType) {
-  return { id, source: id === "radar-olx" ? "olx" : "domiporta", externalListingId: id, originalUrl: `https://example.test/${id}`, normalizedUrl: `https://example.test/${id}`, title: `Mieszkanie ${marketType} w bloku — Łódź, ${id}`, description: "Pełny opis źródłowy.", price: 450000, area: 50, pricePerSqm: 9000, rooms: 2, city: "Łódź", district: "Bałuty", buildingType: "blok", marketType, renovationStatus: marketType === "primary" ? "turnkey_finish" : "fresh_renovation", contentHash: id, firstSeenAt: "2026-10-01T00:00:00.000Z", lastSeenAt: "2026-10-08T10:00:00.000Z", publishedAt: "2026-10-07T12:00:00.000Z", sourceUpdatedAt: null, collectedAt: "2026-10-08T10:00:00.000Z", crossSourceIdentity: null, crossSourceAlternates: [], status: "active", excludedAt: null, excludedReason: null };
+  return { id, source: id === "radar-olx" ? "olx" : "domiporta", externalListingId: id, originalUrl: `https://example.test/${id}`, normalizedUrl: `https://example.test/${id}`, title: `Mieszkanie ${marketType} w bloku — Łódź, ${id}`, description: marketType === "primary" ? "Mieszkanie wykończone pod klucz, gotowe do zamieszkania." : "Mieszkanie świeżo po generalnym remoncie, gotowe do zamieszkania.", price: 450000, area: 50, pricePerSqm: 9000, rooms: 2, city: "Łódź", district: "Bałuty", buildingType: "blok", marketType, renovationStatus: marketType === "primary" ? "turnkey_finish" : "fresh_renovation", contentHash: id, firstSeenAt: "2026-10-01T00:00:00.000Z", lastSeenAt: "2026-10-08T10:00:00.000Z", publishedAt: "2026-10-07T12:00:00.000Z", sourceUpdatedAt: null, collectedAt: "2026-10-08T10:00:00.000Z", crossSourceIdentity: null, crossSourceAlternates: [], status: "active", excludedAt: null, excludedReason: null };
 }
 function results(filters, excluded = false) {
   if (showDistrictAssignedOffer) {
@@ -51,7 +51,7 @@ function results(filters, excluded = false) {
       originalUrl: "https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-teofilw-45m2-2-pokoje-419000-pln-fb,1543068412",
       normalizedUrl: "https://www.oferty.net/mieszkanie-na-sprzedaz-bauty-teofilw-45m2-2-pokoje-419000-pln-fb,1543068412",
       title: "Mieszkanie na sprzedaż — Łanowa, Teofilów, Bałuty, Łódź",
-      description: "45 m², 2 pokoje, blok. Rynek wtórny. Generalny remont, lokal niezamieszkany po remoncie, gotowy do wprowadzenia. Także pod wynajem.",
+      description: "45 m², 2 pokoje, blok. Rynek wtórny. Świeżo po generalnym remoncie, gotowy do wprowadzenia.",
       price: 419000, area: 45, pricePerSqm: 419000 / 45, rooms: 2, city: "Łódź", district: "Bałuty",
       crossSourceIdentity: null, crossSourceAlternates: [],
     };
@@ -83,12 +83,12 @@ async function waitForServer(url) {
   throw new Error("Radar browser test server did not become ready");
 }
 
-test("real Radar page persists settings, separates markets, excludes/restores listings, and has no horizontal overflow", { timeout: 600_000 }, async (t) => {
+test("automatic Radar persists settings, separates markets, hides discarded listings, and has no horizontal overflow", { timeout: 600_000 }, async (t) => {
   showDistrictAssignedOffer = false;
   districtQueueState = { available: false, pending: [], assigned: [], rejected: [] };
   districtQueueAssignments.length = 0;
   districtQueueRejections.length = 0;
-  let verificationQueueState={available:true,pending:[],confirmed:[],rejected:[]};
+  const verificationQueueState={available:true,pending:[],confirmed:[],rejected:[]};
   const port = await freePort();
   const authPort = await freePort();
   const root = path.resolve(__dirname, "../../..");
@@ -240,7 +240,6 @@ test("real Radar page persists settings, separates markets, excludes/restores li
     return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ message: "unexpected Radar request" }) });
   });
 
-  const initialDistrictQueueRead = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/price-radar/district-queue" && response.request().method() === "GET");
   await page.goto(`http://127.0.0.1:${port}/price-radar`, { waitUntil: "domcontentloaded" });
   const selectPortalAndWaitForSave = async (name) => { const saved = page.waitForResponse((response) => response.url().includes("/api/price-radar/settings") && response.request().method() === "PUT"); await page.getByRole("button", { name }).click(); await saved; };
   await page.getByRole("heading", { name: "Radar cen po remoncie", level: 1 }).waitFor();
@@ -266,10 +265,6 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   await page.getByLabel("Automatyczny skan").check();
   await enabledSaved;
   assert.equal(savedFilters.automaticScanEnabled, true);
-  const queueRead = await initialDistrictQueueRead;
-  assert.equal(queueRead.status(), 200, `the dashboard reads queue availability; requests=${JSON.stringify(requests)}`);
-  await page.getByText(/Kolejka przypisania dzielnicy jest niedostępna/u).waitFor();
-  assert.match(await page.getByText(/Kolejka przypisania dzielnicy jest niedostępna/u).innerText(), /20261011154631_add_radar_district_queue\.sql/u, "the UI states exactly which unapplied migration blocks this queue instance");
   await page.getByText("Mieszkanie secondary w bloku", { exact: false }).waitFor();
   await page.getByText("Mieszkanie primary w bloku", { exact: false }).waitFor();
   assert.equal(await page.locator("a[href^='https://example.test/']").count(), 3, "the confirmed cross-source group retains both concrete portal links");
@@ -316,9 +311,11 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   assert.ok(await page.getByText("Mieszkanie secondary w bloku", { exact: false }).count(), "the confirmed group remains visible when filtering by its alternate source");
 
   await page.getByRole("button", { name: "Wyklucz z porównań" }).first().click();
-  await page.getByText(/Wykluczone z porównań/).waitFor();
+  await page.getByRole("heading",{name:"Oferty w próbie (0)"}).waitFor();
+  assert.equal(await page.getByText(/Wykluczone z porównań/).count(),0,"discarded rows do not remain visible");
   assert.ok(requests.some((request) => request.path === "/api/price-radar/exclude" && request.method === "POST"));
-  await page.getByRole("button", { name: "Przywróć do porównań" }).first().click();
+  excluded=false;
+  await page.reload({waitUntil:"domcontentloaded"});
   await page.getByRole("button", { name: "Wyklucz z porównań" }).first().waitFor();
 
   failNextSave = true;
@@ -339,13 +336,8 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   showConflictingOfertyNetOffer = true;
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByRole("heading", { name: "Oferty w próbie (0)" }).waitFor();
-  await page.getByText("Do weryfikacji · poza próbą A/B (1)").waitFor();
-  await page.getByText("Wymaga weryfikacji · poza próbą A/B").waitFor();
-  await page.getByText("Sprzeczne dane: metraż, piętro, lokalizacja.", { exact: false }).waitFor();
-  assert.equal(await page.getByText("Średnia zł/m²").count(), 0, "a visible unresolved offer does not create an A/B statistic group");
-  assert.equal(await page.getByRole("heading", { name: "Oferty w próbie (1)" }).count(), 0, "an offer outside the A/B sample must not inflate the qualified-sample count");
-  await page.getByText("0 mieszkań · brak ceny referencyjnej", { exact: false }).waitFor();
-  assert.equal(await page.getByText("Niewystarczająca próba").count(), 1, "a genuinely empty current sample is an explicit, reportable zero, not a silently blank section");
+  assert.equal(await page.getByText("Wymaga weryfikacji · poza próbą A/B").count(),0);
+  assert.equal(await page.getByRole("heading",{name:"Mieszkanie na sprzedaż — Zawiszy Czarnego, Bałuty-Doły, Łódź"}).count(),0,"an unresolved source snapshot cannot be displayed");
   showConflictingOfertyNetOffer = false;
   savedFilters.sources = ["gratka"];
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -398,33 +390,7 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   assert.ok((await selectedSourceLinks.evaluateAll((links) => links.map((link) => link.href))).includes("https://example.test/radar-domiporta"));
   assert.ok((await selectedSourceLinks.evaluateAll((links) => links.map((link) => link.href))).includes("https://example.test/radar-gratka"));
 
-  const queueItem = (id) => ({
-    id, source: "domiporta", externalListingId: `candidate-${id}`, originalUrl: `https://example.test/${id}`, normalizedUrl: `https://example.test/${id}`,
-    title: `Oferta do przypisania ${id}`, description: "Blok na Teofilowie.", price: 419000, area: 45, pricePerSqm: 419000 / 45, rooms: 2,
-    city: "Łódź", buildingType: "blok", marketType: "secondary", renovationStatus: "fresh_renovation", qualityCategory: "fresh_renovation",
-    firstSeenAt: "2026-10-11T10:00:00.000Z", lastSeenAt: "2026-10-11T10:00:00.000Z", publishedAt: null, sourceUpdatedAt: null,
-    collectedAt: "2026-10-11T10:00:00.000Z", status: "pending", suggestedDistrict: "Bałuty", suggestionSource: "ai",
-    suggestionEvidence: "Opis zawiera nazwę Teofilów.", assignedDistrict: null, assignedAt: null, rejectedAt: null,
-  });
-  districtQueueState = { available: true, pending: [queueItem("queue-assign"), queueItem("queue-reject")], assigned: [], rejected: [] };
-  await page.reload({ waitUntil: "domcontentloaded" });
-  await page.getByRole("heading", { name: "Do przypisania dzielnicy (2)" }).waitFor();
-  await page.getByText(/Podpowiedź \(AI\): Bałuty.*Teofilów/u).first().waitFor();
-  await page.getByRole("button", { name: "Odrzuć" }).first().click();
-  await page.getByRole("heading", { name: "Do przypisania dzielnicy (1)" }).waitFor();
-  await page.getByText("Odrzucone z kolejki dzielnic (1)").waitFor();
-  assert.deepEqual(districtQueueRejections.at(-1), { queueId: "queue-assign", rejected: true }, "operator rejection is an explicit queue write");
-  await page.getByRole("button", { name: "Przywróć do kolejki" }).click();
-  await page.getByRole("heading", { name: "Do przypisania dzielnicy (2)" }).waitFor();
-  await page.locator("#district-queue-select-queue-assign").selectOption("Widzew");
-  await page.locator("article").filter({ hasText: "Oferta do przypisania queue-assign" }).getByRole("button", { name: "Dodaj do porównań" }).click();
-  await page.getByRole("heading", { name: "Kandydat przypisany z kolejki dzielnic" }).waitFor();
-  await page.getByRole("heading", { name: "Do przypisania dzielnicy (1)" }).waitFor();
-  await page.getByText("1 mieszkanie · brak ceny referencyjnej", { exact: false }).waitFor();
-  assert.deepEqual(districtQueueAssignments, [{ queueId: "queue-assign", district: "Widzew" }], "operator chose one of the allowed districts; the AI suggestion was not applied automatically");
-  assert.deepEqual(districtQueueRejections, [{ queueId: "queue-assign", rejected: true }, { queueId: "queue-assign", rejected: false }], "the UI supports rejection and explicit restore without assignment");
-  assert.equal(await page.getByText("Do weryfikacji · poza próbą A/B (0)").count(), 0, "the assigned candidate is reloaded through the results API instead of only moving its queue badge");
-  assert.deepEqual(blockedExternalRequests, [], "the isolated browser never contacts a portal or remote Supabase");
+  assert.equal(requests.some(request=>request.path.includes("-queue")),false,"automatic Radar does not request manual verification or district queues");
   const runPosts = () => requests.filter((request) => request.path === "/api/price-radar/run" && request.method === "POST");
   assert.equal(runPosts().length, 0, "viewing and refreshing the page never starts or resumes a collection run");
 
@@ -502,21 +468,8 @@ test("real Radar page persists settings, separates markets, excludes/restores li
   assert.deepEqual(runPosts().at(-1)?.body, { action: "start_new" }, "a terminal run with the old stop marker starts explicitly instead of trying to resume its ID");
   assert.equal(radarRun.id, "radar-new-after-terminal-run", "the explicit start creates a distinct run ID");
   assert.equal(await page.getByText(/The requested Radar run is no longer resumable/u).count(), 0, "starting a new run clears the stale resumability error");
-  const assessedItem=(id,category,priority)=>({
-    id,source:"otodom",externalListingId:id,originalUrl:`https://example.test/${id}`,title:`Ocena standardu ${id}`,status:"pending",firstSeenAt:"2026-11-03T10:00:00Z",lastSeenAt:"2026-11-03T11:00:00Z",decision:null,decisionAt:null,rejectedAt:null,
-    snapshot:{description:"Opis testowy",price:450000,pricePerSqm:9000,area:50,rooms:2,city:"Łódź",district:"Górna",buildingType:"blok",marketType:"secondary",qualityCategory:null,publishedAt:null,sourceUpdatedAt:null,collectedAt:null,sourceHttpStatus:200,finalUrl:null,sourceIdentity:null,confirmedFields:["total_price","area","rooms"],missingFields:["standard"],contradictoryFields:[],fieldEvidence:{},routingReasons:[],suggestedDistrict:null,suggestionEvidence:null,automaticStandardAssessment:{version:"2026-11-03.1",category,priority,label:`Ocena ${category}`,reason:"Ocena opisu nie potwierdza całej oferty."}},
-  });
-  verificationQueueState={available:true,pending:[assessedItem("positive","ready_high_standard",3),assessedItem("planned","needs_work",0),assessedItem("missing","insufficient",1)],confirmed:[],rejected:[]};
-  await page.reload({waitUntil:"networkidle"});
-  await page.getByText("Automatyczna ocena standardu: 3/3 opisów").waitFor();
-  assert.equal(await page.getByRole("heading",{name:"Ocena standardu positive",exact:true}).count(),1);
-  assert.equal(await page.getByRole("heading",{name:"Ocena standardu planned",exact:true}).count(),0,"default view prioritizes finished-standard candidates without deleting planned-work rows");
-  await page.getByRole("button",{name:"Prace planowane / wymagane (1)",exact:true}).click();
-  await page.getByRole("heading",{name:"Ocena standardu planned",exact:true}).waitFor();
-  assert.equal(await page.getByRole("heading",{name:"Ocena standardu positive",exact:true}).count(),0);
-  await page.getByRole("button",{name:"Wszystkie (3)",exact:true}).click();
-  assert.equal(await page.getByRole("heading",{name:/^Ocena standardu /}).count(),3);
-  assert.equal(await page.locator("article").filter({hasText:"Ocena standardu positive"}).getByRole("button",{name:"Potwierdź i dodaj do porównań"}).isDisabled(),true,"automatic text assessment does not silently pre-confirm the operator form");
+  assert.equal(await page.getByText(/Do weryfikacji danych i standardu/).count(),0);
+  assert.equal(await page.getByRole("button",{name:"Potwierdź i dodaj do porównań"}).count(),0);
 
 });
 
@@ -620,7 +573,7 @@ test("an expired nonterminal Radar run resumes automatically in place without a 
   assert.match(automationSummary, /Sprawdzono\s+29/u);
   assert.match(automationSummary, /Zakwalifikowano\s+0/u);
   assert.match(automationSummary, /Odrzucono\s+12/u);
-  assert.match(automationSummary, /Skierowano do weryfikacji\s+6/u);
+  assert.doesNotMatch(automationSummary, /Skierowano do weryfikacji/u);
   const rejectionDetails = page.getByLabel("Powody odrzucenia ofert");
   await rejectionDetails.locator("summary").click();
   await page.getByText("brak potwierdzonej dzielnicy Łodzi · 7", { exact: false }).waitFor();

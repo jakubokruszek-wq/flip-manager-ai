@@ -35,7 +35,7 @@ export function filterFacebookInbox(items: FacebookWatcherListing[], status: Fac
     if (filters.excludeTopFloor && (item.floor === null || item.totalFloors === null || item.floor >= item.totalFloors)) return false;
     if (filters.marketType && filters.marketType !== "all" && item.marketType !== filters.marketType) return false;
     if (filters.maxPrice !== null && (item.price === null || item.price > filters.maxPrice)) return false;
-    if (filters.maxPricePerSqm !== null && (item.pricePerSqm === null || item.pricePerSqm > filters.maxPricePerSqm)) return false;
+    if (filters.maxPricePerSqm !== null && item.pricePerSqm !== null && item.pricePerSqm > filters.maxPricePerSqm) return false;
     if (filters.rooms !== null && item.rooms !== filters.rooms) return false;
     if (filters.minFlipScore !== null && item.flipScore < filters.minFlipScore) return false;
     if (filters.minOpportunityScore !== null && item.opportunityScore < filters.minOpportunityScore) return false;
