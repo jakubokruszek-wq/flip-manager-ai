@@ -41,7 +41,7 @@ const listing = (id: string, price: number) => ({
   address: null,
   description: "Oferta testowa",
   original_url: null,
-  images: [],
+  images: ["https://storage.test/property.jpg"],
   status: "active",
   source: "facebook",
   flip_score: 50,
@@ -152,4 +152,10 @@ test("a group slug captured as group_name is replaced by the registered human na
   const result = await listFacebookWatcher();
   assert.equal(result[0]?.groupName, "Łódź Mieszkania Sprzedaż");
   knownGroups = [];
+});
+
+test("a server-verified duplicate key survives the actual Watcher projection",async()=>{
+  rows=[{source_post_url:"https://facebook.com/groups/test/posts/123456789/",metadata:{listingIntent:"SELL_PROPERTY",confirmedDuplicateGroupId:"verified-pair"},listings:{...listing("same-property",299000),images:["https://storage.test/field.jpg"]}}];
+  const result=await listFacebookWatcher();
+  assert.equal(result.length,1);assert.equal(result[0].confirmedDuplicateGroupId,"verified-pair");
 });

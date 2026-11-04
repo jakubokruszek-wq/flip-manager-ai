@@ -68,3 +68,10 @@ test("real Android fractional area and rooms can create a possible group without
   assert.equal(groupFacebookReposts([snapshots[0],{...snapshots[1],rooms:2}]).length,2);
   assert.equal(groupFacebookReposts([snapshots[0],{...snapshots[1],workflowStatus:"crm"}]).length,2);
 });
+
+
+test("verified pair with integer area and no location forms one confirmed card without deleting sources",()=>{
+ const posts=["123456","234567"].map((id,i)=>item(id,{price:299000,area:60,rooms:3,city:null,street:null,description:null,confirmedDuplicateGroupId:"verified-pair",images:[image(id,String(i+1).repeat(64))]}));
+ const grouped=groupFacebookReposts(posts);assert.equal(grouped.length,1);assert.equal(grouped[0].relatedPosts?.length,2);assert.equal(grouped[0].relatedPostMatch,"confirmed");
+ assert.equal(groupFacebookReposts([posts[0],{...posts[1],price:999000}]).length,2,"a key never overrides conflicting facts");
+});

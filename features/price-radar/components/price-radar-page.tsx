@@ -1,4 +1,5 @@
 "use client";
+import { radarAccessRestriction, radarAccessLabel, radarCooldownUntil } from "../source-access";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "@/lib/api-fetch";
@@ -597,7 +598,7 @@ export function PriceRadarPage() {
         <div className="min-w-0">
           <h2 className="font-semibold">Zbieranie Radaru</h2>
           <p className="mt-1 break-words text-sm text-muted-foreground">{run ? `${runActivity.status} · ${run.scannedCount} sprawdzonych · ${run.qualifiedCount} zakwalifikowanych · start ${formatDate(run.startedAt)} · czas ${formatDuration(run.startedAt, run.finishedAt ?? run.userTerminatedAt, clockNow)}` : "Brak uruchomionego przebiegu."}</p>
-          {run?.sourceErrors && Object.keys(run.sourceErrors).length > 0 ? <ul className="mt-2 space-y-1 text-xs text-destructive">{Object.entries(run.sourceErrors).map(([source, message]) => <li className="break-words" key={source}>{source}: {message}</li>)}</ul> : null}
+          {run?.sourceErrors && Object.keys(run.sourceErrors).length > 0 ? <div className="mt-2 space-y-2"><ul className="space-y-1 text-xs text-muted-foreground">{Object.entries(run.sourceErrors).map(([source,message])=><li className="break-words" key={source}><strong>{radarSourceLabel(source)}:</strong> {radarAccessLabel(message)}{radarCooldownUntil(message)?` Ponowna próba nie wcześniej niż ${formatDate(radarCooldownUntil(message))}.`:null}</li>)}</ul><details className="text-xs" aria-label="Diagnostyka błędów źródeł"><summary className="cursor-pointer">Szczegóły techniczne źródeł</summary><ul>{Object.entries(run.sourceErrors).map(([source,message])=><li className="break-words" key={source}>{source}: {message}</li>)}</ul></details></div> : null}
           {run?.sourceRejectionCounts && Object.keys(run.sourceRejectionCounts).length > 0 ? <details aria-label="Odrzucone kandydatury źródeł" className="mt-2 text-xs"><summary className="cursor-pointer font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Odrzucone kandydatury według źródła</summary><ul className="mt-2 space-y-1 text-muted-foreground">{Object.entries(run.sourceRejectionCounts).map(([source, counts]) => { const reasons = Object.entries(counts).filter((entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0); return reasons.length ? <li className="break-words" key={source}><span className="font-semibold">{radarSourceLabel(source)}:</span> {reasons.map(([reason, count]) => `${sourceRejectionLabel(reason)} · ${count}`).join("; ")}</li> : null; })}</ul></details> : null}
           {run?.checkpoint?.progress?.metrics ? <RadarPerformanceDetails run={run} now={clockNow} /> : null}
           {run?.sourceWarnings && Object.values(run.sourceWarnings).some((warnings) => warnings.length > 0) ? <details aria-label="Uwagi i pokrycie źródeł" className="mt-2 text-xs"><summary className="cursor-pointer font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary">Uwagi źródeł i zakres wyszukiwania</summary><ul className="mt-2 space-y-1 text-muted-foreground">{Object.entries(run.sourceWarnings).map(([source, warnings]) => warnings.length ? <li className="break-words" key={source}><span className="font-semibold">{radarSourceLabel(source)}:</span> {warnings.map(sourceWarningLabel).join("; ")}</li> : null)}</ul></details> : null}
@@ -797,6 +798,11 @@ function radarWaitingLabel(run: RunStatus | null): string {
 }
 
 function radarSourceBaseActivityLabel(run: RunStatus, source: string, status: string, now: number): string {
+  const message=run.sourceErrors[source]??"";
+  const cooldown=radarCooldownUntil(message);
+  if(cooldown)return `przerwa do ${formatDate(cooldown)}`;
+  if(status==="failed"&&radarAccessRestriction(message)==="access")return "portal blokuje dostęp";
+  if(status==="failed"&&radarAccessRestriction(message)==="rate_limit")return "limit zapytań (429)";
   if (status !== "running") return ({ pending: "oczekuje", completed: "ukończono", partial: "częściowe pokrycie", failed: "błąd terminalny" } as Record<string, string>)[status] ?? "nieznany";
   if (source === "olx") {
     if (run.olxJobStatus === "queued") return "oczekuje na worker";

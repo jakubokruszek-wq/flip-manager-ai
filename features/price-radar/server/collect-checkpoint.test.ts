@@ -51,6 +51,7 @@ function fakeDb() {
         eq: (key: string, value: unknown) => { filters.push((row) => row[key] === value); return builder; },
         in: (key: string, values: unknown[]) => { filters.push((row) => values.includes(row[key])); return builder; },
         order: () => builder,
+        range: () => builder,
         maybeSingle: async () => ({ data: rows.find((row) => filters.every((filter) => filter(row))) ?? null, error: null }),
         insert: (value: Row) => { op = "insert"; payload = value; return builder; },
         single: async () => {

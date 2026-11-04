@@ -1642,3 +1642,16 @@ test("automatic Radar preserves accepted sample facts through an incomplete rere
   }
   assert.equal(db.tables.price_radar_listings.length,1,"re-verification updates one retained source identity");
 });
+
+test("new runs do not hit a recently blocked portal while other portals continue",async()=>{
+  const db=fakeDb({runs:[{id:"previous",owner_id:ownerId,status:"partial",finished_at:new Date().toISOString(),started_at:new Date(Date.now()-60000).toISOString(),source_statuses:{adresowo:"failed"},checkpoint:{sourceErrors:{adresowo:"HTTP 403 CAPTCHA_OR_ACCESS_DENIED"}}}]});
+  const calls:string[]=[];
+  fakeSourceImpl=async id=>{calls.push(id);return {listings:[],warnings:[],fetched:0};};
+  const claim=await claimOrCreateRadarRun(ownerId,["adresowo","domiporta"],db as never);
+  if(claim.kind!=="claimed")throw Error("expected claim");
+  const result=await runRadarCollectionPortion({runId:claim.run.id,ownerId,leaseToken:claim.run.leaseToken!},db as never);
+  assert.deepEqual(calls,["domiporta"]);
+  assert.equal(result.sourceStatuses.adresowo,"partial");
+  assert.equal(result.sourceStatuses.domiporta,"completed");
+  assert.match(result.sourceErrors.adresowo,/SOURCE_COOLDOWN_UNTIL:/);
+});

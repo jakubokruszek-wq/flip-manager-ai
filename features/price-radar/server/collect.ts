@@ -1,5 +1,6 @@
 import "server-only";
 
+import { radarSourceCooldown } from "../source-access";
 import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -348,6 +349,19 @@ export async function runRadarCollectionPortion(input: { runId: string; ownerId:
   if (run.leaseToken !== input.leaseToken) throw new Error("RADAR_LEASE_LOST");
 
   const checkpoint = run.checkpoint;
+  if(!checkpoint.sourceCooldownChecked){
+    const recent=await supabase.from("price_radar_runs").select("finished_at,checkpoint,source_statuses").eq("owner_id",input.ownerId).order("started_at",{ascending:false}).range(0,19);
+    if(recent.error)throw new Error("RADAR_SOURCE_COOLDOWN_READ_FAILED");
+    for(const source of checkpoint.sourceQueue){
+      if(checkpoint.sourceStatuses[source]!=="pending")continue;
+      const cooldown=radarSourceCooldown(Array.isArray(recent.data)?recent.data:[],source);
+      if(!cooldown)continue;
+      checkpoint.sourceStatuses[source]="partial";
+      checkpoint.perSourceCursor[source]=SOURCE_DONE_CURSOR;
+      checkpoint.sourceErrors[source]=`SOURCE_COOLDOWN_UNTIL:${cooldown.until} | ${cooldown.reason}`;
+    }
+    checkpoint.sourceCooldownChecked=true;
+  }
   let scanned = run.scannedCount;
   let qualified = run.qualifiedCount;
   const controller = new AbortController();
