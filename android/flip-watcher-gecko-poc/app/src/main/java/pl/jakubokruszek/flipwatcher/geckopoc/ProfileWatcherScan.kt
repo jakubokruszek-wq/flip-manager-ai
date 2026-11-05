@@ -70,7 +70,11 @@ class ProfileWatcherScan(private val context:Context){
                 // Match the proven group reader: consume the cold initial page and
                 // read a fresh desktop document before the first bound pixel crop.
                 val previousGeneration=channel.connectionGeneration
+                val framesBeforeReload=checkNotNull(surface).renderedFrames
                 ready=false;browser.reload();awaitDocument(previousGeneration)
+                val renderUntil=android.os.SystemClock.elapsedRealtime()+5000
+                while(live()&&checkNotNull(surface).renderedFrames<=framesBeforeReload&&android.os.SystemClock.elapsedRealtime()<renderUntil)delay(50)
+                check(live()&&checkNotNull(surface).renderedFrames>framesBeforeReload){stop?:"PROFILE_RENDER_NOT_READY"}
                 val expected=checkNotNull(current);val generation=channel.connectionGeneration;browser.setActive(true);browser.setFocused(true);val nonce=UUID.randomUUID().toString();reading=true
                 fun bound()=live()&&current==expected&&channel.connectionGeneration==generation&&channel.connectedUrl==expected
                 channel.viewportBridge=DesktopViewportBridge(checkNotNull(surface),nonce,images,::bound,background=true,profile=true)
@@ -83,7 +87,7 @@ class ProfileWatcherScan(private val context:Context){
                 val photos=rows.flatMap{row->images.rows(row.postId).mapIndexed{slot,b->ResultArchive.photo(row.postId,slot,false,b)}}
                 val counters=checkNotNull(channel.viewportBridge).captureCounts
                 val keys=listOf("profileCaptureAttempts","profileCaptureInactive","profileCaptureAspect","profileCaptureFrame","profileCaptureLate","profileCaptureError","profileCapturePending","profileCaptureCommitted")
-                SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,reply.postTexts,reply.stats+keys.mapIndexed{i,key->key to counters[i]}.toMap())
+                SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,reply.postTexts,reply.stats+keys.mapIndexed{i,key->key to counters[i]}.toMap()+mapOf("profileRenderedFrames" to checkNotNull(surface).renderedFrames))
             }finally{runCatching{channel.close()};runCatching{surface?.close()};images.clear();runCatching{browser.stop()};runCatching{browser.setActive(false)};runCatching{browser.close()}}
         }
     }

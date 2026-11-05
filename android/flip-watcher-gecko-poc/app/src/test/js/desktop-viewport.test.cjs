@@ -119,3 +119,11 @@ test('background first-photo mode reserves frames for later posts rather than mo
  // The same remaining gallery is still available in manual capture mode.
  assert(v.photos(...args.slice(0,-1),false));
 });
+
+test('profile transport waits for a late native rejection before retry while group deadlines remain unchanged',async()=>{
+ const times=[],disconnects=[],port={postMessage:()=>{},onMessage:{addListener:()=>{}},onDisconnect:{addListener:f=>disconnects.push(f)}};
+ const w={crypto:{randomUUID:()=>requestId},setTimeout:(_f,ms)=>{times.push(ms);return 1;},clearTimeout:()=>{}};
+ for(const [action,timeout,expected] of [['photos',undefined,3500],['photos',8000,8000],['photos',999999,3500],['commit',8000,1000]]){
+  const bus=v.transport(port,w),promise=bus.request({type:'desktopViewportRequest',nonce,action},timeout);assert.equal(times.at(-1),expected);disconnects.at(-1)();assert.equal(await promise,null);
+ }
+});

@@ -122,7 +122,7 @@ async function run(w,m,fields,preview,send){
       return hit&&!hit.closest(forbidden+',header,nav,aside,[role="menu"]')&&(hit===n||n.contains(hit)||root.FlipDesktopViewport.delegatedHit(w,n,hit,cx,cy));
      });};
     if(!stable()){stats.photoOccluded++;continue;}
-    const saved=await capturePhoto(request,{action:'photos',width,height,tiles:[{postId:id,slot:0,x,y,width:right-x,height:bottom-y}]},stable,ms=>new Promise(resolve=>w.setTimeout(resolve,ms)),()=>live()&&w.performance.now()<end-3500);
+    const saved=await capturePhoto(request,{action:'photos',width,height,tiles:[{postId:id,slot:0,x,y,width:right-x,height:bottom-y}]},stable,ms=>new Promise(resolve=>w.setTimeout(resolve,ms)),()=>live()&&w.performance.now()<end-8500);
     if(saved){captured.add(id);stats.photoPreviewFrames++;stats.photoPreviews++;stats.photoSelected++;break;}
    }
   }

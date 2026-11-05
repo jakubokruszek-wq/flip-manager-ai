@@ -457,7 +457,7 @@
     if(message.type==='profilePreview'){
       if(desktopRunning){port.postMessage({type:'profilePreviewResult',nonce:message.nonce,sourceId:message.sourceId,status:'STOP',reason:'BUSY',rows:[],postTexts:[],stats:scope.FlipDesktopPreview.zero()});return;}
       desktopRunning=true;
-      try{const result=await scope.FlipProfileReader.run(scope,message,scope.FlipDesktopFields,scope.FlipDesktopPreview,m=>viewportTransport.request(m));port.postMessage({type:'profilePreviewResult',nonce:message.nonce,...result});}
+      try{const result=await scope.FlipProfileReader.run(scope,message,scope.FlipDesktopFields,scope.FlipDesktopPreview,m=>viewportTransport.request(m,8000));port.postMessage({type:'profilePreviewResult',nonce:message.nonce,...result});}
       finally{viewportTransport.clear();desktopRunning=false;}return;
     }
     if(message.type==='desktopPreview'){

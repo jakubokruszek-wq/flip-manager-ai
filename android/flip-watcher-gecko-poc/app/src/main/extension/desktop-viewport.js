@@ -11,8 +11,8 @@ function transport(port,w){
   const p=pending.get(m.requestId);if(!p||m.nonce!==p.nonce||Object.keys(m).sort().join(',')!=='accepted,count,nonce,requestId,type'||typeof m.accepted!=='boolean'||!Number.isInteger(m.count)||m.count<0||m.count>3)return;
   pending.delete(m.requestId);w.clearTimeout(p.timer);p.resolve(m);
  });
- return {clear,request(m){if(pending.size||!uuid.test(m.nonce||''))return Promise.resolve(null);
-  const requestId=w.crypto.randomUUID();return new Promise(resolve=>{const timer=w.setTimeout(()=>{pending.delete(requestId);resolve(null);},m.action==='photos'?3500:1000);pending.set(requestId,{resolve,timer,nonce:m.nonce});try{port.postMessage({...m,requestId});}catch{clear();}});
+ return {clear,request(m,photoWaitMs=3500){if(pending.size||!uuid.test(m.nonce||''))return Promise.resolve(null);
+  const requestId=w.crypto.randomUUID();return new Promise(resolve=>{const timer=w.setTimeout(()=>{pending.delete(requestId);resolve(null);},m.action==='photos'&&photoWaitMs===8000?8000:m.action==='photos'?3500:1000);pending.set(requestId,{resolve,timer,nonce:m.nonce});try{port.postMessage({...m,requestId});}catch{clear();}});
  }};
 }
 function cards(w,core,group){

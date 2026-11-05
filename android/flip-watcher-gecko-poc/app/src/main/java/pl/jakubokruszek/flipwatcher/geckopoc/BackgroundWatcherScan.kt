@@ -100,9 +100,10 @@ internal class BackgroundViewport(private val browser:GeckoSession):WatcherViewp
     override val width=1080
     override val height=1920
     private var closed=false
+    @Volatile internal var renderedFrames:Int=0;private set
     private val thread=HandlerThread("watcher-render").apply{start()}
     private val reader=ImageReader.newInstance(width,height,PixelFormat.RGBX_8888,2).apply{
-        setOnImageAvailableListener({reader->runCatching{reader.acquireLatestImage()?.close()}},Handler(thread.looper))
+        setOnImageAvailableListener({reader->runCatching{reader.acquireLatestImage()?.let{image->renderedFrames=(renderedFrames+1).coerceAtMost(100_000_000);image.close()}}},Handler(thread.looper))
     }
     private val display=browser.acquireDisplay().apply{surfaceChanged(GeckoDisplay.SurfaceInfo.Builder(reader.surface).size(width,height).build())}
     override val isShown get()=!closed
