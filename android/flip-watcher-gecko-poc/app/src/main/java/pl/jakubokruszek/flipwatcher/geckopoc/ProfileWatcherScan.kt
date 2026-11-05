@@ -15,8 +15,8 @@ import java.util.UUID
 /** Independent PROFILE reader. It cannot arm group-network grants or infer owner from a name. */
 class ProfileWatcherScan(private val context:Context){
     suspend fun run(source:WatcherGroup,alive:()->Boolean,progress:(String)->Unit={}):SavedResult=runTarget(source,source.url,false,alive,progress)
-    internal suspend fun runFixture(source:WatcherGroup,target:String,alive:()->Boolean):SavedResult{require(URI(target).host=="127.0.0.1");return runTarget(source,target,true,alive)}
-    private suspend fun runTarget(source:WatcherGroup,target:String,fixture:Boolean,alive:()->Boolean,progress:(String)->Unit={}):SavedResult=withContext(Dispatchers.Main){
+    internal suspend fun runFixture(source:WatcherGroup,target:String,forceSurfaceRefresh:Boolean=false,alive:()->Boolean):SavedResult{require(URI(target).host=="127.0.0.1");return runTarget(source,target,true,alive,forceSurfaceRefresh=forceSurfaceRefresh)}
+    private suspend fun runTarget(source:WatcherGroup,target:String,fixture:Boolean,alive:()->Boolean,progress:(String)->Unit={},forceSurfaceRefresh:Boolean=false):SavedResult=withContext(Dispatchers.Main){
         require(source.type=="PROFILE")
         withTimeout(if(fixture)300_000 else 180_000){
             val browser=GeckoSession();val channel=CollectorChannel(browser,fixtureMode=fixture);val images=DesktopThumbnails(50,profile=true)
@@ -72,11 +72,24 @@ class ProfileWatcherScan(private val context:Context){
                 val previousGeneration=channel.connectionGeneration
                 val framesBeforeReload=checkNotNull(surface).renderedFrames
                 ready=false;browser.reload();awaitDocument(previousGeneration)
+                val expected=checkNotNull(current);val generation=channel.connectionGeneration
+                fun bound()=live()&&ready&&current==expected&&channel.connectionGeneration==generation&&channel.connectedUrl==expected
                 val renderUntil=android.os.SystemClock.elapsedRealtime()+5000
-                while(live()&&checkNotNull(surface).renderedFrames<=framesBeforeReload&&android.os.SystemClock.elapsedRealtime()<renderUntil)delay(50)
-                check(live()&&checkNotNull(surface).renderedFrames>framesBeforeReload){stop?:"PROFILE_RENDER_NOT_READY"}
-                val expected=checkNotNull(current);val generation=channel.connectionGeneration;browser.setActive(true);browser.setFocused(true);val nonce=UUID.randomUUID().toString();reading=true
-                fun bound()=live()&&current==expected&&channel.connectionGeneration==generation&&channel.connectedUrl==expected
+                while(bound()&&checkNotNull(surface).renderedFrames<=framesBeforeReload&&android.os.SystemClock.elapsedRealtime()<renderUntil)delay(50)
+                var surfaceResets=0
+                var rendered=!forceSurfaceRefresh&&checkNotNull(surface).renderedFrames>framesBeforeReload
+                if(bound()&&!rendered){
+                    // A background compositor can retain an idle render target after reload.
+                    // Reattach once; only a real frame delivered to this NEW surface is proof.
+                    checkNotNull(surface).close();surface=BackgroundViewport(browser);surfaceResets++
+                    browser.setActive(true);browser.setFocused(true)
+                    val freshUntil=android.os.SystemClock.elapsedRealtime()+5000
+                    while(bound()&&checkNotNull(surface).renderedFrames==0&&android.os.SystemClock.elapsedRealtime()<freshUntil)delay(50)
+                    rendered=checkNotNull(surface).renderedFrames>0
+                }
+                check(bound()){stop?:"PROFILE_CONTEXT_REJECTED"}
+                check(rendered){"PROFILE_RENDER_RETRY_FAILED"}
+                browser.setActive(true);browser.setFocused(true);val nonce=UUID.randomUUID().toString();reading=true
                 channel.viewportBridge=DesktopViewportBridge(checkNotNull(surface),nonce,images,::bound,background=true,profile=true)
                 progress("READING");val reply=checkNotNull(channel.profilePreview(nonce,source,expected)){"PROFILE_PROTOCOL"};check(bound()){stop?:"PROFILE_CONTEXT_REJECTED"}
                 val rows=BackgroundPosterOcr.run(reply.rows,::bound,{images.ocrRows(it).size},
@@ -87,7 +100,7 @@ class ProfileWatcherScan(private val context:Context){
                 val photos=rows.flatMap{row->images.rows(row.postId).mapIndexed{slot,b->ResultArchive.photo(row.postId,slot,false,b)}}
                 val counters=checkNotNull(channel.viewportBridge).captureCounts
                 val keys=listOf("profileCaptureAttempts","profileCaptureInactive","profileCaptureAspect","profileCaptureFrame","profileCaptureLate","profileCaptureError","profileCapturePending","profileCaptureCommitted")
-                SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,reply.postTexts,reply.stats+keys.mapIndexed{i,key->key to counters[i]}.toMap()+mapOf("profileRenderedFrames" to checkNotNull(surface).renderedFrames))
+                SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,reply.postTexts,reply.stats+keys.mapIndexed{i,key->key to counters[i]}.toMap()+mapOf("profileRenderedFrames" to checkNotNull(surface).renderedFrames,"profileSurfaceResets" to surfaceResets))
             }finally{runCatching{channel.close()};runCatching{surface?.close()};images.clear();runCatching{browser.stop()};runCatching{browser.setActive(false)};runCatching{browser.close()}}
         }
     }

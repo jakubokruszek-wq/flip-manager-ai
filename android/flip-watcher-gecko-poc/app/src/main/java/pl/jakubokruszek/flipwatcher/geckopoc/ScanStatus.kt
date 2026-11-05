@@ -33,6 +33,7 @@ object ScanStatusText {
         "CHECKPOINT","CAPTCHA"->"Facebook wymaga ręcznego potwierdzenia lub CAPTCHA."
         "NETWORK_UNAVAILABLE","NETWORK_TIMEOUT"->"Nie udało się połączyć z siecią. Automat ponowi próbę."
         "PROFILE_LOAD_ERROR","PROFILE_NOT_READY","GROUP_LOAD_ERROR","GROUP_NOT_READY"->"Strona źródła nie załadowała się poprawnie."
+        "PROFILE_RENDER_RETRY_FAILED"->"Po jednokrotnym odtworzeniu powierzchni profilu nadal nie potwierdzono nowej klatki. Posty nie zostały odczytane."
         "SCAN_NO_CONSENT_OR_CONTEXT"->"Facebook nie potwierdził strony wybranej grupy (widoczności, logowania lub dostępu). To nie jest wynik odczytu postów."
         "WATCHER_SOURCES_INVALID","WATCHER_GROUPS_INVALID"->"Manager zwrócił nieprawidłową listę grup. Zapisane oferty i logowanie pozostają zachowane."
         "WATCHER_DEVICE_MISMATCH"->"Dane połączonego urządzenia nie zgadzają się z odpowiedzią Managera. Połącz ponownie Watchera."

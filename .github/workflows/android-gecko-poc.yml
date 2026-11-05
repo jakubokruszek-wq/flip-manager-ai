@@ -506,9 +506,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  publish-tested-0583:
-    name: Publish tested Android 0.5.83
-    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-batch-continuation'
+  publish-tested-0584:
+    name: Publish tested Android 0.5.84
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-profile-surface'
     needs: [guard, build, instrumented, verified-apk]
     runs-on: ubuntu-24.04
     permissions:
@@ -523,23 +523,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-batch-continuation --jq .object.sha)" = '${{ github.sha }}'
+          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-profile-surface --jq .object.sha)" = '${{ github.sha }}'
           apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
           test -n "$apk_path" && test -f "$apk_path"
-          cp "$apk_path" flip-watcher-0.5.83-arm64.apk
-          unzip -p flip-watcher-0.5.83-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.83")process.exit(1)})'
-          unzip -p flip-watcher-0.5.83-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
-          sha256sum flip-watcher-0.5.83-arm64.apk > SHA256SUMS
+          cp "$apk_path" flip-watcher-0.5.84-arm64.apk
+          unzip -p flip-watcher-0.5.84-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.84")process.exit(1)})'
+          unzip -p flip-watcher-0.5.84-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
+          sha256sum flip-watcher-0.5.84-arm64.apk > SHA256SUMS
           cat > release-notes.md <<'NOTES'
-          Android 0.5.83 poprawia wznawianie kolejnych partii skanu.
+          Android 0.5.84 dodaje naprawę zatrzymanego renderowania profili.
 
-          - Koniec partii planuje nowe zadanie po 30 sekundach, zamiast zwiększać opóźnienie jak przy awarii zadania.
-          - Zachowuje cykl, zapisane wyniki, kursor i potwierdzone próby źródeł.
-          - Ekran postępu pokazuje plan wznowienia oraz przycisk „Wznów tę samą próbę teraz”. Android może opóźnić zaplanowany start.
-          - Powrót aplikacji do tła nie anuluje już działającego zadania startowego.
-          - Prawdziwe awarie połączenia nadal korzystają z ponowień Androida. Niepotwierdzony odczyt pozostaje częściowy.
-          - Zachowuje odczyt postów, zdjęć i OCR oraz wymaganie sprzedaży nieruchomości z rzeczywistym zdjęciem.
+          - Po braku świeżej klatki profilu jednokrotnie odtwarza powierzchnię renderowania. Nadal wymaga nowej rzeczywistej klatki z aktualnego dokumentu.
+          - Nieudana próba ma osobny komunikat PROFILE_RENDER_RETRY_FAILED. Nie jest uznawana za odczyt postów ani brak ofert.
+          - Zachowuje weryfikację właściciela profilu, przypisanie zdjęcia do posta i lokalny OCR.
+          - Zawiera poprawkę 0.5.83: kolejne partie mają osobne zadania planowane po 30 sekundach, przycisk wznowienia i zachowany postęp.
+          - Android może opóźnić zaplanowany start. Niepotwierdzony odczyt pozostaje częściowy.
 
-          Instaluj jako aktualizację, bez odinstalowywania. Testy używają lokalnych stron i nie potwierdzają dostępu do wszystkich grup na koncie.
+          Instaluj jako aktualizację, bez odinstalowywania. Testy używają lokalnych stron; działanie na koncie wymaga nowego skanu telefonu.
           NOTES
-          gh release create gecko-poc-0.5.83 flip-watcher-0.5.83-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.83 — kontynuacja partii bez narastającej przerwy' --prerelease --notes-file release-notes.md
+          gh release create gecko-poc-0.5.84 flip-watcher-0.5.84-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.84 — odtworzenie renderowania profili i kontynuacja' --prerelease --notes-file release-notes.md

@@ -33,4 +33,18 @@ class ProfileWatcherInstrumentedTest {
             }
         }finally{server.close();context.deleteDatabase("watcher-outbox-v1.db")}
     }
+    @Test fun renewedProfileSurfaceRequiresNewFramesAndKeepsActualOwnPhotos()=runBlocking {
+        val source=WatcherGroup("61563667387467","Dawid Trojanowski","PROFILE")
+        val server=LoopbackFixtureServer(pages=mapOf("/profile.php" to "desktop-profile-offers")){name->runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}
+        try{
+            val saved=ProfileWatcherScan(context).runFixture(source,"http://127.0.0.1:${server.port}/profile.php?id=${source.id}",forceSurfaceRefresh=true){true}
+            assertEquals(1,saved.captureStats["profileSurfaceResets"])
+            assertTrue((saved.captureStats["profileRenderedFrames"]?:0)>0)
+            val id="pfbidAbCdEf0123456789";val row=checkNotNull(saved.rows.find{it.postId==id})
+            assertEquals("SELL_PROPERTY",row.intent);assertEquals(368000.0,row.price)
+            assertTrue(saved.photos.any{it.postId==id&&it.jpeg.isNotEmpty()})
+            assertTrue(saved.rows.none{it.postId=="999999999999"})
+        }finally{server.close()}
+    }
+
 }
