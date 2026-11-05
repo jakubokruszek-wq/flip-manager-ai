@@ -189,6 +189,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      - name: Release the offline emulator disk before creating the fresh device
+        run: avdmanager delete avd --name gecko-ocr-offline
       - name: Online Gecko flow and full regression on API 36 (fresh device)
         uses: reactivecircus/android-emulator-runner@v2
         with:
