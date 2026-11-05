@@ -1,0 +1,23 @@
+name: Android joined-group discovery contract
+on:
+  push:
+    paths:
+      - 'features/collector/facebook-mobile-discovery*'
+      - 'app/api/collector/facebook/mobile/groups/discover/**'
+      - '.github/workflows/mobile-discovery-contract.yml'
+  pull_request:
+    paths:
+      - 'features/collector/facebook-mobile-discovery*'
+      - 'app/api/collector/facebook/mobile/groups/discover/**'
+      - '.github/workflows/mobile-discovery-contract.yml'
+permissions:
+  contents: read
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test features/collector/facebook-mobile-discovery.test.ts
