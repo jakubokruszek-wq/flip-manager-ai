@@ -9,6 +9,7 @@ function page(id=owner,canonical='https://www.facebook.com/dawid.test/',current=
 test('numeric profile ownership must be proved independently before accepting vanity post links',()=>{
  const proof=reader.identity(page(),owner);assert.ok(proof);assert.equal(reader.link('https://www.facebook.com/dawid.test/posts/'+post+'/',proof),post);
  assert.equal(reader.identity(page('100008036582269'),owner),null);
+ assert.equal(reader.identity(page(owner,undefined,'https://www.facebook.com/100008036582269/'),owner),null);
  assert.equal(reader.identity(page(owner,'https://www.facebook.com/profile.php?id=100008036582269'),owner),null);
  assert.equal(reader.identity(page(owner,'https://www.facebook.com/groups/123456/'),owner),null);
 });

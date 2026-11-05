@@ -12,6 +12,7 @@ function identity(w,id,fixture=false){
  if(fixture&&current.hostname!=='127.0.0.1')return null;
  const aliases=new Set([id]),proofs=new Set();let canonical=null;
  const explicit=u=>u.pathname==='/profile.php'?u.searchParams.get('id'):u.pathname.match(/^\/people\/[^/]+\/(\d{5,30})\/?$/)?.[1]||u.pathname.match(/^\/(\d{5,30})\/?$/)?.[1];
+ const currentOwner=explicit(current);if(currentOwner&&currentOwner!==id)return null;
  for(const n of Array.from(w.document.head?.querySelectorAll('meta[property],link[rel="canonical"]')||[]).slice(0,120)){
   const key=n.getAttribute('property')||n.getAttribute('rel'),value=n.getAttribute('content')||n.getAttribute('href')||'';
   if(['al:android:url','al:ios:url'].includes(key)){const m=/^fb:\/\/(?:profile|page)\/(\d{5,30})\/?$/.exec(value);if(m)proofs.add(m[1]);}
