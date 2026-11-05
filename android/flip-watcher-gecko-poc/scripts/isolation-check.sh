@@ -10,7 +10,7 @@ poc="android/flip-watcher-gecko-poc"
 
 changed="$(git diff --name-only "$base"...HEAD)"
 echo "Changed files vs $base:"; echo "$changed" | sed 's/^/  /'
-outside="$(echo "$changed" | grep -v -E "^($poc/|\.github/workflows/android-gecko-poc\.yml$|app/api/collector/facebook/mobile/(scan/)?route\.ts$|features/collector/facebook-(mobile(-scan)?(\.test)?|import(\.test)?)\.ts$|supabase/migrations/20261104201506_collector_mobile_scan_reports\.sql$)" || true)"
+outside="$(echo "$changed" | grep -v -E "^($poc/|\.github/workflows/android-gecko-poc\.yml$|app/api/collector/facebook/mobile/(scan/)?route\.ts$|features/collector/facebook-((mobile(-scan)?|groups-feed)(\.test)?|import(\.test)?)\.ts$|supabase/migrations/20261104201506_collector_mobile_scan_reports\.sql$)" || true)"
 if [ -n "$outside" ]; then echo "FAIL: files outside the POC were changed:"; echo "$outside"; exit 1; fi
 
 src="$poc/app/src/main"

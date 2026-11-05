@@ -2,9 +2,11 @@ package pl.jakubokruszek.flipwatcher.geckopoc
 
 /** Snapshot of enabled GROUP sources in Watcher, 2026-10-30. Profiles and disabled sources are excluded.
  * Identities are exact: similar names never establish aliases. */
-data class WatcherGroup(val id:String,val name:String) {
-    init { require(id.matches(Regex("[A-Za-z0-9_.-]{1,100}"))) }
-    val url:String get()="https://www.facebook.com/groups/$id/"
+data class WatcherGroup(val id:String,val name:String,val type:String="GROUP") {
+    init { require(type in setOf("GROUP","PROFILE"));require(id.matches(Regex("[A-Za-z0-9_.-]{1,100}"))) }
+    val key:String get()=if(type=="GROUP")id else "profile:$id"
+    val url:String get()=if(type=="GROUP")"https://www.facebook.com/groups/$id/"else if(id.all{it.isDigit()})"https://www.facebook.com/profile.php?id=$id"else"https://www.facebook.com/$id/"
+    fun postUrl(post:String)="https://www.facebook.com/"+(if(type=="GROUP")"groups/$id/"else"$id/")+"posts/$post/"
 }
 object WatcherGroups {
     const val LEGACY_GROUP="lodzsprzedazzakupwynajem"
@@ -34,4 +36,10 @@ object WatcherGroups {
         require(find(groupId)!=null)
         return if(groupId==LEGACY_GROUP)"saved-search-v1.bin" else "saved-search-$groupId-v1.bin"
     }
+}
+
+object WatcherSources {
+    @Volatile var active:List<WatcherGroup> = emptyList();private set
+    fun setActive(sources:List<WatcherGroup>){require(sources.size<=200&&sources.map{it.key}.toSet().size==sources.size);active=sources.toList();WatcherGroups.setActive(sources.filter{it.type=="GROUP"})}
+    fun find(key:String)=active.singleOrNull{it.key==key}?:WatcherGroups.find(key)
 }

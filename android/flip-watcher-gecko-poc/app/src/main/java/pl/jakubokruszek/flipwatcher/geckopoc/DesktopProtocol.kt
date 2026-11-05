@@ -25,7 +25,7 @@ object DesktopProtocol {
     private val rowKeys=setOf("postId","permalink","layer","price","priceSource","area","rooms","district","neighborhood","street","intent","usable","photos","qualification")
     val qualifications=setOf("CANDIDATE","NO_TEXT","FOREIGN_CITY","NOT_PROPERTY","INTENT","MISSING_FIELDS","CONFLICT","CLASSIFIER")
     val intents=setOf("SELL_PROPERTY","BUY_PROPERTY","RENT_OFFER","RENT_WANTED","SERVICE","OTHER","UNKNOWN")
-    fun parse(message:Any?,nonce:String,group:String=PocPolicy.APPROVED_GROUP_ID,allowPostText:Boolean=false):DesktopReply? = runCatching {
+    fun parse(message:Any?,nonce:String,group:String=PocPolicy.APPROVED_GROUP_ID,allowPostText:Boolean=false,profile:Boolean=false):DesktopReply? = runCatching {
         val j=ScanProtocol.asJson(message)?:return null
         if(j.keys().asSequence().toSet() !in (if(allowPostText)setOf(setOf("type","nonce","status","reason","rows","stats"),setOf("type","nonce","status","reason","rows","stats","postTexts"))else setOf(setOf("type","nonce","status","reason","rows","stats")))||j.opt("type")!="desktopPreviewResult"||j.opt("nonce")!=nonce)return null
         val status=j.optString("status");val reason=j.optString("reason")
@@ -38,7 +38,7 @@ object DesktopProtocol {
         val seen=HashSet<String>();val rows=(0 until a.length()).map {i->
             val r=a.getJSONObject(i);if(r.keys().asSequence().toSet()!=rowKeys)return null
             val id=r.getString("postId");val link=r.getString("permalink")
-            if(!Regex("^[0-9]{5,30}$").matches(id)||link!="https://www.facebook.com/groups/$group/posts/$id/"||!seen.add(id))return null
+            if(!ProfileIdentity.postId(id,profile)||link!=WatcherGroup(group,"Source",if(profile)"PROFILE"else"GROUP").postUrl(id)||!seen.add(id))return null
             fun num(key:String,min:Double,max:Double):Double? {if(r.isNull(key))return null;val v=r.get(key);require(v is Number);val n=v.toDouble();require(n.isFinite()&&n in min..max);return n}
             fun text(key:String,max:Int):String? {if(r.isNull(key))return null;val v=r.get(key);require(v is String&&v.length in 1..max&&!Regex("https?://|[\\p{Cc}]").containsMatchIn(v));return v}
             val price=num("price",1.0,20_000_000.0);val area=num("area",1.0,9999.0);val rooms=num("rooms",1.0,20.0)
@@ -58,7 +58,7 @@ object DesktopProtocol {
             for(i in 0 until texts.length()){
                 val t=texts.getJSONObject(i);if(t.keys().asSequence().toSet()!=setOf("postId","permalink","text"))return null
                 val id=t.getString("postId");val text=t.getString("text")
-                if(id !in seen||postTexts.containsKey(id)||t.getString("permalink")!="https://www.facebook.com/groups/$group/posts/$id/"||text.isBlank()||text.length>12000||Regex("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]").containsMatchIn(text))return null
+                if(id !in seen||postTexts.containsKey(id)||t.getString("permalink")!=WatcherGroup(group,"Source",if(profile)"PROFILE"else"GROUP").postUrl(id)||text.isBlank()||text.length>12000||Regex("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]").containsMatchIn(text))return null
                 chars+=text.length;if(chars>64000)return null
                 postTexts[id]=text
             }

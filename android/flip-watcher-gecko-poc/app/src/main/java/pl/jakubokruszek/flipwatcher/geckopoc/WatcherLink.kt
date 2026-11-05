@@ -45,14 +45,14 @@ object WatcherLink {
         return groups
     }
     /** Fixed origin + fixed read-only paths, redirects disabled: a pairing code cannot choose a token destination. */
-    private fun get(path:String,credentials:Credentials):String {
+    private fun get(path:String,credentials:Credentials,protocol:Int=2):String {
         require(path in setOf("/api/collector/devices/current","/api/collector/facebook/groups"))
         val connection=URL(ORIGIN+path).openConnection() as HttpsURLConnection
         try {
             connection.instanceFollowRedirects=false;connection.connectTimeout=10000;connection.readTimeout=15000
             connection.useCaches=false;connection.setRequestProperty("Accept","application/json")
             connection.setRequestProperty("Authorization","Bearer "+credentials.token)
-            if(path=="/api/collector/facebook/groups")connection.setRequestProperty("X-Watcher-Group-Protocol","2")
+            if(path=="/api/collector/facebook/groups")connection.setRequestProperty("X-Watcher-Group-Protocol",protocol.toString())
             val status=connection.responseCode
             if(status==401)error("WATCHER_PAIRING_REQUIRED")
             if(status!=200)error("WATCHER_UNAVAILABLE")
@@ -64,6 +64,16 @@ object WatcherLink {
         if(verifyDevice){val j=JSONObject(get("/api/collector/devices/current",credentials));require(j.optBoolean("connected")&&j.getString("deviceId")==credentials.deviceId&&!j.optBoolean("revoked",true)){"WATCHER_DEVICE_MISMATCH"}}
         val raw=get("/api/collector/facebook/groups",credentials)
         return try{parseGroups(raw)}catch(e:Exception){throw IllegalStateException("WATCHER_GROUPS_INVALID",e)}
+    }
+    internal fun parseSources(raw:String):List<WatcherGroup>{
+        require(raw.length<=128*1024);val j=JSONObject(raw);require(j.getInt("version")==2)
+        val a=j.getJSONArray("sources");require(a.length()<=200)
+        val sources=(0 until a.length()).map{i->val r=a.getJSONObject(i);val source=WatcherGroup(r.getString("sourceId"),r.getString("name"),r.getString("sourceType"));require(source.name.isNotBlank()&&source.name.length<=500&&r.getString("url")==source.url);source}
+        require(sources.map{it.key}.toSet().size==sources.size);return sources
+    }
+    internal fun sources(credentials:Credentials,verifyDevice:Boolean=false):List<WatcherGroup>{
+        if(verifyDevice){val j=JSONObject(get("/api/collector/devices/current",credentials));require(j.optBoolean("connected")&&j.getString("deviceId")==credentials.deviceId&&!j.optBoolean("revoked",true)){"WATCHER_DEVICE_MISMATCH"}}
+        return try{parseSources(get("/api/collector/facebook/groups",credentials,3))}catch(e:Exception){throw IllegalStateException("WATCHER_SOURCES_INVALID",e)}
     }
     private fun readBounded(input:java.io.InputStream,limit:Int):ByteArray {
         val out=java.io.ByteArrayOutputStream();val buffer=ByteArray(4096)

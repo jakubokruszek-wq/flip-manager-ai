@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Flip Watcher Gecko POC collector",
-  "version": "0.5.78",
+  "version": "0.5.79",
   "description": "Built-in GeckoView extension: selected Watcher group, explicit consent, unchanged collector-core.js.",
   "browser_specific_settings": {
     "gecko": {
@@ -44,6 +44,7 @@
         "desktop-preview.js",
         "review-post.js",
         "review-images.js",
+        "profile-reader.js",
         "poc-content.js"
       ],
       "run_at": "document_idle",
@@ -73,6 +74,7 @@
       "desktop-preview.js",
       "desktop-background.js",
       "ocr-fields.js",
+      "profile-reader.js",
       "poc-background.js"
     ]
   }

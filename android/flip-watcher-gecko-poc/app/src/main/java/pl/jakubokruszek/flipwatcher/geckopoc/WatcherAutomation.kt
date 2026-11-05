@@ -86,8 +86,8 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
     internal open fun credentials(context:Context)=WatcherLink.load(context)
     internal open fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=WatcherUpload.send(credentials,item)
     internal open fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=WatcherUpload.report(credentials,item)
-    internal open fun groups(credentials:WatcherLink.Credentials)=WatcherLink.groups(credentials,verifyDevice=true)
-    internal open suspend fun scan(group:WatcherGroup,progress:(String)->Unit)=BackgroundWatcherScan(applicationContext).run(group,{!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(applicationContext)},progress)
+    internal open fun groups(credentials:WatcherLink.Credentials)=WatcherLink.sources(credentials,verifyDevice=true)
+    internal open suspend fun scan(group:WatcherGroup,progress:(String)->Unit)=if(group.type=="PROFILE")ProfileWatcherScan(applicationContext).run(group,{!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(applicationContext)},progress)else BackgroundWatcherScan(applicationContext).run(group,{!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(applicationContext)},progress)
     override suspend fun doWork():Result {
         // A duplicate calendar/kick must not spend its job budget waiting behind another scan.
         if(!WatcherAutomation.lock.tryLock())return Result.success()
@@ -130,7 +130,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                 val item=queue.next(credentials.deviceId,System.currentTimeMillis())?:return
                                 val held=runCatching {
                                     val body=org.json.JSONObject(item.body);val group=body.getString("groupId")
-                                    val row=SavedResultCodec.rows(org.json.JSONArray().put(body.getJSONObject("row")),group)?.singleOrNull()?:error("QUALITY_INVALID")
+                                    val row=SavedResultCodec.rows(org.json.JSONArray().put(body.getJSONObject("row")),group,true,body.optString("sourceType")=="PROFILE")?.singleOrNull()?:error("QUALITY_INVALID")
                                     OfferQuality.reason(row,body.getJSONArray("photos").length())
                                 }.getOrElse{"QUALITY_INVALID"}
                                 if(held!=null){queue.hold(item,held);return@repeat}
@@ -149,22 +149,22 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                         if(alreadyCompleted||!scheduleDue||budgetReached){WatcherScanStatus.finish(context,run,if(budgetReached)"RETRY"else"UPLOAD_DONE",if(budgetReached)"BATCH_CONTINUE"else lastIssue);return@withTimeout}
                         if(WatcherAutomation.uiVisible){queue.log("WAITING_FOR_BACKGROUND");WatcherScanStatus.finish(context,run,"WAITING_UI","WAITING_FOR_BACKGROUND");return@withTimeout}
                         val groups=groups(credentials)
-                        WatcherGroups.setActive(groups)
-                        val groupCache=org.json.JSONObject().put("version",1).put("groups",org.json.JSONArray(groups.map{org.json.JSONObject().put("groupId",it.id).put("url",it.url).put("name",it.name)})).toString()
+                        WatcherSources.setActive(groups)
+                        val groupCache=org.json.JSONObject().put("version",1).put("groups",org.json.JSONArray(groups.filter{it.type=="GROUP"}.map{org.json.JSONObject().put("groupId",it.id).put("url",it.url).put("name",it.name)})).toString()
                         check(context.getSharedPreferences("gecko_poc",Context.MODE_PRIVATE).edit().putString("watcher_active_groups",groupCache).commit())
                         // Resume after the last attempted source if a slow group exhausted the worker budget.
-                        val cursor=groups.indexOfFirst{it.id==prefs.getString("last_attempted_source",null)}
+                        val cursor=groups.indexOfFirst{it.key==prefs.getString("last_attempted_source",null)}
                         val ordered=if(cursor<0)groups else groups.drop(cursor+1)+groups.take(cursor+1)
-                        WatcherScanStatus.update(context,run){it.copy(total=groups.size,done=groups.count{g->queue.scanned(slot,g.id)})}
+                        WatcherScanStatus.update(context,run){it.copy(total=groups.size,done=groups.count{g->queue.scanned(slot,g.key)})}
                         for(group in ordered){
                             currentCoroutineContext().ensureActive()
                             if(WatcherAutomation.uiVisible||!WatcherAutomation.enabled(context))break
-                            if(queue.scanned(slot,group.id))continue
+                            if(queue.scanned(slot,group.key))continue
                             if(remaining()<120_000){budgetReached=true;break}
-                            queue.log("GROUP_"+(groups.indexOf(group)+1))
-                            check(prefs.edit().putString("last_attempted_source",group.id).commit())
+                            queue.log((if(group.type=="PROFILE")"PROFILE_"else"GROUP_")+(groups.indexOf(group)+1))
+                            check(prefs.edit().putString("last_attempted_source",group.key).commit())
                             queue.log("SCAN_STARTED")
-                            WatcherScanStatus.update(context,run){it.copy(phase="LOADING",group=group.name,position=groups.indexOf(group)+1,reason="",groupStarted=System.currentTimeMillis())}
+                            WatcherScanStatus.update(context,run){it.copy(phase="LOADING",group=(if(group.type=="PROFILE")"Profil: "else "")+group.name,position=groups.indexOf(group)+1,reason="",groupStarted=System.currentTimeMillis())}
                             val groupClock=android.os.SystemClock.elapsedRealtime()
                             try {
                             val scanned=scan(group){phase->WatcherScanStatus.update(context,run){it.copy(phase=phase)}}
@@ -178,34 +178,36 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                 queue.enqueue(credentials.deviceId,group,result)
                             }
                             val issue=WatcherCaptureReport.issue(scanned)
-                            val prior=queue.cycleReports(slot).any{it.getString("groupId")==group.id}
+                            val prior=queue.cycleReports(slot).any{it.getString("groupId")==group.key}
                             val evidence=WatcherCaptureReport.create(context,slot,run,group,scanned,issue,android.os.SystemClock.elapsedRealtime()-groupClock)
-                            queue.report(credentials.deviceId,slot,group.id,evidence)
+                            queue.report(credentials.deviceId,slot,group.key,evidence)
                             // One bounded retry for degraded capture; do not spin forever on the same source.
-                            if(issue.isEmpty()||prior){queue.completeScan(slot,group.id);if(requested!=null)queue.completeScan(windowKey,group.id)}
+                            if(issue.isEmpty()||prior){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
                             else{lastIssue=issue;queue.log(issue)}
                             val diagnostic=queue.nextReport(credentials.deviceId)
                             if(diagnostic!=null)runCatching{sendReport(credentials,diagnostic);queue.reportSent(diagnostic.id)}
                             queue.log("SCAN_SAVED",result.rows.size)
-                            WatcherScanStatus.update(context,run){it.copy(done=groups.count{g->queue.scanned(slot,g.id)},posts=it.posts+result.rows.size,photos=it.photos+result.photos.size)}
+                            WatcherScanStatus.update(context,run){it.copy(done=groups.count{g->queue.scanned(slot,g.key)},posts=it.posts+result.rows.size,photos=it.photos+result.photos.size)}
                             flush()
                             }catch(e:CancellationException){throw e}
                             catch(e:Exception){
                                 if(e is WatcherUpload.HttpFailure&&e.status in setOf(401,403))throw e
                                 lastIssue=if(WatcherAutomation.uiVisible)"WAITING_FOR_BACKGROUND"else WatcherAutomation.errorCode(e)
                                 queue.log(lastIssue)
+                                val hadProfileAttempt=group.type=="PROFILE"&&queue.cycleReports(slot).any{it.optString("groupId")==group.key}
                                 val evidence=WatcherCaptureReport.create(context,slot,run,group,null,lastIssue,android.os.SystemClock.elapsedRealtime()-groupClock)
-                                runCatching{queue.report(credentials.deviceId,slot,group.id,evidence)}
+                                runCatching{queue.report(credentials.deviceId,slot,group.key,evidence)}
+                                if(hadProfileAttempt&&lastIssue !in setOf("LOGIN_REQUIRED","CAPTCHA","CHECKPOINT")){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
                                 WatcherScanStatus.update(context,run){it.copy(phase="PREPARING",reason=lastIssue)}
                                 // A single unavailable group cannot starve every later source.
                                 if(e.message in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA"))break
                             }
                         }
                         val captureOk=queue.cycleReports(slot).let{r->r.size==groups.size&&r.all{it.optString("issue").isEmpty()}}
-                        val allDone=groups.isNotEmpty()&&groups.all{queue.scanned(slot,it.id)}
+                        val allDone=groups.isNotEmpty()&&groups.all{queue.scanned(slot,it.key)}
                         if(!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(context)){
                             if(groups.isEmpty()){lastIssue="NO_ACTIVE_GROUPS";queue.log(lastIssue)}
-                            if(groups.isNotEmpty()&&groups.all{queue.scanned(windowKey,it.id)})check(prefs.edit().putString("completed_slot",windowKey).putBoolean("completed_capture_ok",captureOk).commit())
+                            if(groups.isNotEmpty()&&groups.all{queue.scanned(windowKey,it.key)})check(prefs.edit().putString("completed_slot",windowKey).putBoolean("completed_capture_ok",captureOk).commit())
                             if(allDone&&requested!=null&&prefs.getString("requested_scan",null)==requested)
                                 check(prefs.edit().remove("requested_scan").commit())
                         }

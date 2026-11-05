@@ -11,7 +11,7 @@ import kotlin.math.*
 object DesktopViewportProtocol {
     data class Tile(val postId:String,val slot:Int,val x:Double,val y:Double,val width:Double,val height:Double)
     data class Request(val requestId:String,val action:String,val width:Double=0.0,val height:Double=0.0,val tiles:List<Tile> = emptyList(),val x:Double=0.0,val y:Double=0.0,val frameId:String?=null)
-    fun parse(j:JSONObject,nonce:String):Request?=runCatching {
+    fun parse(j:JSONObject,nonce:String,profile:Boolean=false):Request?=runCatching {
         val base=setOf("type","nonce","requestId","action")
         if(j.opt("type")!="desktopViewportRequest"||j.opt("nonce")!=nonce)return null
         val id=j.getString("requestId");if(java.util.UUID.fromString(id).toString()!=id)return null
@@ -28,7 +28,7 @@ object DesktopViewportProtocol {
                 val a=j.getJSONArray("tiles");if(a.length() !in 1..3)return null
                 val seen=HashSet<String>();val tiles=(0 until a.length()).map{i->val t=a.getJSONObject(i)
                     if(t.keys().asSequence().toSet()!=setOf("postId","slot","x","y","width","height"))return null
-                    val post=t.getString("postId");if(!Regex("[0-9]{5,30}").matches(post)||t.opt("slot") !is Int||t.getInt("slot") !in 0..2||!seen.add("$post:${t.getInt("slot")}"))return null
+                    val post=t.getString("postId");if(!ProfileIdentity.postId(post,profile)||t.opt("slot") !is Int||t.getInt("slot") !in 0..2||!seen.add("$post:${t.getInt("slot")}"))return null
                     val x=num(t,"x",0.0,w);val y=num(t,"y",0.0,h);val tw=num(t,"width",60.0,w);val th=num(t,"height",60.0,h)
                     if(x+tw>w+0.01||y+th>h+0.01)return null
                     Tile(post,t.getInt("slot"),x,y,tw,th)
@@ -40,7 +40,7 @@ object DesktopViewportProtocol {
 }
 
 /** Bounded RAM ownership. The private archive takes separate pixel copies before recycling. */
-class DesktopThumbnails(private val maxPosts:Int=20) {
+class DesktopThumbnails(private val maxPosts:Int=20,private val profile:Boolean=false) {
     init{require(maxPosts in setOf(20,50))}
     private val images=LinkedHashMap<String,MutableMap<Int,Bitmap>>()
     private val ocr=LinkedHashMap<String,MutableMap<Int,Bitmap>>()
@@ -49,7 +49,7 @@ class DesktopThumbnails(private val maxPosts:Int=20) {
     fun ocrRows(id:String):List<Bitmap> = ocr[id]?.toSortedMap()?.values?.toList()?:emptyList()
     val count:Int get()=images.values.sumOf{it.size}
     fun put(id:String,slot:Int,image:Bitmap,ocrImage:Bitmap?=null):Boolean {
-        if(slot !in 0..2||!Regex("[0-9]{5,30}").matches(id)||image.isRecycled||image.width>192||image.height>144||!images.containsKey(id)&&images.size>=maxPosts){if(!image.isRecycled)image.recycle();ocrImage?.let{if(!it.isRecycled)it.recycle()};return false}
+        if(slot !in 0..2||!ProfileIdentity.postId(id,profile)||image.isRecycled||image.width>192||image.height>144||!images.containsKey(id)&&images.size>=maxPosts){if(!image.isRecycled)image.recycle();ocrImage?.let{if(!it.isRecycled)it.recycle()};return false}
         val slots=images.getOrPut(id){linkedMapOf()};if(slots.containsKey(slot)){image.recycle();ocrImage?.let{if(!it.isRecycled)it.recycle()};return false};slots[slot]=image
         ocrImage?.let{b->
             // Preserve one OCR crop per post before extra views of the same post.
@@ -102,7 +102,7 @@ private class VisibleWatcherViewport(private val view:GeckoView):WatcherViewport
 
 /** Official GeckoView wheel input and rendered-pixel crops, under the same live native gate. */
 class DesktopViewportBridge(private val view:WatcherViewport,private val nonce:String,private val images:DesktopThumbnails,
-                            private val live:()->Boolean,private val now:()->Long={android.os.SystemClock.elapsedRealtime()},private val background:Boolean=false) {
+                            private val live:()->Boolean,private val now:()->Long={android.os.SystemClock.elapsedRealtime()},private val background:Boolean=false,private val profile:Boolean=false) {
     constructor(view:GeckoView,nonce:String,images:DesktopThumbnails,live:()->Boolean):this(VisibleWatcherViewport(view),nonce,images,live)
     internal val captureCounts=IntArray(8) // attempts,inactive,aspect,frame,late,error,pending,committed; counts only
     private var closed=false;private var busy=false;private var captures=0;private var scrolls=0;private var lastScroll=Long.MIN_VALUE
@@ -113,7 +113,7 @@ class DesktopViewportBridge(private val view:WatcherViewport,private val nonce:S
     fun close(){closed=true;discard()}
     private fun active()=!closed&&live()&&view.isShown&&view.hasWindowFocus()&&view.width>=100&&view.height>=100
     fun handle(j:JSONObject,reply:(JSONObject)->Unit){
-        val r=DesktopViewportProtocol.parse(j,nonce)?:return
+        val r=DesktopViewportProtocol.parse(j,nonce,profile)?:return
         fun ack(ok:Boolean,count:Int=0){if(!closed)reply(JSONObject().put("type","desktopViewportAck").put("nonce",nonce).put("requestId",r.requestId).put("accepted",ok).put("count",count))}
         if(r.action=="probe"){
             if(closed)return

@@ -1,0 +1,74 @@
+package pl.jakubokruszek.flipwatcher.geckopoc
+
+import android.content.Context
+import android.graphics.Bitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import org.mozilla.geckoview.GeckoResult
+import org.mozilla.geckoview.GeckoSession
+import java.net.URI
+import java.util.UUID
+
+/** Independent PROFILE reader. It cannot arm group-network grants or infer owner from a name. */
+class ProfileWatcherScan(private val context:Context){
+    suspend fun run(source:WatcherGroup,alive:()->Boolean,progress:(String)->Unit={}):SavedResult=runTarget(source,source.url,false,alive,progress)
+    internal suspend fun runFixture(source:WatcherGroup,target:String,alive:()->Boolean):SavedResult{require(URI(target).host=="127.0.0.1");return runTarget(source,target,true,alive)}
+    private suspend fun runTarget(source:WatcherGroup,target:String,fixture:Boolean,alive:()->Boolean,progress:(String)->Unit={}):SavedResult=withContext(Dispatchers.Main){
+        require(source.type=="PROFILE")
+        withTimeout(if(fixture)300_000 else 180_000){
+            val browser=GeckoSession();val channel=CollectorChannel(browser,fixtureMode=fixture);val images=DesktopThumbnails(50,profile=true)
+            var surface:BackgroundViewport?=null;var current:String?=null;var ready=false;var reading=false;var stop:String?=null
+            fun live()=alive()&&stop==null
+            fun rejection(raw:String):String?{
+                val path=runCatching{URI(raw).path}.getOrDefault("")
+                if(path.contains("checkpoint",true))return "CHECKPOINT"
+                if(path.contains("captcha",true))return "CAPTCHA"
+                if(path.startsWith("/login")||path.startsWith("/recover"))return "LOGIN_REQUIRED"
+                return if(ProfileIdentity.candidate(raw,source,if(fixture)target else null))null else "PROFILE_CONTEXT_REJECTED"
+            }
+            browser.navigationDelegate=object:GeckoSession.NavigationDelegate{
+                override fun onLoadRequest(s:GeckoSession,r:GeckoSession.NavigationDelegate.LoadRequest):GeckoResult<org.mozilla.geckoview.AllowOrDeny>?{
+                    if(current==null&&r.uri=="about:blank")return GeckoResult.fromValue(org.mozilla.geckoview.AllowOrDeny.ALLOW)
+                    val rejected=rejection(r.uri)
+                    val allowed=live()&&!reading&&!r.hasUserGesture&&r.target!=GeckoSession.NavigationDelegate.TARGET_WINDOW_NEW&&rejected==null
+                    if(!allowed)stop=rejected?:"PROFILE_CONTEXT_REJECTED"
+                    return GeckoResult.fromValue(if(allowed)org.mozilla.geckoview.AllowOrDeny.ALLOW else org.mozilla.geckoview.AllowOrDeny.DENY)
+                }
+                override fun onLocationChange(s:GeckoSession,u:String?,permissions:MutableList<GeckoSession.PermissionDelegate.ContentPermission>,gesture:Boolean){
+                    if(current==null&&(u==null||u=="about:blank"))return
+                    if(u==null||rejection(u)!=null||reading&&u!=current)stop=if(u==null)"PROFILE_CONTEXT_REJECTED"else rejection(u)?:"PROFILE_CONTEXT_REJECTED"
+                    current=u
+                }
+                override fun onLoadError(s:GeckoSession,u:String?,e:org.mozilla.geckoview.WebRequestError):GeckoResult<String>?{stop="PROFILE_LOAD_ERROR";return null}
+            }
+            browser.progressDelegate=object:GeckoSession.ProgressDelegate{
+                override fun onPageStart(s:GeckoSession,u:String){ready=false}
+                override fun onPageStop(s:GeckoSession,success:Boolean){ready=success;if(!success)stop="PROFILE_LOAD_ERROR"}
+            }
+            try{
+                progress("LOADING");check(live())
+                channel.attach(GeckoHost.collectorExtension(context));DesktopSessionPreview.applyDesktop(browser)
+                browser.open(GeckoHost.runtime(context));surface=BackgroundViewport(browser);browser.setActive(true);browser.setFocused(true);browser.loadUri(target)
+                val until=android.os.SystemClock.elapsedRealtime()+if(fixture)90_000 else 35_000
+                while(live()&&android.os.SystemClock.elapsedRealtime()<until){
+                    if(ready&&current!=null&&channel.isConnected&&channel.connectedUrl==current){val probe=channel.probe(1000);if((probe?.passwordInputs?:0)>0){stop="LOGIN_REQUIRED";break};if(probe?.readyState in setOf("interactive","complete"))break}
+                    delay(200)
+                }
+                check(live()&&ready&&current!=null&&channel.isConnected&&channel.connectedUrl==current){stop?:"PROFILE_NOT_READY"}
+                val expected=checkNotNull(current);val generation=channel.connectionGeneration;browser.setActive(true);browser.setFocused(true);val nonce=UUID.randomUUID().toString();reading=true
+                fun bound()=live()&&current==expected&&channel.connectionGeneration==generation&&channel.connectedUrl==expected
+                channel.viewportBridge=DesktopViewportBridge(checkNotNull(surface),nonce,images,::bound,background=true,profile=true)
+                progress("READING");val reply=checkNotNull(channel.profilePreview(nonce,source,expected)){"PROFILE_PROTOCOL"};check(bound()){stop?:"PROFILE_CONTEXT_REJECTED"}
+                val rows=BackgroundPosterOcr.run(reply.rows,::bound,{images.ocrRows(it).size},
+                    read={id,slot->images.ocrRows(id).getOrNull(slot)?.copy(Bitmap.Config.ARGB_8888,false)?.let{LocalOcr.readOwned(it)}},
+                    project={id,texts->GeckoHost.background.profileOcrFields(source,id,texts)},
+                    now={android.os.SystemClock.elapsedRealtime()},progress=progress)
+                check(bound()){stop?:"PROFILE_CONTEXT_REJECTED"}
+                val photos=rows.flatMap{row->images.rows(row.postId).mapIndexed{slot,b->ResultArchive.photo(row.postId,slot,false,b)}}
+                SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,reply.postTexts,reply.stats)
+            }finally{runCatching{channel.close()};runCatching{surface?.close()};images.clear();runCatching{browser.stop()};runCatching{browser.setActive(false)};runCatching{browser.close()}}
+        }
+    }
+}

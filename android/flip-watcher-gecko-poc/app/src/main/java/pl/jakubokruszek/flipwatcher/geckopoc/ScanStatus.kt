@@ -32,8 +32,8 @@ object ScanStatusText {
         "LOGIN_REQUIRED"->"Facebook wymaga logowania. Otwórz sesję i zaloguj się ręcznie."
         "CHECKPOINT","CAPTCHA"->"Facebook wymaga ręcznego potwierdzenia lub CAPTCHA."
         "NETWORK_UNAVAILABLE","NETWORK_TIMEOUT"->"Nie udało się połączyć z siecią. Automat ponowi próbę."
-        "GROUP_LOAD_ERROR","GROUP_NOT_READY"->"Strona grupy nie załadowała się poprawnie."
-        "WATCHER_GROUPS_INVALID"->"Manager zwrócił nieprawidłową listę grup. Zapisane oferty i logowanie pozostają zachowane."
+        "PROFILE_LOAD_ERROR","PROFILE_NOT_READY","GROUP_LOAD_ERROR","GROUP_NOT_READY"->"Strona źródła nie załadowała się poprawnie."
+        "WATCHER_SOURCES_INVALID","WATCHER_GROUPS_INVALID"->"Manager zwrócił nieprawidłową listę grup. Zapisane oferty i logowanie pozostają zachowane."
         "WATCHER_DEVICE_MISMATCH"->"Dane połączonego urządzenia nie zgadzają się z odpowiedzią Managera. Połącz ponownie Watchera."
         "NO_ACTIVE_GROUPS"->"Brak aktywnych grup. Zsynchronizuj grupy z Managerem."
         "ANDROID_FOREGROUND_START_DENIED"->"Android odmówił uruchomienia usługi w tle."
@@ -41,7 +41,7 @@ object ScanStatusText {
         "BATCH_CONTINUE"->"Osiągnięto limit czasu partii. Pozostałe grupy czekają na kolejną próbę."
         "SLOT_PARTIAL"->"Cykl został wykonany z brakami odczytu. Szczegóły są zachowane w diagnostyce; następny termin ponowi odczyt."
         "CAPTURE_PARTIAL"->"Cykl zakończony z brakami. Konkretne przyczyny i liczby dla źródeł są powyżej."
-        "PAGE_HIDDEN","NO_POST_EVIDENCE","SCROLL_NOT_CONFIRMED","SALE_PHOTO_MISSING","CAPTURE_NOT_MEASURED"->"Odczyt grupy nie został potwierdzony ($code). Zaplanowano jedno ponowienie."
+        "PAGE_HIDDEN","NO_POST_EVIDENCE","SCROLL_NOT_CONFIRMED","SALE_PHOTO_MISSING","CAPTURE_NOT_MEASURED"->"Odczyt źródła nie został potwierdzony ($code). Zaplanowano jedno ponowienie."
         "SLOT_COMPLETED"->"To okno zostało już wykonane. Automat czeka na następny termin."
         "WINDOW_NOT_DUE"->"Nowy termin skanu jeszcze nie nastąpił."
         "INTERRUPTED"->"Praca została przerwana. Zapisane wyniki i kolejka pozostają zachowane."
@@ -55,7 +55,7 @@ object ScanStatusText {
         s.phase=="QUEUED"->"Skan zlecony — oczekuje na uruchomienie"
         s.phase=="PREPARING"->"Przygotowanie skanu"
         s.phase=="UPLOADING"->"Wysyłanie zapisanych ofert"
-        s.phase=="LOADING"->"Wczytywanie grupy"
+        s.phase=="LOADING"->"Wczytywanie źródła"
         s.phase=="READING"->"Odczyt postów i zdjęć"
         s.phase=="OCR"->"Odczyt tekstu ze zdjęć ofert (OCR)"
         s.phase=="SAVING"->"Zapisywanie wyników"
@@ -70,7 +70,7 @@ object ScanStatusText {
     fun time(at:Long,zone:ZoneId):String=if(at<=0)"brak" else Instant.ofEpochMilli(at).atZone(zone).format(DateTimeFormatter.ofPattern("dd.MM HH:mm:ss"))
     fun details(s:ScanState,enabled:Boolean,now:Long,next:Long,network:Boolean,notifications:Boolean,work:String,running:Boolean?,zone:ZoneId=ZoneId.systemDefault(),pendingWindow:Long=0):String=buildString {
         appendLine(title(s,enabled,now,running))
-        if(s.total>0){appendLine("Grupy z zakończoną próbą: ${s.done}/${s.total}");if(s.group.isNotEmpty())appendLine("Grupa ${s.position}/${s.total}: ${s.group}")}
+        if(s.total>0){appendLine("Źródła z zakończoną próbą: ${s.done}/${s.total}");if(s.group.isNotEmpty())appendLine("Źródło ${s.position}/${s.total}: ${s.group}")}
         if(s.groupStarted>0){
             val until=if(s.ended>0)s.ended else now
             val seconds=((until-s.groupStarted).coerceAtLeast(0)/1000)
@@ -128,7 +128,7 @@ object WatcherScanStatus {
         if(!manager.areNotificationsEnabled())return
         val intent=PendingIntent.getActivity(context,NOTICE,Intent(context,ScanStatusActivity::class.java),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val title=ScanStatusText.title(s,true,System.currentTimeMillis(),true)
-        val text=if(s.reason.isNotEmpty())ScanStatusText.reason(s.reason)else if(s.total>0)"Ukończone grupy ${s.done}/${s.total} • posty ${s.posts} • zdjęcia ${s.photos}"else "Otwórz aplikację, aby zobaczyć szczegóły."
+        val text=if(s.reason.isNotEmpty())ScanStatusText.reason(s.reason)else if(s.total>0)"Ukończone źródła ${s.done}/${s.total} • posty ${s.posts} • zdjęcia ${s.photos}"else "Otwórz aplikację, aby zobaczyć szczegóły."
         val notification=Notification.Builder(context,CHANNEL).setSmallIcon(android.R.drawable.ic_menu_search).setContentTitle(title).setContentText(text).setStyle(Notification.BigTextStyle().bigText(text)).setContentIntent(intent).setOnlyAlertOnce(true).setOngoing(s.active).setVisibility(Notification.VISIBILITY_PRIVATE).setWhen(s.started).setShowWhen(s.started>0)
         if(s.active)notification.setProgress(s.total,s.done,s.total==0)
         manager.notify(NOTICE,notification.build())

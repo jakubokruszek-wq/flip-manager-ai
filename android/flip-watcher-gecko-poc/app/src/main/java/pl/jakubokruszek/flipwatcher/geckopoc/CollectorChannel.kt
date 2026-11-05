@@ -56,7 +56,7 @@ class CollectorChannel(
                 "shareLinkStop" -> if (json.optString("nonce") == shareNonce) onShareStop()
                 "visiblePostsStop" -> onVisibleStop()
                 "ready" -> ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
-                "reviewImagesResult", "reviewPostResult", "desktopDocumentProof", "desktopArmed", "desktopPreviewResult", "shareLinkContextResult", "mainTransportResult", "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
+                "profilePreviewResult", "reviewImagesResult", "reviewPostResult", "desktopDocumentProof", "desktopArmed", "desktopPreviewResult", "shareLinkContextResult", "mainTransportResult", "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                     pending.remove(json.optString("nonce"))?.let { reply ->
                         android.os.Handler(android.os.Looper.getMainLooper()).post { reply.complete(if (port === this@CollectorChannel.port) json else null) }
@@ -282,6 +282,17 @@ class CollectorChannel(
         }
     }
 
+    internal suspend fun profilePreview(nonce:String,source:WatcherGroup,expected:String):DesktopReply?{
+        require(source.type=="PROFILE")
+        val generation=connectionGeneration
+        val reply=request(nonce,JSONObject().put("type","profilePreview").put("nonce",nonce).put("consent",true).put("sourceId",source.id).put("fixture",fixtureMode),60_000)?:return null
+        check(generation==connectionGeneration&&connectedUrl==expected){"PROFILE_CONTEXT_REJECTED"}
+        require(reply.keys().asSequence().toSet()==setOf("type","nonce","sourceId","status","reason","rows","stats","postTexts"))
+        require(reply.getString("sourceId")==source.id&&reply.getString("nonce")==nonce)
+        if(reply.optString("status")!="OK"||reply.optString("reason")!="DONE")error(reply.optString("reason").takeIf{it.matches(Regex("[A-Z_]{1,60}"))}?:"PROFILE_READ_ERROR")
+        reply.remove("sourceId");reply.put("type","desktopPreviewResult")
+        return DesktopProtocol.parse(reply,nonce,source.id,true,true)
+    }
     private suspend fun request(nonce: String, message: JSONObject, timeoutMs: Long): JSONObject? {
         val current = port ?: return null
         val deferred = CompletableDeferred<JSONObject?>()

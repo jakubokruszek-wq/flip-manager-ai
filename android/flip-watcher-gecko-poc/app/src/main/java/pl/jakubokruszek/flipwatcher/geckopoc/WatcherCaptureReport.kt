@@ -8,7 +8,7 @@ import java.util.UUID
 
 /** Numeric reader evidence and exact IDs only. Business text/images never enter diagnostics. */
 object WatcherCaptureReport {
-    fun cycle(key:String)="capture-2/reader3/"+key
+    fun cycle(key:String)="capture-2/reader4/"+key
     fun issue(value:SavedResult):String {
         val s=value.captureStats
         if(s.isEmpty())return "CAPTURE_NOT_MEASURED"
@@ -20,8 +20,8 @@ object WatcherCaptureReport {
     }
     fun create(context:Context,cycle:String,run:String,group:WatcherGroup,value:SavedResult?,issue:String,elapsedMs:Long=0):JSONObject {
         val power=context.getSystemService(PowerManager::class.java)
-        return JSONObject().put("version",1).put("batchId",UUID.randomUUID().toString()).put("scanId",run)
-            .put("cycle",cycle).put("groupId",group.id).put("appVersion",BuildConfig.VERSION_NAME)
+        return JSONObject().put("version",if(group.type=="PROFILE")2 else 1).apply{if(group.type=="PROFILE"){put("sourceType","PROFILE");put("sourceId",group.id)}}.put("batchId",UUID.randomUUID().toString()).put("scanId",run)
+            .put("cycle",cycle).put("groupId",group.key).put("appVersion",BuildConfig.VERSION_NAME)
             .put("versionCode",BuildConfig.VERSION_CODE).put("issue",issue)
             .put("interactive",power.isInteractive).put("idle",power.isDeviceIdleMode)
             .put("batteryExempt",power.isIgnoringBatteryOptimizations(context.packageName))
@@ -31,20 +31,20 @@ object WatcherCaptureReport {
     }
     fun summary(reports:List<JSONObject>):String=buildString {
         if(reports.isEmpty())return@buildString
-        appendLine("Ostatni odczyt każdej grupy w cyklu: grupy ${reports.size} • posty ${reports.sumOf{it.getJSONArray("posts").length()}} • zapisane zdjęcia ${reports.sumOf{r->val p=r.getJSONArray("posts");(0 until p.length()).sumOf{p.getJSONObject(it).getInt("photos")}}}")
+        appendLine("Ostatni odczyt każdego źródła w cyklu: źródła ${reports.size} • posty ${reports.sumOf{it.getJSONArray("posts").length()}} • zapisane zdjęcia ${reports.sumOf{r->val p=r.getJSONArray("posts");(0 until p.length()).sumOf{p.getJSONObject(it).getInt("photos")}}}")
         val gaps=reports.filter{it.optString("issue").isNotEmpty()}
         if(gaps.isNotEmpty()){
             val names=mapOf("PAGE_HIDDEN" to "strona nie była widoczna", "NO_POST_EVIDENCE" to "brak potwierdzonych postów", "SCROLL_NOT_CONFIRMED" to "brak potwierdzenia przewijania", "SALE_PHOTO_MISSING" to "brak zdjęć części kandydatów ofert", "CAPTURE_NOT_MEASURED" to "brak pomiaru odczytu")
-            for((reason,items)in gaps.groupBy{it.optString("issue")})appendLine("${names[reason]?:reason}: ${items.size} grup")
+            for((reason,items)in gaps.groupBy{it.optString("issue")})appendLine("${names[reason]?:reason}: ${items.size} źródeł")
             val missing=gaps.filter{it.optString("issue")=="SALE_PHOTO_MISSING"}.sumOf{r->val p=r.getJSONArray("posts");(0 until p.length()).count{val post=p.getJSONObject(it);post.optInt("photos")==0&&post.optString("intent")=="SELL_PROPERTY"}}
             if(missing>0)appendLine("Posty oznaczone jako sprzedaż bez zdjęcia: $missing. Ten brak nie oznacza problemu z przewijaniem.")
         }
         for(r in reports){
-            val source=r.optString("groupId");val name=WatcherGroups.find(source)?.name?:source
+            val source=r.optString("groupId");val name=WatcherSources.find(source)?.name?:source
             val ms=r.optJSONObject("stats")?.optLong("groupElapsedMs")?:0
             val elapsed=if(ms>0)"${ms/60000} min ${ms/1000%60} s"else"niezmierzony w tej próbie"
             appendLine("$name — czas: $elapsed")
         }
-        append("Wersja: ${BuildConfig.VERSION_NAME}. Limit: 50 zachowanych postów na grupę, do 45 s przewijania; raport nie potwierdza odczytu całej historii Facebooka.")
+        append("Wersja: ${BuildConfig.VERSION_NAME}. Limit: 50 zachowanych postów na źródło, do 45 s przewijania; raport nie potwierdza odczytu całej historii Facebooka.")
     }
 }

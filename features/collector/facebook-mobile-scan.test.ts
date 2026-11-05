@@ -19,3 +19,12 @@ test("returns retry on storage or authentication errors without echoing private 
  const post=createMobileScanPost({authenticate:async()=>({id:"d"}),allowed:async()=>true,save:async()=>{throw Error("private database details");},authStatus:()=>null});
  const response=await post(new Request("https://manager/scan",{method:"POST",headers:{authorization:"Bearer paired"},body:JSON.stringify(body())}));assert.equal(response.status,503);assert.deepEqual(await response.json(),{code:"SCAN_REPORT_RETRY"});
 });
+
+test("typed profile report permits opaque IDs only with matching source key",async()=>{
+ const report={...body(),version:2,sourceType:"PROFILE",sourceId:"61563667387467",groupId:"profile:61563667387467",posts:[{...body().posts[0],postId:"pfbidAbCdEf0123456789"}]};
+ assert.ok(parseMobileScan(report));
+ for(const bad of [{...report,groupId:"61563667387467"},{...report,sourceId:"100008036582269"},{...report,sourceType:"GROUP"},{...report,text:"private"},{...body(),posts:report.posts}])assert.equal(parseMobileScan(bad),null);
+ let permitted:unknown;
+ const post=createMobileScanPost({authenticate:async()=>({id:"owned"}),allowed:async(id,type)=>{permitted=[id,type];return true;},save:async()=>{},authStatus:()=>null});
+ assert.equal((await post(new Request("https://manager/scan",{method:"POST",headers:{authorization:"Bearer paired"},body:JSON.stringify(report)}))).status,200);assert.deepEqual(permitted,[report.sourceId,"PROFILE"]);
+});

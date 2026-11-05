@@ -86,6 +86,18 @@ class BackgroundChannel {
         return OcrProtocol.parse(request(message),nonce,id,groupId)
     }
 
+    internal suspend fun profileOcrFields(source:WatcherGroup,id:String,texts:List<String>):DesktopRow? {
+        require(source.type=="PROFILE")
+        if(!ProfileIdentity.postId(id,true)||texts.isEmpty()||texts.size>3||texts.any{it.isBlank()||it.length>12000}||texts.sumOf{it.length}>24000)return null
+        val nonce=UUID.randomUUID().toString()
+        val message=JSONObject().put("type","profileOcrFields").put("nonce",nonce).put("consent",true).put("sourceId",source.id).put("postId",id).put("texts",org.json.JSONArray(texts))
+        val reply=request(message)?:return null
+        if(reply.optString("type")!="profileOcrFieldsResult"||reply.optString("nonce")!=nonce)return null
+        reply.put("type","desktopPreviewResult")
+        val parsed=DesktopProtocol.parse(reply,nonce,source.id,profile=true)?:return null
+        return parsed.rows.singleOrNull()?.takeIf{it.postId==id}
+    }
+
     suspend fun request(message: JSONObject, timeoutMs: Long = 5_000): JSONObject? {
         val current = port ?: return null
         val nonce = message.optString("nonce").ifBlank { UUID.randomUUID().toString().also { message.put("nonce", it) } }

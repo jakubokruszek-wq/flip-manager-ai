@@ -66,20 +66,20 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
     }
     /** Body is frozen BEFORE HTTP, with an idempotency key independent of retry time or scan. */
     fun enqueue(device:String,group:WatcherGroup,value:SavedResult) {
-        require(SavedResultCodec.rows(JSONArray(value.rows.map(SavedResultCodec::row)),group.id,true)==value.rows)
+        require(SavedResultCodec.rows(JSONArray(value.rows.map(SavedResultCodec::row)),group.id,true,group.type=="PROFILE")==value.rows)
         val db=writableDatabase;db.beginTransaction()
         try {
             for(row in value.rows) {
-                if(db.rawQuery("SELECT 1 FROM removed_posts WHERE source=? AND post=?",arrayOf(group.id,row.postId)).use{it.moveToFirst()})continue
-                val firstSaved=db.rawQuery("SELECT MIN(saved_at) FROM outbox WHERE source=? AND post=?",arrayOf(group.id,row.postId)).use{if(it.moveToFirst()&&!it.isNull(0))it.getLong(0)else value.savedAt}
+                if(db.rawQuery("SELECT 1 FROM removed_posts WHERE source=? AND post=?",arrayOf(group.key,row.postId)).use{it.moveToFirst()})continue
+                val firstSaved=db.rawQuery("SELECT MIN(saved_at) FROM outbox WHERE source=? AND post=?",arrayOf(group.key,row.postId)).use{if(it.moveToFirst()&&!it.isNull(0))it.getLong(0)else value.savedAt}
                 val photos=value.photos.filter{it.postId==row.postId&&!it.crop}.sortedBy{it.slot}
                 val text=value.postTexts[row.postId]
                 require(text==null||text.isNotBlank()&&text.length<=12000&&!Regex("[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]").containsMatchIn(text))
-                val body=JSONObject().put("version",if(text==null)1 else 2).apply{if(text!=null)put("postText",text)}.put("groupId",group.id).put("row",SavedResultCodec.row(row))
+                val body=JSONObject().put("version",if(group.type=="PROFILE")3 else if(text==null)1 else 2).apply{if(group.type=="PROFILE"){put("sourceType","PROFILE");put("postText",text?:JSONObject.NULL)}else if(text!=null)put("postText",text)}.put("groupId",group.id).put("row",SavedResultCodec.row(row))
                     .put("photos",JSONArray(photos.map{JSONObject().put("slot",it.slot).put("jpeg",Base64.encodeToString(it.jpeg,Base64.NO_WRAP))})).toString().toByteArray()
                 require(body.size<=512*1024)
                 val id="mobile-v1:"+AutomationPolicy.digest((device+"/"+group.id+"/"+row.postId+"/").toByteArray()+body)
-                val values=ContentValues().apply{put("id",id);put("device",device);put("source",group.id);put("post",row.postId);put("saved_at",firstSaved);put("body",seal(id,body));put("state",if(OfferQuality.reason(row,photos.size)==null)"pending"else"quality_hold")}
+                val values=ContentValues().apply{put("id",id);put("device",device);put("source",group.key);put("post",row.postId);put("saved_at",firstSaved);put("body",seal(id,body));put("state",if(OfferQuality.reason(row,photos.size)==null)"pending"else"quality_hold")}
                 val exists=db.rawQuery("SELECT 1 FROM outbox WHERE id=?",arrayOf(id)).use{it.moveToFirst()}
                 if(!exists){
                     check(db.rawQuery("SELECT COUNT(*) FROM outbox WHERE state NOT IN ('sent','deleted')",null).use{it.moveToFirst();it.getInt(0)}<1000){"QUEUE_FULL"}

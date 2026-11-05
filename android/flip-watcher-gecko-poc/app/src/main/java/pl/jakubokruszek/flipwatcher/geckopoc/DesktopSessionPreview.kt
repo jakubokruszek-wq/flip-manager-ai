@@ -9,6 +9,10 @@ import org.mozilla.geckoview.GeckoSessionSettings
 
 /** Same orchestrator in the activity and the real-Gecko emulator acceptance test. */
 object DesktopSessionPreview {
+    internal fun applyDesktop(session:GeckoSession){
+        session.settings.userAgentMode=GeckoSessionSettings.USER_AGENT_MODE_DESKTOP
+        session.settings.viewportMode=GeckoSessionSettings.VIEWPORT_MODE_DESKTOP
+    }
     data class Outcome(val reason:String,val reply:DesktopReply?,val userAgent:String?)
     suspend fun run(session:GeckoSession,channel:CollectorChannel,gate:DesktopTrial,nonce:String,target:String,
                     currentUrl:()->String?,pageReady:()->Boolean,fixture:Boolean=false,windowMs:Int=60_000,view:org.mozilla.geckoview.GeckoView?=null,images:DesktopThumbnails?=null,baseline:Boolean=false,gesture:Boolean=false,fastScroll:Boolean=false,groupId:String=PocPolicy.APPROVED_GROUP_ID,alive:()->Boolean={true},includePostText:Boolean=false):Outcome=withContext(Dispatchers.Main){
@@ -29,8 +33,7 @@ object DesktopSessionPreview {
             if(armed!="ARMED")return@withContext failure("ARM_${armed.takeIf{it in setOf("STOP","BUSY","UNSUPPORTED")}?:"STOP"}")
             if(!gate.armed())return@withContext failure(gate.reason)
             session.setActive(true);session.setFocused(true)
-            session.settings.userAgentMode=GeckoSessionSettings.USER_AGENT_MODE_DESKTOP
-            session.settings.viewportMode=GeckoSessionSettings.VIEWPORT_MODE_DESKTOP
+            applyDesktop(session)
             val resolvedUa=withTimeoutOrNull(remaining().coerceAtMost(5_000)){session.userAgent.await()}
             ua=resolvedUa
             if(!live())return@withContext failure(gate.reason)

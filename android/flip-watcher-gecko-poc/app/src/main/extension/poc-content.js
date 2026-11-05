@@ -454,6 +454,12 @@
     if(message.type==='reviewPost'){
       const reader=reviewReader||(reviewReader=scope.FlipReviewPost.create());const result=reader.read(scope,message,core,scope.FlipDesktopFields,scope.FlipDesktopPreview);port.postMessage({type:'reviewPostResult',nonce:message.nonce,...result});return;
     }
+    if(message.type==='profilePreview'){
+      if(desktopRunning){port.postMessage({type:'profilePreviewResult',nonce:message.nonce,sourceId:message.sourceId,status:'STOP',reason:'BUSY',rows:[],postTexts:[],stats:scope.FlipDesktopPreview.zero()});return;}
+      desktopRunning=true;
+      try{const result=await scope.FlipProfileReader.run(scope,message,scope.FlipDesktopFields,scope.FlipDesktopPreview,m=>viewportTransport.request(m));port.postMessage({type:'profilePreviewResult',nonce:message.nonce,...result});}
+      finally{viewportTransport.clear();desktopRunning=false;}return;
+    }
     if(message.type==='desktopPreview'){
       if(desktopRunning){port.postMessage({type:'desktopPreviewResult',nonce:message.nonce,status:'STOP',reason:'BUSY',rows:[],stats:scope.FlipDesktopPreview.zero()});return;}
       desktopRunning=true;

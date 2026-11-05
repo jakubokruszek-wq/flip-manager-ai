@@ -94,7 +94,9 @@
       if(message?.type==='nativeReady')return;
       if (!message || typeof message !== "object" || typeof message.nonce !== "string") return;
       const reply = value => { try { if(appPort===current)current.postMessage({ nonce: message.nonce, ...value }); } catch { /* app gone */ } };
-      if (message.type === "ocrFields") {
+      if (message.type === "profileOcrFields") {
+        reply(scope.FlipProfileReader.ocr(message,scope.FlipDesktopFields,scope.FlipDesktopPreview));
+      } else if (message.type === "ocrFields") {
         const processor=scope.FlipOcrFields?.create;
         if(!ocrFieldsReader&&processor)ocrFieldsReader=processor();
         if(ocrFieldsReader)reply(ocrFieldsReader.project(message,scope.FlipFacebookCollectorCore,scope.FlipDesktopFields,scope.FlipDesktopPreview));

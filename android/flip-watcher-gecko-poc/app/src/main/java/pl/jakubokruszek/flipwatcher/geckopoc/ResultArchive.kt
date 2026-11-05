@@ -28,11 +28,11 @@ object SavedResultCodec {
         put("neighborhood",r.neighborhood?:JSONObject.NULL);put("street",r.street?:JSONObject.NULL)
         put("intent",r.intent);put("usable",r.usable);put("photos",r.photos);put("qualification",r.qualification)
     }
-    fun rows(a:JSONArray,groupId:String=PocPolicy.APPROVED_GROUP_ID,background:Boolean=false):List<DesktopRow>? {
+    fun rows(a:JSONArray,groupId:String=PocPolicy.APPROVED_GROUP_ID,background:Boolean=false,profile:Boolean=false):List<DesktopRow>? {
         // This is validation of persisted DTOs, not authorization for any browser operation.
         val stats=JSONObject(DesktopProtocol.emptyStats()).put("verified",1).put("candidates",a.length())
         return DesktopProtocol.parse(JSONObject().put("type","desktopPreviewResult").put("nonce","archive")
-            .put("status","OK").put("reason","DONE").put("stats",stats).put("rows",a),"archive",groupId,background)?.rows
+            .put("status","OK").put("reason","DONE").put("stats",stats).put("rows",a),"archive",groupId,background,profile)?.rows
     }
     fun metadata(value:SavedResult,groupId:String=PocPolicy.APPROVED_GROUP_ID):ByteArray {
         require(value.savedAt>0&&rows(JSONArray(value.rows.map(::row)),groupId)==value.rows)

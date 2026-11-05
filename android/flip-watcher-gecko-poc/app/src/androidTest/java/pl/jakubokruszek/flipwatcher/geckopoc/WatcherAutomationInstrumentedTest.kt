@@ -152,6 +152,28 @@ class WatcherAutomationInstrumentedTest {
             }
         }finally{server.close()}
     }
+    @Test fun actualProfileRendererCapturesOwnTextGraphicAndOcrPhotoAndFreezesTypedOutbox()=runBlocking {
+        val source=WatcherGroup("61563667387467","Dawid Trojanowski","PROFILE")
+        val server=LoopbackFixtureServer(pages=mapOf("/profile.php" to "desktop-profile-offers")){name->runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}
+        context.deleteDatabase("watcher-outbox-v1.db")
+        try {
+            val saved=ProfileWatcherScan(context).runFixture(source,"http://127.0.0.1:${server.port}/profile.php?id=${source.id}"){true}
+            assertTrue(saved.rows.none{it.postId=="999999999999"})
+            for(id in listOf("1655103482946823","pfbidAbCdEf0123456789")){
+                val row=checkNotNull(saved.rows.find{it.postId==id})
+                assertEquals(source.postUrl(id),row.permalink);assertEquals("SELL_PROPERTY",row.intent)
+                assertEquals(368000.0,row.price);assertEquals(62.4,row.area)
+                assertTrue("Own profile image must be actual stored pixels",saved.photos.any{it.postId==id&&it.jpeg.isNotEmpty()})
+            }
+            val selected=saved.rows.first{it.postId=="pfbidAbCdEf0123456789"}
+            val frozen=WatcherOutbox(context).use{q->q.enqueue(device,source,saved.copy(rows=listOf(selected),photos=saved.photos.filter{it.postId==selected.postId}));checkNotNull(q.next(device,Long.MAX_VALUE))}
+            WatcherOutbox(context).use{q->val item=checkNotNull(q.next(device,Long.MAX_VALUE));assertEquals(frozen.body,item.body);assertEquals(frozen.id,item.id)
+                val body=org.json.JSONObject(item.body);assertEquals(3,body.getInt("version"));assertEquals("PROFILE",body.getString("sourceType"));assertEquals(source.id,body.getString("groupId"));assertEquals(source.postUrl(selected.postId),body.getJSONObject("row").getString("permalink"))
+                assertNotNull(SavedResultCodec.rows(org.json.JSONArray().put(body.getJSONObject("row")),source.id,true,profile=true))
+                assertNull(SavedResultCodec.rows(org.json.JSONArray().put(body.getJSONObject("row")),source.id,true))
+            }
+        }finally{server.close();context.deleteDatabase("watcher-outbox-v1.db")}
+    }
     @Test fun diagnosticsSurviveVersionTwoUpgradeWithoutReplayingBusinessBodies(){
         context.deleteDatabase("watcher-outbox-v1.db")
         try{

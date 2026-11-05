@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 export class MobileInputError extends Error {}
 export class MobileQualityError extends Error {}
 export type MobilePost = {
+  sourceType?: "PROFILE";
   postText: string | null;
   groupId: string;
   postId: string;
@@ -24,16 +25,18 @@ export function parseMobilePost(raw: string, deviceId: string, key: string): Mob
   let j: unknown;
   try { j = JSON.parse(raw); } catch { throw new MobileInputError("INVALID_JSON"); }
   check(record(j));
-  check(j.version === 1 || j.version === 2);
-  fields(j, j.version === 2 ? ["version", "groupId", "row", "photos", "postText"] : ["version", "groupId", "row", "photos"]);
-  const postText = j.version === 2 ? j.postText : null;
+  check(j.version === 1 || j.version === 2 || j.version === 3);
+  const profile = j.version === 3;
+  if (profile) check(j.sourceType === "PROFILE");
+  fields(j, profile ? ["version", "sourceType", "groupId", "row", "photos", "postText"] : j.version === 2 ? ["version", "groupId", "row", "photos", "postText"] : ["version", "groupId", "row", "photos"]);
+  const postText = j.version === 2 || profile ? j.postText : null;
   check(postText === null || typeof postText === "string" && postText.trim().length > 0 && postText.length <= 12000 && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(postText));
   check(j.version !== 2 || typeof postText === "string");
   check(typeof j.groupId === "string" && /^[A-Za-z0-9_.-]{1,100}$/.test(j.groupId));
   const r = j.row; check(record(r));
   fields(r, ["postId", "permalink", "layer", "price", "priceSource", "area", "rooms", "district", "neighborhood", "street", "intent", "usable", "photos", "qualification"]);
-  check(typeof r.postId === "string" && /^[0-9]{5,30}$/.test(r.postId));
-  const permalink = `https://www.facebook.com/groups/${j.groupId}/posts/${r.postId}/`;
+  check(typeof r.postId === "string" && (profile ? /^(?:[0-9]{5,30}|pfbid[A-Za-z0-9]{10,180})$/ : /^[0-9]{5,30}$/).test(r.postId));
+  const permalink = `https://www.facebook.com/${profile ? "" : "groups/"}${j.groupId}/posts/${r.postId}/`;
   check(r.permalink === permalink);
   check(key === "mobile-v1:" + hash(Buffer.concat([Buffer.from(`${deviceId}/${j.groupId}/${r.postId}/`), Buffer.from(raw)])));
   function number(v: unknown, max: number): number | null { if (v === null) return null; check(typeof v === "number" && Number.isFinite(v) && v > 0 && v <= max); return v; }
@@ -73,12 +76,12 @@ export function parseMobilePost(raw: string, deviceId: string, key: string): Mob
     check(valid);
     return { slot: p.slot, bytes, hash: hash(bytes) };
   });
-  return { postText: postText as string | null, groupId: j.groupId, postId: r.postId, permalink, price, area, rooms, location, photos };
+  return { ...(profile ? {sourceType: "PROFILE" as const} : {}), postText: postText as string | null, groupId: j.groupId, postId: r.postId, permalink, price, area, rooms, location, photos };
 }
 
 type Dependencies = {
   authenticate(token: string): Promise<{ id: string }>;
-  allowed(group: string): Promise<boolean>;
+  allowed(group: string, type?: "GROUP" | "PROFILE"): Promise<boolean>;
   removed?(post:MobilePost):Promise<boolean>;
   upload(device: string, post: MobilePost): Promise<string[]>;
   importPost(device: string, key: string, post: MobilePost, images: string[]): Promise<{ listingId: string; status: string }>;
@@ -99,7 +102,7 @@ export function createMobilePost(deps: Dependencies) {
       const raw = Buffer.concat(chunks).toString("utf8");
       const key = request.headers.get("idempotency-key") ?? "";
       const post = parseMobilePost(raw, device.id, key);
-      if (!await deps.allowed(post.groupId)) return Response.json({ code: "SOURCE_DISABLED" }, { status: 409 });
+      if (!await deps.allowed(post.groupId, post.sourceType ?? "GROUP")) return Response.json({ code: "SOURCE_DISABLED" }, { status: 409 });
       if (await deps.removed?.(post)) return Response.json({code:"POST_PREVIOUSLY_REMOVED"},{status:410});
       const images = await deps.upload(device.id, post);
       if (images.length !== post.photos.length || images.some(url => !url.startsWith("https://"))) throw new Error("PHOTO_PERSISTENCE_INCOMPLETE");
