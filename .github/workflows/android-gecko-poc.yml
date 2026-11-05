@@ -500,9 +500,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  publish-tested-0577:
-    name: Publish tested Android 0.5.77
-    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-scan-evidence'
+  publish-tested-0578:
+    name: Publish tested Android 0.5.78
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-source-status'
     needs: [guard, build, instrumented, verified-apk]
     runs-on: ubuntu-24.04
     permissions:
@@ -517,23 +517,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-scan-evidence --jq .object.sha)" = '${{ github.sha }}'
+          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-source-status --jq .object.sha)" = '${{ github.sha }}'
           apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
           test -n "$apk_path" && test -f "$apk_path"
-          cp "$apk_path" flip-watcher-0.5.77-arm64.apk
-          unzip -p flip-watcher-0.5.77-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.77")process.exit(1)})'
-          unzip -p flip-watcher-0.5.77-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
-          sha256sum flip-watcher-0.5.77-arm64.apk > SHA256SUMS
+          cp "$apk_path" flip-watcher-0.5.78-arm64.apk
+          unzip -p flip-watcher-0.5.78-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.78")process.exit(1)})'
+          unzip -p flip-watcher-0.5.78-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
+          sha256sum flip-watcher-0.5.78-arm64.apk > SHA256SUMS
           cat > release-notes.md <<'NOTES'
-          Android 0.5.77 poprawia odczyt postów i pokazuje dowody pracy automatu.
+          Android 0.5.78 pokazuje konkretną przyczynę niepełnego odczytu i czas pracy nad źródłem.
 
-          - Rozpoznaje klikane kolorowe grafiki z dużym tekstem wewnątrz tła i własne kontenery FeedUnit.
-          - Rozróżnia cały cykl od ostatniej próby; nie oznacza braków odczytu jako udanego skanu.
-          - Raz ponawia grupy bez potwierdzonego przewijania lub zdjęć ofert; później pokazuje skan częściowy.
-          - Nowy algorytm ponownie sprawdza grupy zamiast pomijać je na podstawie ukończeń starej wersji.
-          - Przesyła prywatną diagnostykę: wersję, liczniki i ID postów, bez ich tekstów, zdjęć i danych logowania.
-          - Dziennik używa czasu telefonu. Oferty, zdjęcia, logowanie i stare klucze wysyłki pozostają zachowane.
+          - Rozróżnia brak zdjęć, brak postów, ukrytą stronę i brak potwierdzenia przewijania.
+          - Pokazuje czas bieżącej grupy oraz zapisuje czas obsługi każdej grupy. Starszym próbom nie przypisuje wymyślonego czasu.
+          - Przywraca spójne przypisanie nagłówka i własnej treści do FeedUnit wyłącznie wtedy, gdy cały obszar wskazuje jeden dokładny post. Obszary z różnymi postami pozostają odrzucone.
+          - Dodaje wejście do wspólnego zarządzania grupami i profilami w Managerze. Nową grupę można dodać z tego miejsca, a następnie zlecić nowy skan w Androidzie.
+          - Profile zapisane w Managerze nie są usuwane. Ta wersja automatu Androida nadal skanuje grupy, nie profile.
+          - Zachowuje oferty, zdjęcia, logowanie, harmonogram i klucze ponowień.
 
-          Instaluj jako aktualizację, bez odinstalowywania. Testy lokalnych stron nie potwierdzają znalezienia konkretnego posta w prywatnej sesji Facebooka na telefonie. Nie zmieniono harmonogramu.
+          Instaluj jako aktualizację. Testy lokalnych stron nie potwierdzają dostępu do konkretnego posta w prywatnej sesji Facebooka.
           NOTES
-          gh release create gecko-poc-0.5.77 flip-watcher-0.5.77-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.77 — odczyt i diagnostyka skanu' --prerelease --notes-file release-notes.md
+          gh release create gecko-poc-0.5.78 flip-watcher-0.5.78-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.78 — czas grup i precyzyjny status' --prerelease --notes-file release-notes.md

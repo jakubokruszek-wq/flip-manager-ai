@@ -22,7 +22,7 @@ data class ScanState(
     val heartbeat:Long=0, val ended:Long=0, val lastSuccess:Long=0,
     val group:String="", val position:Int=0, val total:Int=0, val done:Int=0,
     val posts:Int=0, val photos:Int=0, val uploads:Int=0, val reason:String="",
-    val checked:Long=0, val skipped:String=""
+    val checked:Long=0, val skipped:String="", val groupStarted:Long=0
 ) { val active get()=phase in setOf("PREPARING","UPLOADING","LOADING","READING","OCR","SAVING") }
 
 object ScanStatusText {
@@ -40,7 +40,7 @@ object ScanStatusText {
         "ANDROID_PERMISSION_DENIED"->"Android odmówił uprawnienia potrzebnego do pracy."
         "BATCH_CONTINUE"->"Osiągnięto limit czasu partii. Pozostałe grupy czekają na kolejną próbę."
         "SLOT_PARTIAL"->"Cykl został wykonany z brakami odczytu. Szczegóły są zachowane w diagnostyce; następny termin ponowi odczyt."
-        "CAPTURE_PARTIAL"->"Część grup nie potwierdziła przewijania, widoczności strony lub zdjęć ofert, także po ponowieniu."
+        "CAPTURE_PARTIAL"->"Cykl zakończony z brakami. Konkretne przyczyny i liczby dla źródeł są powyżej."
         "PAGE_HIDDEN","NO_POST_EVIDENCE","SCROLL_NOT_CONFIRMED","SALE_PHOTO_MISSING","CAPTURE_NOT_MEASURED"->"Odczyt grupy nie został potwierdzony ($code). Zaplanowano jedno ponowienie."
         "SLOT_COMPLETED"->"To okno zostało już wykonane. Automat czeka na następny termin."
         "WINDOW_NOT_DUE"->"Nowy termin skanu jeszcze nie nastąpił."
@@ -71,6 +71,12 @@ object ScanStatusText {
     fun details(s:ScanState,enabled:Boolean,now:Long,next:Long,network:Boolean,notifications:Boolean,work:String,running:Boolean?,zone:ZoneId=ZoneId.systemDefault(),pendingWindow:Long=0):String=buildString {
         appendLine(title(s,enabled,now,running))
         if(s.total>0){appendLine("Grupy z zakończoną próbą: ${s.done}/${s.total}");if(s.group.isNotEmpty())appendLine("Grupa ${s.position}/${s.total}: ${s.group}")}
+        if(s.groupStarted>0){
+            val until=if(s.ended>0)s.ended else now
+            val seconds=((until-s.groupStarted).coerceAtLeast(0)/1000)
+            appendLine("Czas bieżącego źródła: ${seconds/60} min ${seconds%60} s"+(if(s.active)" • trwa" else " • próba zakończona"))
+            appendLine("Budżety: wczytanie do 35 s, przewijanie do 45 s, OCR do 45 s. To limity, nie odliczanie do gwarantowanego końca.")
+        }
         if(s.started>0){appendLine("Z tej próby: posty ${s.posts} • zdjęcia ${s.photos} • wysłane ${s.uploads}");appendLine("Start próby: ${time(s.started,zone)}")}
         if(s.changed>0)appendLine("Ostatnia zmiana etapu: ${time(s.changed,zone)}")
         if(s.active){
@@ -100,10 +106,10 @@ object WatcherScanStatus {
     private const val NOTICE=73573
     internal fun read(context:Context):ScanState=synchronized(guard){
         val j=runCatching{JSONObject(context.getSharedPreferences(PREFS,Context.MODE_PRIVATE).getString("state",null)?:"{}")} .getOrElse{JSONObject()}
-        ScanState(j.optString("run"),j.optString("phase","IDLE"),j.optLong("started"),j.optLong("changed"),j.optLong("heartbeat"),j.optLong("ended"),j.optLong("lastSuccess"),j.optString("group"),j.optInt("position"),j.optInt("total"),j.optInt("done"),j.optInt("posts"),j.optInt("photos"),j.optInt("uploads"),j.optString("reason"),j.optLong("checked"),j.optString("skipped"))
+        ScanState(j.optString("run"),j.optString("phase","IDLE"),j.optLong("started"),j.optLong("changed"),j.optLong("heartbeat"),j.optLong("ended"),j.optLong("lastSuccess"),j.optString("group"),j.optInt("position"),j.optInt("total"),j.optInt("done"),j.optInt("posts"),j.optInt("photos"),j.optInt("uploads"),j.optString("reason"),j.optLong("checked"),j.optString("skipped"),j.optLong("groupStarted"))
     }
     private fun change(context:Context,alert:Boolean=true,f:(ScanState)->ScanState):ScanState=synchronized(guard){
-        val s=f(read(context));val j=JSONObject().put("run",s.run).put("phase",s.phase).put("started",s.started).put("changed",s.changed).put("heartbeat",s.heartbeat).put("ended",s.ended).put("lastSuccess",s.lastSuccess).put("group",s.group).put("position",s.position).put("total",s.total).put("done",s.done).put("posts",s.posts).put("photos",s.photos).put("uploads",s.uploads).put("reason",s.reason).put("checked",s.checked).put("skipped",s.skipped)
+        val s=f(read(context));val j=JSONObject().put("run",s.run).put("phase",s.phase).put("started",s.started).put("changed",s.changed).put("heartbeat",s.heartbeat).put("ended",s.ended).put("lastSuccess",s.lastSuccess).put("group",s.group).put("position",s.position).put("total",s.total).put("done",s.done).put("posts",s.posts).put("photos",s.photos).put("uploads",s.uploads).put("reason",s.reason).put("checked",s.checked).put("skipped",s.skipped).put("groupStarted",s.groupStarted)
         check(context.getSharedPreferences(PREFS,Context.MODE_PRIVATE).edit().putString("state",j.toString()).commit())
         if(alert)notify(context,s)
         s

@@ -25,4 +25,13 @@ class ScanStatusTextTest {
         assertTrue(ScanStatusText.reason("WAITING_FOR_BACKGROUND").contains("ekran główny"))
         assertEquals("Automat wyłączony",ScanStatusText.title(ScanState(phase="DONE"),false,now,false))
     }
+    @org.junit.Test fun groupTimerUsesGroupStartAndStopsWhenAttemptEnds(){
+        val now=1_000_000L
+        val s=ScanState(phase="READING",started=now-200_000,heartbeat=now,groupStarted=now-65_000)
+        fun text(value:ScanState)=ScanStatusText.details(value,true,now,now+1000,true,true,"",true)
+        org.junit.Assert.assertTrue(text(s).contains("Czas bieżącego źródła: 1 min 5 s • trwa"))
+        org.junit.Assert.assertTrue(text(s.copy(phase="PARTIAL",ended=now-10_000)).contains("Czas bieżącego źródła: 0 min 55 s • próba zakończona"))
+        org.junit.Assert.assertFalse(ScanStatusText.reason("CAPTURE_PARTIAL").contains("nie potwierdziła przewijania"))
+    }
+
 }

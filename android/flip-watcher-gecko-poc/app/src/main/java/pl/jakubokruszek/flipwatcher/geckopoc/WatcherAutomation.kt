@@ -156,15 +156,16 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                         val cursor=groups.indexOfFirst{it.id==prefs.getString("last_attempted_source",null)}
                         val ordered=if(cursor<0)groups else groups.drop(cursor+1)+groups.take(cursor+1)
                         WatcherScanStatus.update(context,run){it.copy(total=groups.size,done=groups.count{g->queue.scanned(slot,g.id)})}
-                        for((index,group) in ordered.withIndex()){
+                        for(group in ordered){
                             currentCoroutineContext().ensureActive()
                             if(WatcherAutomation.uiVisible||!WatcherAutomation.enabled(context))break
                             if(queue.scanned(slot,group.id))continue
                             if(remaining()<120_000){budgetReached=true;break}
-                            queue.log("GROUP_"+(index+1))
+                            queue.log("GROUP_"+(groups.indexOf(group)+1))
                             check(prefs.edit().putString("last_attempted_source",group.id).commit())
                             queue.log("SCAN_STARTED")
-                            WatcherScanStatus.update(context,run){it.copy(phase="LOADING",group=group.name,position=index+1,reason="")}
+                            WatcherScanStatus.update(context,run){it.copy(phase="LOADING",group=group.name,position=groups.indexOf(group)+1,reason="",groupStarted=System.currentTimeMillis())}
+                            val groupClock=android.os.SystemClock.elapsedRealtime()
                             try {
                             val scanned=scan(group){phase->WatcherScanStatus.update(context,run){it.copy(phase=phase)}}
                             WatcherScanStatus.update(context,run){it.copy(phase="SAVING")}
@@ -178,7 +179,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             }
                             val issue=WatcherCaptureReport.issue(scanned)
                             val prior=queue.cycleReports(slot).any{it.getString("groupId")==group.id}
-                            val evidence=WatcherCaptureReport.create(context,slot,run,group,scanned,issue)
+                            val evidence=WatcherCaptureReport.create(context,slot,run,group,scanned,issue,android.os.SystemClock.elapsedRealtime()-groupClock)
                             queue.report(credentials.deviceId,slot,group.id,evidence)
                             // One bounded retry for degraded capture; do not spin forever on the same source.
                             if(issue.isEmpty()||prior){queue.completeScan(slot,group.id);if(requested!=null)queue.completeScan(windowKey,group.id)}
@@ -193,7 +194,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                 if(e is WatcherUpload.HttpFailure&&e.status in setOf(401,403))throw e
                                 lastIssue=if(WatcherAutomation.uiVisible)"WAITING_FOR_BACKGROUND"else WatcherAutomation.errorCode(e)
                                 queue.log(lastIssue)
-                                val evidence=WatcherCaptureReport.create(context,slot,run,group,null,lastIssue)
+                                val evidence=WatcherCaptureReport.create(context,slot,run,group,null,lastIssue,android.os.SystemClock.elapsedRealtime()-groupClock)
                                 runCatching{queue.report(credentials.deviceId,slot,group.id,evidence)}
                                 WatcherScanStatus.update(context,run){it.copy(phase="PREPARING",reason=lastIssue)}
                                 // A single unavailable group cannot starve every later source.

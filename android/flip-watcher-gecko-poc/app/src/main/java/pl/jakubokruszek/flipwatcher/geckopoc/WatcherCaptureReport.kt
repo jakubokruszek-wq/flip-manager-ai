@@ -18,14 +18,14 @@ object WatcherCaptureReport {
         if(value.rows.any{(DesktopSummary.eligible(it)||DesktopPresentation.reviewable(it))&&value.photos.none{p->p.postId==it.postId}})return "SALE_PHOTO_MISSING"
         return ""
     }
-    fun create(context:Context,cycle:String,run:String,group:WatcherGroup,value:SavedResult?,issue:String):JSONObject {
+    fun create(context:Context,cycle:String,run:String,group:WatcherGroup,value:SavedResult?,issue:String,elapsedMs:Long=0):JSONObject {
         val power=context.getSystemService(PowerManager::class.java)
         return JSONObject().put("version",1).put("batchId",UUID.randomUUID().toString()).put("scanId",run)
             .put("cycle",cycle).put("groupId",group.id).put("appVersion",BuildConfig.VERSION_NAME)
             .put("versionCode",BuildConfig.VERSION_CODE).put("issue",issue)
             .put("interactive",power.isInteractive).put("idle",power.isDeviceIdleMode)
             .put("batteryExempt",power.isIgnoringBatteryOptimizations(context.packageName))
-            .put("stats",JSONObject(value?.captureStats?:emptyMap<String,Int>()))
+            .put("stats",JSONObject(value?.captureStats?:emptyMap<String,Int>()).apply{if(elapsedMs>0)put("groupElapsedMs",elapsedMs.coerceAtMost(100_000_000L))})
             .put("posts",JSONArray(value?.rows?.map{r->JSONObject().put("postId",r.postId).put("intent",r.intent)
                 .put("qualification",r.qualification).put("photos",value.photos.count{it.postId==r.postId})}?:emptyList<JSONObject>()))
     }
@@ -33,7 +33,18 @@ object WatcherCaptureReport {
         if(reports.isEmpty())return@buildString
         appendLine("Ostatni odczyt każdej grupy w cyklu: grupy ${reports.size} • posty ${reports.sumOf{it.getJSONArray("posts").length()}} • zapisane zdjęcia ${reports.sumOf{r->val p=r.getJSONArray("posts");(0 until p.length()).sumOf{p.getJSONObject(it).getInt("photos")}}}")
         val gaps=reports.filter{it.optString("issue").isNotEmpty()}
-        if(gaps.isNotEmpty())appendLine("Grupy z niepotwierdzonym odczytem: ${gaps.size}. Brak wyniku nie oznacza braku ofert.")
+        if(gaps.isNotEmpty()){
+            val names=mapOf("PAGE_HIDDEN" to "strona nie była widoczna", "NO_POST_EVIDENCE" to "brak potwierdzonych postów", "SCROLL_NOT_CONFIRMED" to "brak potwierdzenia przewijania", "SALE_PHOTO_MISSING" to "brak zdjęć części kandydatów ofert", "CAPTURE_NOT_MEASURED" to "brak pomiaru odczytu")
+            for((reason,items)in gaps.groupBy{it.optString("issue")})appendLine("${names[reason]?:reason}: ${items.size} grup")
+            val missing=gaps.filter{it.optString("issue")=="SALE_PHOTO_MISSING"}.sumOf{r->val p=r.getJSONArray("posts");(0 until p.length()).count{val post=p.getJSONObject(it);post.optInt("photos")==0&&post.optString("intent")=="SELL_PROPERTY"}}
+            if(missing>0)appendLine("Posty oznaczone jako sprzedaż bez zdjęcia: $missing. Ten brak nie oznacza problemu z przewijaniem.")
+        }
+        for(r in reports){
+            val source=r.optString("groupId");val name=WatcherGroups.find(source)?.name?:source
+            val ms=r.optJSONObject("stats")?.optLong("groupElapsedMs")?:0
+            val elapsed=if(ms>0)"${ms/60000} min ${ms/1000%60} s"else"niezmierzony w tej próbie"
+            appendLine("$name — czas: $elapsed")
+        }
         append("Wersja: ${BuildConfig.VERSION_NAME}. Limit: 50 zachowanych postów na grupę, do 45 s przewijania; raport nie potwierdza odczytu całej historii Facebooka.")
     }
 }
