@@ -182,7 +182,20 @@ function posterSaleFields(f,text){
  // Area + an explicit total asking price + two independent residential facts.
  return anchors>=2?{...f,intent:'SELL_PROPERTY',usable:true,qualification:'CANDIDATE'}:f;
 }
+// Initial feed data may follow many small bootstrap scripts. Inspect a bounded
+// document slice, then parse only scripts containing an exact own-group link.
+function hydrationScripts(doc,group){
+ const selected=[];let examined=0,retained=0;
+ for(const node of Array.from(doc.querySelectorAll('script:not([src])')).slice(0,400)){
+  const text=node.textContent||'';if(!text||text.length>2097152)continue;
+  if(examined+text.length>8388608)break;examined+=text.length;
+  if(!explicitIds(text,group).size||retained+text.length>4194304)continue;
+  selected.push(text);retained+=text.length;if(selected.length===64)break;
+ }
+ return selected;
+}
 function createModel(core,fields,group,collectPostText=false){
+ const hydrationSeen=new Set();let hydrationBytes=0;
  const rowKeys=['postId','permalink','layer','price','priceSource','area','rooms','district','neighborhood','street','intent','usable','photos','qualification'];
  const qualifications=['CANDIDATE','NO_TEXT','FOREIGN_CITY','NOT_PROPERTY','INTENT','MISSING_FIELDS','CONFLICT','CLASSIFIER'];
  const intents=['SELL_PROPERTY','BUY_PROPERTY','RENT_OFFER','RENT_WANTED','SERVICE','OTHER','UNKNOWN'];
@@ -276,7 +289,7 @@ function createModel(core,fields,group,collectPostText=false){
    }
   }}
  function hydration(texts){const source={sourceType:'GROUP',sourceId:group,sourceUrl:'https://www.facebook.com/groups/'+group+'/',allowGroupRedirect:false};
-  for(const body of texts.slice(0,64)){if(typeof body!=='string'||body.length>524288)continue;stats.scripts++;const ids=explicitIds(body,group);
+  for(const body of texts.slice(0,64)){if(typeof body!=='string'||body.length>2097152||hydrationSeen.has(body)||hydrationBytes+body.length>4194304)continue;const ids=explicitIds(body,group);if(!ids.size)continue;hydrationSeen.add(body);hydrationBytes+=body.length;stats.scripts++;
    let found=[];try{found=core.extractStructuredRecordsFromText(body,'HYDRATION',source,0)||[];}catch{stats.rejected++;}
    for(const r of found.slice(0,100))if(ids.has(r.postId)&&r.sourceId===group)add(r,'HYDRATION');
   }
@@ -288,7 +301,7 @@ function createModel(core,fields,group,collectPostText=false){
  }
  return {add,merge,hydration,mediaBindings,stats,postTexts:()=>{
   let chars=0;return [...postTexts].filter(([id,text])=>rows.has(id)&&(chars+=text.length)<=64000).map(([postId,text])=>({postId,permalink:'https://www.facebook.com/groups/'+group+'/posts/'+postId+'/',text}));
- },rows:()=>[...rows.values()].map(r=>({...r})),clear(){rows.clear();postTexts.clear();blocked.clear();photoEvidence.clear();Object.assign(stats,zero());}};
+ },rows:()=>[...rows.values()].map(r=>({...r})),clear(){rows.clear();postTexts.clear();blocked.clear();photoEvidence.clear();hydrationSeen.clear();hydrationBytes=0;Object.assign(stats,zero());}};
 }
 // Snapshot signatures belong only to the currently retained bounded rows.
 function mergeSnapshot(model,cache,row){
@@ -491,9 +504,7 @@ function viewportMetrics(w){
 function scrollDistance(height,visibleHeight=height){const h=Number.isFinite(height)&&height>0?height:1,v=Number.isFinite(visibleHeight)&&visibleHeight>0?visibleHeight:h;return Math.max(1,Math.min(900,Math.round(Math.min(h,v)*.85)));}
 function readDOM(w,model,core,group){
  Object.assign(model.stats,viewportMetrics(w));
- let bytes=0;const texts=[];for(const s of Array.from(w.document.querySelectorAll('script:not([src])')).slice(0,120)){
-  const t=s.textContent||'';if(!t||t.length>524288||bytes+t.length>2097152)continue;bytes+=t.length;texts.push(t);
- }model.hydration(texts);
+ model.hydration(hydrationScripts(w.document,group));
  const cards=Array.from(containers.list(w.document)).filter(c=>!containers.owner(c.parentElement)).slice(0,100);
  model.stats.articles=Math.max(model.stats.articles,cards.length);
  model.stats.mobile=Math.max(model.stats.mobile,Math.min(10000,w.document.querySelectorAll('[data-mcomponent]').length));
@@ -672,5 +683,5 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
  }catch{return empty('ERROR');}
  finally{noticeDispose?.();gestureWatch?.stop();setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
-const api={ownMessageNodeText,messageSelector,textForbidden,posterSaleFields,negotiableSaleFields,textPosterNodes,disclosureBinding,disclosureLabel,expandOwnMessage,ownCardId,messageText,networkMedia,imageURL,photoAnchorHref,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,mergeSnapshot,viewportMetrics,scrollDistance,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
+const api={hydrationScripts,ownMessageNodeText,messageSelector,textForbidden,posterSaleFields,negotiableSaleFields,textPosterNodes,disclosureBinding,disclosureLabel,expandOwnMessage,ownCardId,messageText,networkMedia,imageURL,photoAnchorHref,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,mergeSnapshot,viewportMetrics,scrollDistance,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);

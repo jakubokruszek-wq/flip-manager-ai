@@ -41,3 +41,13 @@ test('cold native frame gets one bounded retry while identity and geometry remai
 test('profile crops use the visible viewport and offsets when layout viewport differs',()=>{
  assert.deepEqual(reader.viewport({innerWidth:980,innerHeight:1800,visualViewport:{width:380,height:675,offsetLeft:12,offsetTop:25}}),{width:380,height:675,left:12,top:25});
 });
+
+test('profile initial-data fallback calls the real core contract and keeps only exact own-root messages',()=>{
+ const id='550000000000001',text='Sprzedam mieszkanie Łódź 42 m2 za 319000 zł';
+ const body=JSON.stringify({post_id:id,url:`https://www.facebook.com/${owner}/posts/${id}/`,author:{name:'Fixture owner'},message:{text}});
+ const records=reader.structuredRecords(body,owner,globalThis.FlipFacebookCollectorCore);
+ assert.equal(records.length,1);assert.equal(records[0].postId,id);assert.equal(reader.structuredText(records[0]),text);
+ assert.deepEqual(reader.structuredRecords(body,'100008036582269',globalThis.FlipFacebookCollectorCore),[]);
+ assert.equal(reader.structuredText({...records[0],__structuredDiagnostics:{structuredTextPath:'shared_story.message'}}),'');
+ assert.equal(reader.structuredText({...records[0],identityConfidence:'UNVERIFIED'}),'');
+});

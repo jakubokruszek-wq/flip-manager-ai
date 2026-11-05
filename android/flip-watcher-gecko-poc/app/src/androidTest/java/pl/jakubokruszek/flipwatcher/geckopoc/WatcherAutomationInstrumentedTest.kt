@@ -138,6 +138,17 @@ class WatcherAutomationInstrumentedTest {
             assertTrue(saved.photos.all{p->saved.rows.any{it.postId==p.postId}&&p.jpeg.isNotEmpty()})
         }finally{server.close()}
     }
+    @Test fun lateLargeInitialFeedDataSuppliesFieldsAndKeepsActualBoundPhoto()=runBlocking {
+        val path="/groups/$FIXTURE_GROUP_ID/"
+        val server=LoopbackFixtureServer(pages=mapOf(path to "desktop-late-feed-data")){name->runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}
+        try{
+            val saved=BackgroundWatcherScan(context).runFixture("http://127.0.0.1:${server.port}$path"){true}
+            val id="550000000000097";val row=checkNotNull(saved.rows.find{it.postId==id})
+            assertEquals("SELL_PROPERTY",row.intent);assertEquals(319000.0,row.price);assertEquals(42.42,row.area)
+            assertTrue((saved.captureStats["hydration"]?:0)>0)
+            assertTrue("Initial data alone must never count as an actual photo",saved.photos.any{it.postId==id&&it.jpeg.isNotEmpty()})
+        }finally{server.close()}
+    }
     @Test fun backgroundCollectsColouredPostAndAutomaticallyReadsImageOnlyOffer()=runBlocking {
         val path="/groups/$FIXTURE_GROUP_ID/"
         val server=LoopbackFixtureServer(pages=mapOf(path to "desktop-text-posters")){name->runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}

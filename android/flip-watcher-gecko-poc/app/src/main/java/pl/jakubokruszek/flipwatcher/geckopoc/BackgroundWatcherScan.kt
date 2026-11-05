@@ -59,6 +59,7 @@ class BackgroundWatcherScan(private val context:Context) {
             }
             try {
                 channel.attach(GeckoHost.collectorExtension(context));check(live())
+                DesktopSessionPreview.applyDesktop(browser)
                 browser.open(GeckoHost.runtime(context));surface=BackgroundViewport(browser)
                 browser.setActive(true);browser.setFocused(true);browser.loadUri(target)
                 val until=android.os.SystemClock.elapsedRealtime()+(if(fixture)90_000 else 35_000)

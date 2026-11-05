@@ -208,3 +208,15 @@ test('clickable painted message uses descendant text size rather than the backgr
  const panel={innerText:text,ownerDocument:doc,isConnected:true,matches:()=>false,querySelector:()=>message,closest:s=>s==='[role="article"],article'?card:s.includes('role="button"')?panel:comment?{}:null,getBoundingClientRect:()=>({width:600,height:240})};
  const found=preview.textPosterNodes(card,'1655103482946823');assert.equal(found.length,1);assert(found[0].ready());comment=true;assert(!found[0].ready());
 });
+
+test('initial feed data after boilerplate scripts and a large own story stay readable within a fixed total budget',()=>{
+ const own=JSON.stringify({post_id:'550000000000001',url:record().permalink,message:{text:record().text},padding:'x'.repeat(600000)});
+ const scripts=[...Array.from({length:140},()=>({textContent:'window.bootstrap=true;'})),{textContent:own}];
+ const doc={querySelectorAll:()=>scripts};const selected=preview.hydrationScripts(doc,group);
+ assert.equal(selected.length,1);assert.equal(selected[0],own);
+ const m=model();m.hydration(selected);assert.equal(m.rows().length,1);assert.equal(m.rows()[0].price,319000);
+ const count=m.stats.hydration;m.hydration(selected);assert.equal(m.stats.hydration,count,'unchanged initial data must not be reparsed every scroll');
+ const tooLarge=JSON.stringify({post_id:'550000000000001',url:record().permalink,padding:'x'.repeat(2097152)});
+ assert.deepEqual(preview.hydrationScripts({querySelectorAll:()=>[{textContent:tooLarge}]},group),[]);
+ assert.deepEqual(preview.hydrationScripts(doc,'different'),[]);
+});
