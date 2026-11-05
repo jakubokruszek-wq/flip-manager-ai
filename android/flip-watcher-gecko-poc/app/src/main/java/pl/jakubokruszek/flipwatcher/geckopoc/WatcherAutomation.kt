@@ -38,6 +38,8 @@ object WatcherAutomation {
     }
     internal fun resume(context:Context,enqueue:(OneTimeWorkRequest)->Unit={WorkManager.getInstance(context).enqueue(it);Unit}){
         check(enabled(context)){"AUTOMATION_DISABLED"}
+        val state=WatcherScanStatus.read(context)
+        check(!(state.phase in setOf("DONE","PARTIAL")&&state.total>0&&state.done>=state.total)){"SCAN_ALREADY_FINISHED"}
         // Preserve the pending manual cycle and every durable source receipt.
         enqueue(OneTimeWorkRequestBuilder<WatcherAutomationWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())

@@ -108,6 +108,12 @@ class ScanStatusInstrumentedTest {
         val state=WatcherScanStatus.read(context)
         assertEquals("QUEUED",state.phase);assertEquals(20,state.done);assertEquals(33,state.total);assertEquals(19,state.posts);assertEquals(4,state.photos)
         assertEquals(0L,prefs.getLong("continuation_at",0))
+        WatcherScanStatus.begin(context,"already-finished")
+        WatcherScanStatus.update(context,"already-finished"){it.copy(done=33,total=33)}
+        WatcherScanStatus.finish(context,"already-finished","PARTIAL","CAPTURE_PARTIAL")
+        val finished=runCatching{WatcherAutomation.resume(context){error("Must not enqueue a finished cycle")}}
+        assertEquals("SCAN_ALREADY_FINISHED",finished.exceptionOrNull()?.message)
+        assertEquals("PARTIAL",WatcherScanStatus.read(context).phase)
     }
     @Test fun liveStatusScreenRefreshesWithoutTakingBrowserOwnershipOrLosingStatus(){
         WatcherScanStatus.begin(context,"live-test")

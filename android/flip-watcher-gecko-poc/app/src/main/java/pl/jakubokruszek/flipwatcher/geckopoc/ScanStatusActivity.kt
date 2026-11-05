@@ -29,7 +29,7 @@ class ScanStatusActivity:ComponentActivity(){
         body.addView(Button(this).apply{tag="scan.resume";text="Wznów tę samą próbę teraz";setOnClickListener{
             runCatching{WatcherAutomation.resume(this@ScanStatusActivity)}
                 .onSuccess{android.widget.Toast.makeText(this@ScanStatusActivity,"Zlecono wznowienie z zachowaniem postępu.",android.widget.Toast.LENGTH_SHORT).show()}
-                .onFailure{android.widget.Toast.makeText(this@ScanStatusActivity,"Nie zlecono wznowienia. Sprawdź, czy automat jest włączony.",android.widget.Toast.LENGTH_LONG).show()}
+                .onFailure{error->android.widget.Toast.makeText(this@ScanStatusActivity,if(error.message=="SCAN_ALREADY_FINISHED")"Ta próba jest zakończona. Nowy odczyt uruchom przez Skan teraz w tle."else"Nie zlecono wznowienia. Sprawdź, czy automat jest włączony.",android.widget.Toast.LENGTH_LONG).show()}
         }})
         body.addView(Button(this).apply{text="Wykryj moje grupy na Facebooku";setOnClickListener{startActivity(android.content.Intent(this@ScanStatusActivity,JoinedGroupsActivity::class.java))}})
         body.addView(Button(this).apply{text="Dodaj grupę / profil w Managerze";setOnClickListener{startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,android.net.Uri.parse(WatcherLink.ORIGIN+"/facebook-watcher/groups")))}})
