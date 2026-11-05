@@ -10,6 +10,12 @@ test('only exact joined-directory routes and direct Facebook group URLs are elig
 test('names come from rendered links, nameless duplicates upgrade and recommendations never become memberships',()=>{
  const url='https://www.facebook.com/groups/123456/';const first=anchor(url,''),named=anchor(url,'Nieruchomości Łódź');
  const suggestion=anchor('https://www.facebook.com/groups/987654/','Domy Łódź');suggestion.parentElement={parentElement:null,querySelectorAll:s=>s==='a[href]'?[suggestion]:[{innerText:'Dołącz'}]};
+ for(const label of ['Dołącz do grupy Nieruchomości Łódź','Join group Property Lodz']){
+ const proposed=anchor('https://www.facebook.com/groups/876543/','Nieruchomości Łódź');proposed.parentElement={parentElement:null,querySelectorAll:s=>s==='a[href]'?[proposed]:[{innerText:label}]};assert.deepEqual(reader.inspect(env([proposed])).groups,[]);
+ }
+ for(const label of ['Dołączono','Joined']){
+ const member=anchor('https://www.facebook.com/groups/765432/','Mieszkania Łódź');member.parentElement={parentElement:null,querySelectorAll:s=>s==='a[href]'?[member]:[{innerText:label}]};assert.equal(reader.inspect(env([member])).groups.length,1);
+ }
  const sidebar=anchor('https://www.facebook.com/groups/444444/','Grupa Łódź');sidebar.closest=()=>({});
  const result=reader.inspect(env([first,named,suggestion,sidebar,anchor('https://www.facebook.com/groups/joins/','Twoje grupy')]));
  assert.deepEqual(result.groups,[{url,name:'Nieruchomości Łódź'}]);assert.equal(result.duplicates,1);

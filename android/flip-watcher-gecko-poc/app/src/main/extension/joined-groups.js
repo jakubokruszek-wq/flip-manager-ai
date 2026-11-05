@@ -18,7 +18,7 @@ function joinCard(anchor){
  for(let p=anchor.parentElement,depth=0;p&&depth<5;p=p.parentElement,depth++){
   const links=Array.from(p.querySelectorAll('a[href]')).map(n=>group(n.href)?.id).filter(Boolean);
   if(new Set(links).size>1)break;
-  if(Array.from(p.querySelectorAll('button,[role="button"]')).some(n=>/^(?:dołącz(?: do grupy)?|join(?: group)?)$/iu.test((n.innerText||n.getAttribute?.('aria-label')||'').trim())))return true;
+  if(Array.from(p.querySelectorAll('button,[role="button"]')).some(n=>[n.innerText,n.getAttribute?.('aria-label'),n.getAttribute?.('title')].some(t=>typeof t==='string'&&/^(?:dołącz|join)\b/iu.test(t.trim()))))return true;
  }
  return false;
 }
