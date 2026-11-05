@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withTimeout
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
@@ -51,12 +52,25 @@ class ProfileWatcherScan(private val context:Context){
                 progress("LOADING");check(live())
                 channel.attach(GeckoHost.collectorExtension(context));DesktopSessionPreview.applyDesktop(browser)
                 browser.open(GeckoHost.runtime(context));surface=BackgroundViewport(browser);browser.setActive(true);browser.setFocused(true);browser.loadUri(target)
-                val until=android.os.SystemClock.elapsedRealtime()+if(fixture)90_000 else 35_000
-                while(live()&&android.os.SystemClock.elapsedRealtime()<until){
-                    if(ready&&current!=null&&channel.isConnected&&channel.connectedUrl==current){val probe=channel.probe(1000);if((probe?.passwordInputs?:0)>0){stop="LOGIN_REQUIRED";break};if(probe?.readyState in setOf("interactive","complete"))break}
-                    delay(200)
+                suspend fun awaitDocument(afterGeneration:Long?=null){
+                    val until=android.os.SystemClock.elapsedRealtime()+if(fixture)90_000 else 35_000
+                    while(live()&&android.os.SystemClock.elapsedRealtime()<until){
+                        if(ready&&current!=null&&channel.isConnected&&channel.connectedUrl==current&&(afterGeneration==null||channel.connectionGeneration>afterGeneration)){
+                            val probe=channel.probe(1000)
+                            if((probe?.passwordInputs?:0)>0){stop="LOGIN_REQUIRED";break}
+                            if(probe?.readyState in setOf("interactive","complete"))break
+                        }
+                        delay(200)
+                    }
+                    check(live()&&ready&&current!=null&&channel.isConnected&&channel.connectedUrl==current&&(afterGeneration==null||channel.connectionGeneration>afterGeneration)){stop?:"PROFILE_NOT_READY"}
                 }
-                check(live()&&ready&&current!=null&&channel.isConnected&&channel.connectedUrl==current){stop?:"PROFILE_NOT_READY"}
+                awaitDocument()
+                val ua=withTimeoutOrNull(5000){browser.userAgent.await()}
+                check(ua!=null&&!ua.contains("Mobile",true)&&!ua.contains("Android",true)){"PROFILE_DESKTOP_NOT_APPLIED"}
+                // Match the proven group reader: consume the cold initial page and
+                // read a fresh desktop document before the first bound pixel crop.
+                val previousGeneration=channel.connectionGeneration
+                ready=false;browser.reload();awaitDocument(previousGeneration)
                 val expected=checkNotNull(current);val generation=channel.connectionGeneration;browser.setActive(true);browser.setFocused(true);val nonce=UUID.randomUUID().toString();reading=true
                 fun bound()=live()&&current==expected&&channel.connectionGeneration==generation&&channel.connectedUrl==expected
                 channel.viewportBridge=DesktopViewportBridge(checkNotNull(surface),nonce,images,::bound,background=true,profile=true)

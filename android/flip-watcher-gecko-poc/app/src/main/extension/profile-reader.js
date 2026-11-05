@@ -58,6 +58,7 @@ function photoNodes(card,preview,fixture=false){
  }
  return nodes;
 }
+function viewport(w){const vp=w.visualViewport;return {width:Number(vp?.width)||w.innerWidth,height:Math.min(w.innerHeight,Number(vp?.height)||w.innerHeight),left:Number(vp?.offsetLeft)||0,top:Number(vp?.offsetTop)||0};}
 async function capturePhoto(request,payload,stable,pause,alive){
  for(let attempt=0;attempt<2;attempt++){
   if(attempt)await pause(150);
@@ -112,10 +113,14 @@ async function run(w,m,fields,preview,send){
     if(key&&media.has(key)&&node.complete&&node.naturalWidth>=60&&node.naturalHeight>=60&&!node.closest(forbidden)&&!candidates.some(p=>p.node===node))candidates.push({node,source:()=>node.currentSrc||node.src,owned:()=>media.has(preview.imageURL(node.currentSrc||node.src))});
    }}
    for(const p of candidates){
-    const n=p.node,source=p.source(),box=n.getBoundingClientRect();const width=w.innerWidth,height=w.innerHeight;
-    const x=Math.max(0,box.left),y=Math.max(0,box.top),right=Math.min(width,box.right),bottom=Math.min(height,box.bottom);
+    const n=p.node,source=p.source(),box=n.getBoundingClientRect();const {width,height,left,top}=viewport(w);
+    const x=Math.max(0,box.left-left),y=Math.max(0,box.top-top),right=Math.min(width,box.right-left),bottom=Math.min(height,box.bottom-top);
     stats.photoSources++;if(right-x<60||bottom-y<60||(right-x)*(bottom-y)<box.width*box.height*.6){stats.photoGeometryRejected++;continue;}
-    const stable=()=>{if(!live()||n.isConnected===false||!p.owned()||onePost(card,proof)!==id||p.source()!==source)return false;const r=n.getBoundingClientRect(),hit=w.document.elementFromPoint((x+right)/2,(y+bottom)/2);return Math.abs(r.left-box.left)<1&&Math.abs(r.top-box.top)<1&&Math.abs(r.width-box.width)<1&&Math.abs(r.height-box.height)<1&&(hit===n||n.contains(hit));};
+    const stable=()=>{if(!live()||n.isConnected===false||!p.owned()||onePost(card,proof)!==id||p.source()!==source)return false;const r=n.getBoundingClientRect(),v=viewport(w);
+     return ['width','height','left','top'].every(k=>Math.abs(v[k]-({width,height,left,top})[k])<1)&&Math.abs(r.left-box.left)<1&&Math.abs(r.top-box.top)<1&&Math.abs(r.width-box.width)<1&&Math.abs(r.height-box.height)<1&&[[.5,.5],[.1,.1],[.9,.1],[.1,.9],[.9,.9]].every(([px,py])=>{
+      const cx=left+x+(right-x)*px,cy=top+y+(bottom-y)*py,hit=w.document.elementFromPoint(cx,cy);
+      return hit&&!hit.closest(forbidden+',header,nav,aside,[role="menu"]')&&(hit===n||n.contains(hit)||root.FlipDesktopViewport.delegatedHit(w,n,hit,cx,cy));
+     });};
     if(!stable()){stats.photoOccluded++;continue;}
     const saved=await capturePhoto(request,{action:'photos',width,height,tiles:[{postId:id,slot:0,x,y,width:right-x,height:bottom-y}]},stable,ms=>new Promise(resolve=>w.setTimeout(resolve,ms)),()=>live()&&w.performance.now()<end-3500);
     if(saved){captured.add(id);stats.photoPreviewFrames++;stats.photoPreviews++;stats.photoSelected++;break;}
@@ -157,5 +162,5 @@ function ocr(m,fields,preview){
  const stats=preview.zero();stats.verified=1;stats.candidates=1;
  return {type:'profileOcrFieldsResult',status:'OK',reason:'DONE',rows:[out],stats};
 }
-const api={identity,link,onePost,cards,row,run,postId,ocr,capturePhoto};if(typeof module!=='undefined')module.exports=api;root.FlipProfileReader=api;
+const api={identity,link,onePost,cards,row,run,postId,ocr,capturePhoto,viewport};if(typeof module!=='undefined')module.exports=api;root.FlipProfileReader=api;
 })(globalThis);

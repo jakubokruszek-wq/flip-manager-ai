@@ -219,5 +219,5 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null,
  }
  return tiles.length?result():preferredIds&&!extraPass&&!onePerPost?photos(w,core,group,photoNodes,slots,allowedIds,bindings,audit,helpers,preferredIds,true,onePerPost):null;
 }
-const api={transport,cards,point,trace,photos};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopViewport=api;
+const api={transport,cards,point,trace,photos,delegatedHit};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopViewport=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

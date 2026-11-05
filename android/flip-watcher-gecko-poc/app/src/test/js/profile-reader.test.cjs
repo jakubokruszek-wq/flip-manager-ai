@@ -37,3 +37,7 @@ test('cold native frame gets one bounded retry while identity and geometry remai
  let valid=true;const sent=[];const changed=async m=>{sent.push(m.action);if(m.action==='photos'){valid=false;return {accepted:true,requestId:'frame'};}return {accepted:true,count:1};};
  assert.equal(await reader.capturePhoto(changed,{action:'photos'},()=>valid,async()=>{},()=>true),false);assert.deepEqual(sent,['photos','drop']);
 });
+
+test('profile crops use the visible viewport and offsets when layout viewport differs',()=>{
+ assert.deepEqual(reader.viewport({innerWidth:980,innerHeight:1800,visualViewport:{width:380,height:675,offsetLeft:12,offsetTop:25}}),{width:380,height:675,left:12,top:25});
+});
