@@ -209,7 +209,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                 val evidence=WatcherCaptureReport.create(context,slot,run,group,null,lastIssue,android.os.SystemClock.elapsedRealtime()-groupClock)
                                 runCatching{queue.report(credentials.deviceId,slot,group.key,evidence)}
                                 if(hadAttempt&&lastIssue !in setOf("LOGIN_REQUIRED","CAPTCHA","CHECKPOINT","WAITING_FOR_BACKGROUND")){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
-                                WatcherScanStatus.update(context,run){it.copy(phase="PREPARING",reason=lastIssue)}
+                                WatcherScanStatus.update(context,run){it.copy(phase="PREPARING",reason=lastIssue,done=groups.count{g->queue.scanned(slot,g.key)})}
                                 // A single unavailable group cannot starve every later source.
                                 if(e.message in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA"))break
                             }

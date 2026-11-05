@@ -242,6 +242,7 @@ class WatcherAutomationInstrumentedTest {
         try{
             for(mode in listOf("budget","nested","parent")){
                 val nested=mode=="nested"
+                val failed=if(nested)selected.last()else selected.first()
                 context.deleteDatabase("watcher-outbox-v1.db")
                 prefs.edit().clear().putBoolean("enabled",true).putLong("schedule_since",0).putString("requested_scan",java.util.UUID.randomUUID().toString()).commit()
                 WatcherAutomation.uiVisible=false
@@ -257,7 +258,7 @@ class WatcherAutomationInstrumentedTest {
                             override fun sourceTimeoutMs(remaining:Long)=if(nested)5_000L else 100L
                             override suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult {
                                 calls.add(group.key);started.complete(Unit)
-                                if(group.key==selected.first().key){
+                                if(group.key==failed.key){
                                     if(nested)kotlinx.coroutines.withTimeout(10){kotlinx.coroutines.delay(1_000)}
                                     else kotlinx.coroutines.delay(1_000)
                                 }
@@ -283,12 +284,12 @@ class WatcherAutomationInstrumentedTest {
                 assertEquals("PARTIAL",WatcherScanStatus.read(context).phase)
                 assertEquals(2,WatcherScanStatus.read(context).done)
                 assertEquals("CAPTURE_PARTIAL",WatcherScanStatus.read(context).reason)
-                assertEquals(2,calls.count{it==selected.first().key})
+                assertEquals(2,calls.count{it==failed.key})
                 val cycle=prefs.getString("capture_cycle",null)!!
                 val count=calls.size;worker().doWork();assertEquals(count,calls.size)
                 WatcherOutbox(context).use{q->
                     val reports=q.cycleReports(cycle)
-                    assertEquals("SOURCE_TIMEOUT",reports.single{it.getString("groupId")==selected.first().key}.getString("issue"))
+                    assertEquals("SOURCE_TIMEOUT",reports.single{it.getString("groupId")==failed.key}.getString("issue"))
                     assertFalse(q.status().contains("INTERRUPTED"))
                 }
             }
