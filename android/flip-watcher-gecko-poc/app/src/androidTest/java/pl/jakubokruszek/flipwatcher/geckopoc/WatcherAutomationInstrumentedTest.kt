@@ -11,6 +11,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class WatcherAutomationInstrumentedTest {
+    private var continuationRequests=0
     private val context:Context=ApplicationProvider.getApplicationContext()
     private val device="12345678-1234-1234-1234-123456789012"
     private val group=WatcherGroups.configured.first()
@@ -214,6 +215,7 @@ class WatcherAutomationInstrumentedTest {
         val factory=object:androidx.work.WorkerFactory(){
             override fun createWorker(appContext:Context,name:String,parameters:androidx.work.WorkerParameters):androidx.work.ListenableWorker =
                 object:WatcherAutomationWorker(appContext,parameters){
+                    override fun continueScan(context:Context){continuationRequests++}
                     override fun credentials(context:Context)=credentials
                     override fun groups(credentials:WatcherLink.Credentials)=selected
                     override fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -234,7 +236,7 @@ class WatcherAutomationInstrumentedTest {
             prefs.edit().putString("requested_scan",java.util.UUID.randomUUID().toString()).commit()
             worker().doWork();assertEquals("Manual request must re-read both sources",4,calls)
             degraded=true;prefs.edit().putString("requested_scan",java.util.UUID.randomUUID().toString()).commit()
-            assertEquals(androidx.work.ListenableWorker.Result.retry(),worker().doWork());assertEquals(6,calls)
+            assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork());assertEquals(6,calls);assertEquals(1,continuationRequests)
             assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork());assertEquals(8,calls)
             assertEquals("PARTIAL",WatcherScanStatus.read(context).phase);assertEquals("CAPTURE_PARTIAL",WatcherScanStatus.read(context).reason)
             worker().doWork();assertEquals("Degraded sources must not spin forever",8,calls)
@@ -252,6 +254,7 @@ class WatcherAutomationInstrumentedTest {
         val credentials=WatcherLink.Credentials(device,"fixture-unused-credential")
         try{
             for(mode in listOf("budget","nested","parent")){
+                val requestsBefore=continuationRequests
                 val nested=mode=="nested"
                 val failed=if(nested)selected.last()else selected.first()
                 context.deleteDatabase("watcher-outbox-v1.db")
@@ -262,6 +265,7 @@ class WatcherAutomationInstrumentedTest {
                 val factory=object:androidx.work.WorkerFactory(){
                     override fun createWorker(appContext:Context,name:String,parameters:androidx.work.WorkerParameters):androidx.work.ListenableWorker =
                         object:WatcherAutomationWorker(appContext,parameters){
+                    override fun continueScan(context:Context){continuationRequests++}
                             override fun credentials(context:Context)=credentials
                             override fun groups(credentials:WatcherLink.Credentials)=selected
                             override fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)="fixture-receipt"
@@ -288,7 +292,8 @@ class WatcherAutomationInstrumentedTest {
                     WatcherOutbox(context).use{q->assertTrue(q.cycleReports(prefs.getString("capture_cycle",null)!!).isEmpty())}
                     continue
                 }
-                assertEquals(androidx.work.ListenableWorker.Result.retry(),worker().doWork())
+                assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork())
+                assertEquals(requestsBefore+1,continuationRequests)
                 assertEquals(selected.map{it.key},calls)
                 assertNotEquals("ERROR",WatcherScanStatus.read(context).phase)
                 assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork())
@@ -324,6 +329,7 @@ class WatcherAutomationInstrumentedTest {
         val factory=object:androidx.work.WorkerFactory(){
             override fun createWorker(appContext:Context,name:String,parameters:androidx.work.WorkerParameters):androidx.work.ListenableWorker =
                 object:WatcherAutomationWorker(appContext,parameters){
+                    override fun continueScan(context:Context){continuationRequests++}
                     override fun credentials(context:Context)=credentials
                     override fun groups(credentials:WatcherLink.Credentials):List<WatcherGroup> { check(!WatcherAutomation.uiVisible){"Browser must not be used while UI is visible"};return emptyList() }
                     override fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item):String {

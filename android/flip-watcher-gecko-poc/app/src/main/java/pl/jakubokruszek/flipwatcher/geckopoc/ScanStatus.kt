@@ -39,7 +39,7 @@ object ScanStatusText {
         "NO_ACTIVE_GROUPS"->"Brak aktywnych grup. Zsynchronizuj grupy z Managerem."
         "ANDROID_FOREGROUND_START_DENIED"->"Android odmówił uruchomienia usługi w tle."
         "ANDROID_PERMISSION_DENIED"->"Android odmówił uprawnienia potrzebnego do pracy."
-        "BATCH_CONTINUE"->"Osiągnięto limit czasu partii. Pozostałe grupy czekają na kolejną próbę."
+        "BATCH_CONTINUE"->"Partia osiągnęła limit czasu. Zaplanowano kontynuację tej samej próby, z zachowaniem postępu źródeł."
         "SOURCE_TIMEOUT"->"Źródło przekroczyło budżet czasu. Nie potwierdzono odczytu; automat przechodzi do kolejnych źródeł."
         "SLOT_PARTIAL"->"Cykl został wykonany z brakami odczytu. Szczegóły są zachowane w diagnostyce; następny termin ponowi odczyt."
         "CAPTURE_PARTIAL"->"Cykl zakończony z brakami. Konkretne przyczyny i liczby dla źródeł są powyżej."
@@ -117,6 +117,7 @@ object WatcherScanStatus {
         s
     }
     fun request(context:Context)=change(context){s->if(s.active&&System.currentTimeMillis()-s.heartbeat<90_000)s else ScanState(phase="QUEUED",changed=System.currentTimeMillis(),lastSuccess=s.lastSuccess,checked=s.checked,skipped=s.skipped)}
+    fun resume(context:Context)=change(context){s->if(s.active&&System.currentTimeMillis()-s.heartbeat<90_000)s else s.copy(phase="QUEUED",reason="",changed=System.currentTimeMillis())}
     fun begin(context:Context,id:String)=change(context){s->val now=System.currentTimeMillis();ScanState(run=id,phase="PREPARING",started=now,changed=now,heartbeat=now,lastSuccess=s.lastSuccess,checked=now)}
     fun update(context:Context,id:String,f:(ScanState)->ScanState)=change(context){s->if(s.run!=id||s.ended>0)s else f(s).copy(changed=System.currentTimeMillis(),heartbeat=System.currentTimeMillis())}
     fun beat(context:Context,id:String)=change(context,false){s->if(s.run==id&&s.active)s.copy(heartbeat=System.currentTimeMillis())else s}
@@ -142,7 +143,7 @@ object WatcherScanStatus {
         val notifications=runCatching{val n=context.getSystemService(NotificationManager::class.java);n.areNotificationsEnabled()&&n.getNotificationChannel(CHANNEL)?.importance!=NotificationManager.IMPORTANCE_NONE}.getOrDefault(false)
         val infos=runCatching{
             val m=WorkManager.getInstance(context)
-            (listOf("watcher-calendar-v1","watcher-retry-v1","watcher-background-kick-v2").flatMap{m.getWorkInfosForUniqueWork(it).get(2,TimeUnit.SECONDS)}+m.getWorkInfosByTag("watcher-window-v2").get(2,TimeUnit.SECONDS)).distinctBy{it.id}.filter{!it.state.isFinished}
+            (listOf("watcher-calendar-v1","watcher-retry-v1","watcher-background-kick-v2").flatMap{m.getWorkInfosForUniqueWork(it).get(2,TimeUnit.SECONDS)}+m.getWorkInfosByTag("watcher-window-v2").get(2,TimeUnit.SECONDS)+m.getWorkInfosByTag(WatcherAutomation.CONTINUATION_TAG).get(2,TimeUnit.SECONDS)).distinctBy{it.id}.filter{!it.state.isFinished}
         }.getOrNull()
         val running=infos?.any{it.state==WorkInfo.State.RUNNING}
         val work=when {infos==null->"nie udało się odczytać stanu";running==true->"zadanie uruchomione";infos.any{it.state==WorkInfo.State.ENQUEUED}->"zadanie oczekuje; dokładny powód opóźnienia nie jest udostępniany";infos.any{it.state==WorkInfo.State.BLOCKED}->"zadanie zablokowane zależnością";else->"brak oczekującego zadania"}
@@ -152,6 +153,8 @@ object WatcherScanStatus {
         val due=enabled&&window.at.toEpochMilli()>=prefs.getLong("schedule_since",0)&&prefs.getString("completed_slot",null)!=WatcherCaptureReport.cycle(window.key)
         val cycle=prefs.getString("capture_cycle",null)
         val evidence=if(cycle==null)"" else WatcherOutbox(context).use{WatcherCaptureReport.summary(it.cycleReports(cycle))}
-        return (if(evidence.isEmpty())""else evidence+"\n\n")+ScanStatusText.details(read(context),enabled,now,next,network,notifications,work,running,pendingWindow=if(due)window.at.toEpochMilli()else 0)
+        val state=read(context);val continuation=prefs.getLong("continuation_at",0)
+        val plan=if(enabled&&!state.active&&continuation>0)"\nPlan wznowienia tej samej próby: "+ScanStatusText.time(continuation,ZoneId.systemDefault())+". Android może opóźnić start; możesz użyć przycisku wznowienia."else ""
+        return (if(evidence.isEmpty())""else evidence+"\n\n")+ScanStatusText.details(state,enabled,now,next,network,notifications,work,running,pendingWindow=if(due)window.at.toEpochMilli()else 0)+plan
     }
 }

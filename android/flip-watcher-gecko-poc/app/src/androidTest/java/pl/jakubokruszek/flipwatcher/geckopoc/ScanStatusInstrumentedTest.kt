@@ -18,6 +18,7 @@ class ScanStatusInstrumentedTest {
     private val credentials=WatcherLink.Credentials("12345678-1234-1234-1234-123456789012","synthetic-unused-token")
     private var prefsBackup:Map<String,*> = emptyMap<String,Any>()
     private var oldVisible=false
+    private var continuations=0
     @Before fun prepare(){
         prefsBackup=WatcherAutomation.preferences(context).all.toMap();oldVisible=WatcherAutomation.uiVisible
         WatcherAutomation.configure(context,false)
@@ -37,6 +38,7 @@ class ScanStatusInstrumentedTest {
         androidx.work.testing.TestListenableWorkerBuilder<WatcherAutomationWorker>(context).setWorkerFactory(object:androidx.work.WorkerFactory(){
             override fun createWorker(appContext:Context,name:String,parameters:androidx.work.WorkerParameters):androidx.work.ListenableWorker=
                 object:WatcherAutomationWorker(appContext,parameters){
+                    override fun continueScan(context:Context){continuations++}
                     override fun credentials(context:Context)=if(missingCredentials)null else this@ScanStatusInstrumentedTest.credentials
                     override fun groups(credentials:WatcherLink.Credentials)=groups
                     override fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item){}
@@ -53,7 +55,8 @@ class ScanStatusInstrumentedTest {
             val row=DesktopRow("550000000000099",group.url+"posts/550000000000099/","DOM",null,"NONE",null,null,null,null,null,"OTHER",false,0,"INTENT")
             return SavedResult(System.currentTimeMillis(),listOf(row),emptyList(),emptyList(),captureStats=DesktopProtocol.emptyStats()+mapOf("pageVisible" to 1,"scrollMoves" to 1))
         }
-        assertEquals(androidx.work.ListenableWorker.Result.retry(),worker(scan=::scan).doWork())
+        assertEquals(androidx.work.ListenableWorker.Result.success(),worker(scan=::scan).doWork())
+        assertEquals(1,continuations)
         val partial=WatcherScanStatus.read(context)
         assertEquals("RETRY",partial.phase);assertEquals("GROUP_LOAD_ERROR",partial.reason);assertEquals(1,partial.done);assertEquals(2,partial.total);assertEquals(0L,partial.lastSuccess)
         assertEquals("status-test",WatcherAutomation.preferences(context).getString("requested_scan",null))
@@ -71,6 +74,40 @@ class ScanStatusInstrumentedTest {
         assertEquals("WAITING_UI",WatcherScanStatus.read(context).phase)
         assertEquals("WAITING_FOR_BACKGROUND",WatcherScanStatus.read(context).reason)
         assertEquals("status-test",WatcherAutomation.preferences(context).getString("requested_scan",null))
+    }
+    @Test fun continuationUsesFreshFixedDelayAndResumeKeepsTheSameCycleAndReceipts(){
+        val prefs=WatcherAutomation.preferences(context)
+        val cycle=WatcherCaptureReport.cycle("manual/status-test")
+        val group=WatcherGroups.configured.first()
+        prefs.edit().putString("capture_cycle",cycle).putString("last_attempted_source",group.key).commit()
+        WatcherOutbox(context).use{it.completeScan(cycle,group.key)}
+        WatcherScanStatus.begin(context,"continuation-test")
+        WatcherScanStatus.update(context,"continuation-test"){it.copy(done=20,total=33,posts=19,photos=4)}
+        WatcherScanStatus.finish(context,"continuation-test","RETRY","BATCH_CONTINUE")
+        var queued=0
+        repeat(3){
+            WatcherAutomation.continuation(context){name,policy,work->
+                queued++;assertEquals(WatcherAutomation.CONTINUATION_TAG,name)
+                assertEquals(androidx.work.ExistingWorkPolicy.APPEND_OR_REPLACE,policy)
+                assertEquals(30_000L,work.workSpec.initialDelay)
+                assertEquals(0,work.workSpec.runAttemptCount)
+                assertEquals(androidx.work.NetworkType.CONNECTED,work.workSpec.constraints.requiredNetworkType)
+            }
+        }
+        assertEquals(3,queued)
+        assertTrue(prefs.getLong("continuation_at",0)>System.currentTimeMillis())
+        assertTrue(WatcherScanStatus.report(context).contains("Plan wznowienia tej samej próby:"))
+        WatcherAutomation.resume(context){work->
+            assertEquals(0L,work.workSpec.initialDelay)
+            assertTrue(work.tags.contains(WatcherAutomation.CONTINUATION_TAG))
+        }
+        assertEquals("status-test",prefs.getString("requested_scan",null))
+        assertEquals(cycle,prefs.getString("capture_cycle",null))
+        assertEquals(group.key,prefs.getString("last_attempted_source",null))
+        WatcherOutbox(context).use{assertTrue(it.scanned(cycle,group.key))}
+        val state=WatcherScanStatus.read(context)
+        assertEquals("QUEUED",state.phase);assertEquals(20,state.done);assertEquals(33,state.total);assertEquals(19,state.posts);assertEquals(4,state.photos)
+        assertEquals(0L,prefs.getLong("continuation_at",0))
     }
     @Test fun liveStatusScreenRefreshesWithoutTakingBrowserOwnershipOrLosingStatus(){
         WatcherScanStatus.begin(context,"live-test")

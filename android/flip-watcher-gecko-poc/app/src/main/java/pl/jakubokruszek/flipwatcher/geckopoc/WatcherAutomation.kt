@@ -25,6 +25,26 @@ object WatcherAutomation {
     fun preferences(context:Context)=context.getSharedPreferences("watcher-automation-v1",Context.MODE_PRIVATE)
     fun enabled(context:Context)=preferences(context).getBoolean("enabled",false)
     private const val WINDOW_TAG="watcher-window-v2"
+    internal const val CONTINUATION_TAG="watcher-continuation-v1"
+    internal const val CONTINUATION_DELAY_MS=30_000L
+    internal fun continuation(context:Context,enqueue:(String,ExistingWorkPolicy,OneTimeWorkRequest)->Unit={name,policy,work->WorkManager.getInstance(context).enqueueUniqueWork(name,policy,work);Unit}){
+        if(!enabled(context))return
+        val work=OneTimeWorkRequestBuilder<WatcherAutomationWorker>()
+            .setInitialDelay(CONTINUATION_DELAY_MS,TimeUnit.MILLISECONDS)
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .addTag(CONTINUATION_TAG).build()
+        enqueue(CONTINUATION_TAG,ExistingWorkPolicy.APPEND_OR_REPLACE,work)
+        check(preferences(context).edit().putLong("continuation_at",System.currentTimeMillis()+CONTINUATION_DELAY_MS).commit())
+    }
+    internal fun resume(context:Context,enqueue:(OneTimeWorkRequest)->Unit={WorkManager.getInstance(context).enqueue(it);Unit}){
+        check(enabled(context)){"AUTOMATION_DISABLED"}
+        // Preserve the pending manual cycle and every durable source receipt.
+        enqueue(OneTimeWorkRequestBuilder<WatcherAutomationWorker>()
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .addTag(CONTINUATION_TAG).build())
+        preferences(context).edit().remove("continuation_at").apply()
+        WatcherScanStatus.resume(context)
+    }
     fun schedule(context:Context)=AutomationPolicy.decode(preferences(context).getString("scan_minutes",null))
     fun saveSchedule(context:Context,minutes:List<Int>){
         val value=AutomationPolicy.encode(minutes)
@@ -55,6 +75,8 @@ object WatcherAutomation {
             WatcherScanStatus.quiet(context)
             manager.cancelUniqueWork("watcher-calendar-v1");manager.cancelUniqueWork("watcher-retry-v1")
             manager.cancelUniqueWork("watcher-background-kick-v2");manager.cancelAllWorkByTag(WINDOW_TAG)
+            manager.cancelUniqueWork(CONTINUATION_TAG);manager.cancelAllWorkByTag(CONTINUATION_TAG)
+            preferences(context).edit().remove("continuation_at").apply()
         }
     }
     fun retry(context:Context){
@@ -64,7 +86,7 @@ object WatcherAutomation {
     /** Called after the UI is paused: an immediate foreground attempt can no longer be silently consumed. */
     fun onBackground(context:Context){
         if(!enabled(context))return
-        WorkManager.getInstance(context).enqueueUniqueWork("watcher-background-kick-v2",ExistingWorkPolicy.REPLACE,
+        WorkManager.getInstance(context).enqueueUniqueWork("watcher-background-kick-v2",ExistingWorkPolicy.APPEND_OR_REPLACE,
             OneTimeWorkRequestBuilder<WatcherAutomationWorker>().setInitialDelay(2,TimeUnit.SECONDS)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build())
     }
@@ -86,6 +108,7 @@ object WatcherAutomation {
 }
 
 open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):CoroutineWorker(context,parameters) {
+    internal open fun continueScan(context:Context)=WatcherAutomation.continuation(context)
     internal open fun sourceTimeoutMs(remaining:Long)=minOf(175_000L,(remaining-30_000L).coerceAtLeast(1L))
     internal open fun credentials(context:Context)=WatcherLink.load(context)
     internal open fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=WatcherUpload.send(credentials,item)
@@ -103,7 +126,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
         return withContext(Dispatchers.IO){
             WatcherOutbox(context).use { queue ->
                 val run=id.toString();var begun=false;var ticker:Job?=null
-                fun begin(){if(!begun){WatcherScanStatus.begin(context,run);begun=true;ticker=launch{while(isActive){WatcherScanStatus.beat(context,run);delay(5_000)}}}}
+                fun begin(){if(!begun){WatcherAutomation.preferences(context).edit().remove("continuation_at").apply();WatcherScanStatus.begin(context,run);begun=true;ticker=launch{while(isActive){WatcherScanStatus.beat(context,run);delay(5_000)}}}}
                 var budgetReached=false;var retryNeeded=false;var lastIssue=""
                 try {
                     // Ordinary WorkManager jobs need no background-started foreground service.
@@ -227,12 +250,17 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                         val phase=when{!WatcherAutomation.enabled(context)->"ERROR";allDone&&captureOk->"DONE";allDone->"PARTIAL";WatcherAutomation.uiVisible->"WAITING_UI";budgetReached||retryNeeded->"RETRY";else->"PARTIAL"}
                         WatcherScanStatus.finish(context,run,phase,reason)
                     }
-                    if(budgetReached||retryNeeded){if(budgetReached)queue.log("BATCH_CONTINUE");Result.retry()}else Result.success()
+                    if(budgetReached||retryNeeded){
+                        if(budgetReached)queue.log("BATCH_CONTINUE")
+                        continueScan(context)
+                    }
+                    Result.success()
                 }catch(e:TimeoutCancellationException){
                     currentCoroutineContext().ensureActive()
                     queue.log("BATCH_CONTINUE")
                     if(begun)WatcherScanStatus.finish(context,run,"RETRY","BATCH_CONTINUE")
-                    Result.retry()
+                    continueScan(context)
+                    Result.success()
                 }catch(e:CancellationException){queue.log("INTERRUPTED");if(begun)WatcherScanStatus.finish(context,run,"ERROR","INTERRUPTED");throw e}
                 catch(e:Exception){val reason=if(e is WatcherUpload.HttpFailure)"UPLOAD_HTTP_"+e.status else WatcherAutomation.errorCode(e);queue.log(reason);begin();WatcherScanStatus.finish(context,run,"ERROR",reason);Result.retry()}
                 finally{ticker?.cancel();runCatching{WatcherAutomation.scheduleNext(context)}}
