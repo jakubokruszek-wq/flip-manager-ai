@@ -18,6 +18,7 @@ test('foreign profiles, group posts and comment URLs never become own posts',()=
  for(const url of ['https://www.facebook.com/foreign/posts/'+post+'/', 'https://www.facebook.com/groups/'+owner+'/posts/123456/', 'https://www.facebook.com/dawid.test/posts/'+post+'/?comment_id=42'])assert.equal(reader.link(url,proof),null);
  const card=links=>({querySelectorAll:()=>links.map(href=>({href}))});
  assert.equal(reader.onePost(card(['https://www.facebook.com/dawid.test/posts/'+post+'/']),proof),post);
+ assert.equal(reader.onePost(card(['https://www.facebook.com/dawid.test/posts/'+post+'/','https://www.facebook.com/dawid.test/posts/'+post+'/?comment_id=42']),proof),post);
  assert.equal(reader.onePost(card(['https://www.facebook.com/dawid.test/posts/'+post+'/','https://www.facebook.com/foreign/posts/123456/']),proof),null);
 });
 test('profile OCR preserves actual profile URL and selected fields without returning raw text',()=>{
@@ -28,4 +29,11 @@ test('profile OCR preserves actual profile URL and selected fields without retur
  assert.equal(row.permalink,`https://www.facebook.com/${owner}/posts/${post}/`);assert(!JSON.stringify(result).includes(text));
  const conflict=reader.ocr({...message,texts:['Sprzedam mieszkanie Łódź 42m2 cena 319000 zł','Sprzedam mieszkanie Łódź 42m2 cena 499000 zł']},f,p).rows[0];assert.equal(conflict.usable,false);assert.equal(conflict.qualification,'CONFLICT');
  const foreign=reader.ocr({...message,texts:['Sprzedam mieszkanie Warszawa 42m2 cena 319000 zł']},f,p).rows[0];assert.equal(foreign.usable,false);
+});
+
+test('cold native frame gets one bounded retry while identity and geometry remain exact',async()=>{
+ let calls=0,commits=0;const request=async m=>{if(m.action==='photos')return {accepted:++calls===2,requestId:'frame'};if(m.action==='commit'){commits++;return {accepted:true,count:1};}};
+ assert.equal(await reader.capturePhoto(request,{action:'photos'},()=>true,async()=>{},()=>true),true);assert.equal(calls,2);assert.equal(commits,1);
+ let valid=true;const sent=[];const changed=async m=>{sent.push(m.action);if(m.action==='photos'){valid=false;return {accepted:true,requestId:'frame'};}return {accepted:true,count:1};};
+ assert.equal(await reader.capturePhoto(changed,{action:'photos'},()=>valid,async()=>{},()=>true),false);assert.deepEqual(sent,['photos','drop']);
 });

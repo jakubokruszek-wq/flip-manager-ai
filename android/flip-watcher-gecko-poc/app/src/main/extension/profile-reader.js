@@ -35,7 +35,7 @@ function link(raw,proof){const u=url(raw);if(!u||u.searchParams.has('comment_id'
  return null;
 }
 function onePost(card,proof){const nodes=card.querySelectorAll('a[href]');if(nodes.length>100)return null;const ids=[];
- for(const n of nodes){const id=link(n.href,proof);if(id)ids.push(id);else{const u=url(n.href);if(u&&(/\/(posts|permalink)\//.test(u.pathname)||u.searchParams.has('story_fbid')))return null;}}
+ for(const n of nodes){if(n.closest?.(forbidden))continue;const candidate=url(n.href);if(candidate&&(candidate.searchParams.has('comment_id')||candidate.searchParams.has('reply_comment_id')))continue;const id=link(n.href,proof);if(id)ids.push(id);else{const u=url(n.href);if(u&&(/\/(posts|permalink)\//.test(u.pathname)||u.searchParams.has('story_fbid')))return null;}}
  return ids.length&&new Set(ids).size===1?ids[0]:null;
 }
 function cards(w,proof){
@@ -57,6 +57,18 @@ function photoNodes(card,preview,fixture=false){
   }
  }
  return nodes;
+}
+async function capturePhoto(request,payload,stable,pause,alive){
+ for(let attempt=0;attempt<2;attempt++){
+  if(attempt)await pause(150);
+  if(!alive()||!stable())return false;
+  const frame=await request(payload);
+  if(frame?.accepted!==true)continue;
+  const valid=alive()&&stable();
+  const commit=await request({action:valid?'commit':'drop',frameId:frame.requestId});
+  if(valid&&commit?.accepted===true&&commit.count===1)return true;
+ }
+ return false;
 }
 async function run(w,m,fields,preview,send){
  const stats=preview.zero(),rows=new Map(),texts=new Map(),captured=new Set(),structured=new Map(),scripts=new WeakMap();let textBytes=0;
@@ -105,8 +117,8 @@ async function run(w,m,fields,preview,send){
     stats.photoSources++;if(right-x<60||bottom-y<60||(right-x)*(bottom-y)<box.width*box.height*.6){stats.photoGeometryRejected++;continue;}
     const stable=()=>{if(!live()||n.isConnected===false||!p.owned()||onePost(card,proof)!==id||p.source()!==source)return false;const r=n.getBoundingClientRect(),hit=w.document.elementFromPoint((x+right)/2,(y+bottom)/2);return Math.abs(r.left-box.left)<1&&Math.abs(r.top-box.top)<1&&Math.abs(r.width-box.width)<1&&Math.abs(r.height-box.height)<1&&(hit===n||n.contains(hit));};
     if(!stable()){stats.photoOccluded++;continue;}
-    const frame=await request({action:'photos',width,height,tiles:[{postId:id,slot:0,x,y,width:right-x,height:bottom-y}]});
-    if(frame?.accepted===true){const commit=stable()?await request({action:'commit',frameId:frame.requestId}):await request({action:'drop',frameId:frame.requestId});if(commit?.accepted===true&&commit.count===1){captured.add(id);stats.photoPreviewFrames++;stats.photoPreviews++;stats.photoSelected++;break;}}
+    const saved=await capturePhoto(request,{action:'photos',width,height,tiles:[{postId:id,slot:0,x,y,width:right-x,height:bottom-y}]},stable,ms=>new Promise(resolve=>w.setTimeout(resolve,ms)),()=>live()&&w.performance.now()<end-3500);
+    if(saved){captured.add(id);stats.photoPreviewFrames++;stats.photoPreviews++;stats.photoSelected++;break;}
    }
   }
   if(w.performance.now()>=end)break;
@@ -145,5 +157,5 @@ function ocr(m,fields,preview){
  const stats=preview.zero();stats.verified=1;stats.candidates=1;
  return {type:'profileOcrFieldsResult',status:'OK',reason:'DONE',rows:[out],stats};
 }
-const api={identity,link,onePost,cards,row,run,postId,ocr};if(typeof module!=='undefined')module.exports=api;root.FlipProfileReader=api;
+const api={identity,link,onePost,cards,row,run,postId,ocr,capturePhoto};if(typeof module!=='undefined')module.exports=api;root.FlipProfileReader=api;
 })(globalThis);

@@ -67,7 +67,9 @@ class ProfileWatcherScan(private val context:Context){
                     now={android.os.SystemClock.elapsedRealtime()},progress=progress)
                 check(bound()){stop?:"PROFILE_CONTEXT_REJECTED"}
                 val photos=rows.flatMap{row->images.rows(row.postId).mapIndexed{slot,b->ResultArchive.photo(row.postId,slot,false,b)}}
-                SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,reply.postTexts,reply.stats)
+                val counters=checkNotNull(channel.viewportBridge).captureCounts
+                val keys=listOf("profileCaptureAttempts","profileCaptureInactive","profileCaptureAspect","profileCaptureFrame","profileCaptureLate","profileCaptureError","profileCapturePending","profileCaptureCommitted")
+                SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,reply.postTexts,reply.stats+keys.mapIndexed{i,key->key to counters[i]}.toMap())
             }finally{runCatching{channel.close()};runCatching{surface?.close()};images.clear();runCatching{browser.stop()};runCatching{browser.setActive(false)};runCatching{browser.close()}}
         }
     }
