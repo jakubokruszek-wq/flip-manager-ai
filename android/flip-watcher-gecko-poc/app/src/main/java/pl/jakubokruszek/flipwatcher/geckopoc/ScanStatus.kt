@@ -40,6 +40,7 @@ object ScanStatusText {
         "ANDROID_FOREGROUND_START_DENIED"->"Android odmówił uruchomienia usługi w tle."
         "ANDROID_PERMISSION_DENIED"->"Android odmówił uprawnienia potrzebnego do pracy."
         "BATCH_CONTINUE"->"Osiągnięto limit czasu partii. Pozostałe grupy czekają na kolejną próbę."
+        "SOURCE_TIMEOUT"->"Źródło przekroczyło budżet czasu. Nie potwierdzono odczytu; automat przechodzi do kolejnych źródeł."
         "SLOT_PARTIAL"->"Cykl został wykonany z brakami odczytu. Szczegóły są zachowane w diagnostyce; następny termin ponowi odczyt."
         "CAPTURE_PARTIAL"->"Cykl zakończony z brakami. Konkretne przyczyny i liczby dla źródeł są powyżej."
         "PAGE_HIDDEN","NO_POST_EVIDENCE","SCROLL_NOT_CONFIRMED","SALE_PHOTO_MISSING","CAPTURE_NOT_MEASURED"->"Odczyt źródła nie został potwierdzony ($code). Zaplanowano jedno ponowienie."

@@ -6,6 +6,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -73,6 +75,7 @@ object WatcherAutomation {
         retry(context)
     }
     fun errorCode(error:Exception):String = when(error.javaClass.simpleName){
+        "TimeoutCancellationException"->"SOURCE_TIMEOUT"
         "ForegroundServiceStartNotAllowedException"->"ANDROID_FOREGROUND_START_DENIED"
         "SecurityException"->"ANDROID_PERMISSION_DENIED"
         "SocketTimeoutException"->"NETWORK_TIMEOUT"
@@ -83,6 +86,7 @@ object WatcherAutomation {
 }
 
 open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):CoroutineWorker(context,parameters) {
+    internal open fun sourceTimeoutMs(remaining:Long)=minOf(175_000L,(remaining-30_000L).coerceAtLeast(1L))
     internal open fun credentials(context:Context)=WatcherLink.load(context)
     internal open fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=WatcherUpload.send(credentials,item)
     internal open fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=WatcherUpload.report(credentials,item)
@@ -167,7 +171,9 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             WatcherScanStatus.update(context,run){it.copy(phase="LOADING",group=(if(group.type=="PROFILE")"Profil: "else "")+group.name,position=groups.indexOf(group)+1,reason="",groupStarted=System.currentTimeMillis())}
                             val groupClock=android.os.SystemClock.elapsedRealtime()
                             try {
-                            val scanned=scan(group){phase->WatcherScanStatus.update(context,run){it.copy(phase=phase)}}
+                            val scanned=withTimeoutOrNull(sourceTimeoutMs(remaining())){
+                                scan(group){phase->WatcherScanStatus.update(context,run){it.copy(phase=phase)}}
+                            }?:error("SOURCE_TIMEOUT")
                             WatcherScanStatus.update(context,run){it.copy(phase="SAVING")}
                             val offers=scanned.rows.filter{DesktopSummary.eligible(it)||DesktopPresentation.reviewable(it)}
                             val ids=offers.map{it.postId}.toSet()
@@ -189,15 +195,20 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             queue.log("SCAN_SAVED",result.rows.size)
                             WatcherScanStatus.update(context,run){it.copy(done=groups.count{g->queue.scanned(slot,g.key)},posts=it.posts+result.rows.size,photos=it.photos+result.photos.size)}
                             flush()
-                            }catch(e:CancellationException){throw e}
-                            catch(e:Exception){
+                            }catch(e:Exception){
+                                // A source's own timeout must not cancel the entire cycle.
+                                // Parent cancellation (including Android stopping the work) still propagates.
+                                if(e is CancellationException){
+                                    currentCoroutineContext().ensureActive()
+                                    if(e !is TimeoutCancellationException)throw e
+                                }
                                 if(e is WatcherUpload.HttpFailure&&e.status in setOf(401,403))throw e
                                 lastIssue=if(WatcherAutomation.uiVisible)"WAITING_FOR_BACKGROUND"else WatcherAutomation.errorCode(e)
                                 queue.log(lastIssue)
-                                val hadProfileAttempt=group.type=="PROFILE"&&queue.cycleReports(slot).any{it.optString("groupId")==group.key}
+                                val hadAttempt=queue.cycleReports(slot).any{it.optString("groupId")==group.key}
                                 val evidence=WatcherCaptureReport.create(context,slot,run,group,null,lastIssue,android.os.SystemClock.elapsedRealtime()-groupClock)
                                 runCatching{queue.report(credentials.deviceId,slot,group.key,evidence)}
-                                if(hadProfileAttempt&&lastIssue !in setOf("LOGIN_REQUIRED","CAPTCHA","CHECKPOINT")){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
+                                if(hadAttempt&&lastIssue !in setOf("LOGIN_REQUIRED","CAPTCHA","CHECKPOINT","WAITING_FOR_BACKGROUND")){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
                                 WatcherScanStatus.update(context,run){it.copy(phase="PREPARING",reason=lastIssue)}
                                 // A single unavailable group cannot starve every later source.
                                 if(e.message in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA"))break
@@ -217,6 +228,11 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                         WatcherScanStatus.finish(context,run,phase,reason)
                     }
                     if(budgetReached||retryNeeded){if(budgetReached)queue.log("BATCH_CONTINUE");Result.retry()}else Result.success()
+                }catch(e:TimeoutCancellationException){
+                    currentCoroutineContext().ensureActive()
+                    queue.log("BATCH_CONTINUE")
+                    if(begun)WatcherScanStatus.finish(context,run,"RETRY","BATCH_CONTINUE")
+                    Result.retry()
                 }catch(e:CancellationException){queue.log("INTERRUPTED");if(begun)WatcherScanStatus.finish(context,run,"ERROR","INTERRUPTED");throw e}
                 catch(e:Exception){val reason=if(e is WatcherUpload.HttpFailure)"UPLOAD_HTTP_"+e.status else WatcherAutomation.errorCode(e);queue.log(reason);begin();WatcherScanStatus.finish(context,run,"ERROR",reason);Result.retry()}
                 finally{ticker?.cancel();runCatching{WatcherAutomation.scheduleNext(context)}}
