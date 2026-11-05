@@ -167,7 +167,7 @@ class WatcherAutomationInstrumentedTest {
             WatcherOutbox(context).use{q->
                 assertNull("Schema-only upgrade must preserve sent state",q.next(device,Long.MAX_VALUE))
                 q.readableDatabase.rawQuery("SELECT id,receipt FROM outbox",null).use{assertTrue(it.moveToFirst());assertEquals(frozen.id,it.getString(0));assertEquals("keep-receipt",it.getString(1))}
-                q.report(device,slot,group.id,report);q.completeScan("2026-11-04/20",group.id);assertFalse(q.scanned(slot,group.id))
+                q.report(device,slot,group.id,report);q.completeScan("capture-2/2026-11-04/20",group.id);assertFalse("The updated reader must not reuse 0.5.77 completion receipts",q.scanned(slot,group.id))
                 assertFalse(report.toString().contains("SPRZEDAM"));assertFalse(report.toString().contains("jpeg"))
                 q.readableDatabase.rawQuery("SELECT body FROM capture_reports",null).use{assertTrue(it.moveToFirst());assertFalse(String(it.getBlob(0)).contains(group.id))}
             }
