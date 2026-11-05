@@ -92,3 +92,17 @@ test("v2 carries only bounded source post text while v1 remains unchanged and by
  for(const postText of [null,'','x'.repeat(12001),'bad\u0000text']){const invalid=frozen({...j,postText} as typeof j);assert.throws(()=>parseMobilePost(invalid.raw,device,invalid.key));}
  const extra=frozen({...j,untrusted:'extra'} as typeof j);assert.throws(()=>parseMobilePost(extra.raw,device,extra.key));
 });
+
+test("profile v3 accepts true profile permalinks including opaque IDs; legacy groups remain strict",async()=>{
+ for(const id of ["123456789","pfbidAbCdEf0123456789"]){
+  const j={...snapshot(),version:3,sourceType:"PROFILE",groupId:"61563667387467",postText:null};
+  j.row.postId=id;j.row.permalink=`https://www.facebook.com/${j.groupId}/posts/${id}/`;
+  const frozenProfile=frozen(j);const parsed=parseMobilePost(frozenProfile.raw,device,frozenProfile.key);
+  assert.equal(parsed.sourceType,"PROFILE");assert.equal(parsed.postText,null);assert.equal(parsed.postId,id);
+  const seen:unknown[]=[];
+  const handler=createMobilePost({authenticate:async()=>({id:device}),allowed:async(source,type)=>{seen.push([source,type]);return false;},authStatus:()=>null,upload:async()=>{throw Error("not reached");},importPost:async()=>{throw Error("not reached");}});
+  assert.equal((await handler(request(frozenProfile))).status,409);assert.deepEqual(seen,[[j.groupId,"PROFILE"]]);
+  for(const bad of [{...j,sourceType:"GROUP"},{...j,row:{...j.row,permalink:`https://www.facebook.com/groups/${j.groupId}/posts/${id}/`}},{...j,row:{...j.row,permalink:`https://www.facebook.com/100008036582269/posts/${id}/`}}]){const f=frozen(bad);assert.throws(()=>parseMobilePost(f.raw,device,f.key));}
+ }
+ const j=snapshot();j.row.postId="pfbidAbCdEf0123456789";j.row.permalink=`https://www.facebook.com/groups/${j.groupId}/posts/${j.row.postId}/`;const f=frozen(j);assert.throws(()=>parseMobilePost(f.raw,device,f.key));
+});

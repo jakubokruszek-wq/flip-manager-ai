@@ -52,3 +52,15 @@ test("adding FLIPERZY POLSKA cannot break the closed eleven-group Android feed",
   assert.equal(modern.groups.length,2);assert.equal(modern.groups[1].groupId,"297408205383031");
   assert.equal(modern.compatibility.omittedGroupCount,0);
 });
+
+
+test("protocol 3 includes typed profiles and groups without changing old feeds", async()=>{
+ const profile=group({id:"profile",type:"PROFILE",sourceId:"61563667387467",url:"https://www.facebook.com/profile.php?id=61563667387467",name:"Dawid Trojanowski"});
+ assert.equal(collectorGroupFeed([group(),profile],2).groups.length,1);
+ const feed=collectorGroupFeed([profile,group()],3);
+ assert.equal(feed.version,2);assert.deepEqual(feed.sources.map(s=>s.sourceType),["GROUP","PROFILE"]);
+ assert.equal(feed.sources[1].name,"Dawid Trojanowski");assert.equal(feed.sources[1].sourceId,"61563667387467");
+ assert.throws(()=>collectorGroupFeed([profile,profile],3));
+ const get=createCollectorGroupsGet({authenticate:async()=>{},list:async()=>[profile],authStatus:()=>503});
+ const req=request();req.headers.set("X-Watcher-Group-Protocol","3");assert.equal((await(await get(req)).json()).sources.length,1);
+});
