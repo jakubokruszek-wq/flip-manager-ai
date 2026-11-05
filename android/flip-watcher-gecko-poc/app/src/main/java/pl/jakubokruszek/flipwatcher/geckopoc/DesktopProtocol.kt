@@ -9,6 +9,10 @@ data class DesktopDocumentProof(val documentId:String,val timeOrigin:Double) {
     override fun toString()="DesktopDocumentProof(redacted)"
 }
 object DesktopProtocol {
+    fun documentProofDenied(message:Any?,nonce:String):Boolean {
+        val j=ScanProtocol.asJson(message)?:return false
+        return j.keys().asSequence().toSet()==setOf("type","nonce","documentId","timeOrigin")&&j.opt("type")=="desktopDocumentProof"&&j.opt("nonce")==nonce&&j.isNull("documentId")&&j.isNull("timeOrigin")
+    }
     fun documentProof(message:Any?,nonce:String):DesktopDocumentProof?=runCatching {
         val j=ScanProtocol.asJson(message)?:return null
         if(j.keys().asSequence().toSet()!=setOf("type","nonce","documentId","timeOrigin")||j.opt("type")!="desktopDocumentProof"||j.opt("nonce")!=nonce)return null

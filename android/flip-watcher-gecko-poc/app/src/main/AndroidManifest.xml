@@ -31,6 +31,7 @@
         </activity>
 
         <activity android:name=".ScanStatusActivity" android:exported="false" />
+        <activity android:name=".JoinedGroupsActivity" android:exported="false" />
 
         <receiver
             android:name=".ScreenOffAlarmReceiver"

@@ -25,7 +25,7 @@ object DesktopSessionPreview {
         try {
             if(gesture&&!baseline)return@withContext failure("PROTOCOL")
             val sourceGeneration=channel.connectionGeneration
-            val previousDocument=channel.desktopDocumentProof(group)?:return@withContext failure("PROTOCOL")
+            val previousDocument=channel.desktopDocumentProof(group)?:return@withContext failure(if(channel.documentProofDenied)"NO_CONSENT_OR_CONTEXT"else"PROTOCOL")
             if(!live())return@withContext failure(gate.reason)
             if(channel.connectionGeneration!=sourceGeneration||channel.connectedUrl!=target)return@withContext failure("NAVIGATION")
             val armed=channel.armDesktop(nonce,true,group,windowMs)

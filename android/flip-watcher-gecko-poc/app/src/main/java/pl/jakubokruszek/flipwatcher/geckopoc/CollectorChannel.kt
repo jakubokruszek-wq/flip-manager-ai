@@ -56,7 +56,7 @@ class CollectorChannel(
                 "shareLinkStop" -> if (json.optString("nonce") == shareNonce) onShareStop()
                 "visiblePostsStop" -> onVisibleStop()
                 "ready" -> ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
-                "profilePreviewResult", "reviewImagesResult", "reviewPostResult", "desktopDocumentProof", "desktopArmed", "desktopPreviewResult", "shareLinkContextResult", "mainTransportResult", "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
+                "joinedGroupsResult", "profilePreviewResult", "reviewImagesResult", "reviewPostResult", "desktopDocumentProof", "desktopArmed", "desktopPreviewResult", "shareLinkContextResult", "mainTransportResult", "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                     pending.remove(json.optString("nonce"))?.let { reply ->
                         android.os.Handler(android.os.Looper.getMainLooper()).post { reply.complete(if (port === this@CollectorChannel.port) json else null) }
@@ -118,9 +118,11 @@ class CollectorChannel(
 
     suspend fun awaitPort(timeoutMs: Long): Boolean = withTimeoutOrNull(timeoutMs) { portReady.await(); true } ?: false
 
+    internal var documentProofDenied=false;private set
     suspend fun desktopDocumentProof(group:String=PocPolicy.APPROVED_GROUP_ID):DesktopDocumentProof? {
         val nonce=UUID.randomUUID().toString()
         val result=request(nonce,JSONObject().put("type","desktopDocumentProofRequest").put("nonce",nonce).put("consent",true).put("groupId",group).put("allowLoopback",fixtureMode),1500)
+        documentProofDenied=DesktopProtocol.documentProofDenied(result,nonce)
         return DesktopProtocol.documentProof(result,nonce)
     }
     suspend fun armDesktop(nonce:String,consent:Boolean,group:String=PocPolicy.APPROVED_GROUP_ID,windowMs:Int=60_000):String {
@@ -282,6 +284,14 @@ class CollectorChannel(
         }
     }
 
+    internal suspend fun joinedGroups(nonce:String,expected:String):JoinedGroupsResult?{
+        val generation=connectionGeneration
+        val reply=request(nonce,JSONObject().put("type","discoverJoinedGroups").put("nonce",nonce).put("consent",true).put("fixture",fixtureMode),65_000)?:return null
+        check(connectionGeneration==generation&&connectedUrl==expected){"DISCOVERY_CONTEXT_REJECTED"}
+        if(reply.optString("nonce")!=nonce)return null
+        if(reply.optString("status")!="OK")error(reply.optString("reason").takeIf{it.matches(Regex("[A-Z_]{1,60}"))}?:"DISCOVERY_PROTOCOL")
+        return JoinedGroupsProtocol.parse(reply,nonce)
+    }
     internal suspend fun profilePreview(nonce:String,source:WatcherGroup,expected:String):DesktopReply?{
         require(source.type=="PROFILE")
         val generation=connectionGeneration

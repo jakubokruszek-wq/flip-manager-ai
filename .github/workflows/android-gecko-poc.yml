@@ -51,7 +51,7 @@ jobs:
       - name: Verify reused desktop property rules
         run: node android/flip-watcher-gecko-poc/scripts/desktop-fields.cjs --check
       - name: Mobile Manager contract tests
-        run: node --test features/collector/facebook-mobile.test.ts features/collector/facebook-mobile-scan.test.ts features/collector/facebook-groups-feed.test.ts
+        run: node --test features/collector/facebook-mobile.test.ts features/collector/facebook-mobile-scan.test.ts features/collector/facebook-groups-feed.test.ts features/collector/facebook-mobile-discovery.test.ts
       - name: Preserve existing Manager records on mobile import
         run: node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/collector/facebook-import.test.ts
       - name: Existing collector-core tests (the parser the POC reuses)
@@ -164,6 +164,7 @@ jobs:
           force-avd-creation: true
           script: |
             adb logcat -c || true
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.JoinedGroupsInstrumentedTest
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ProfileWatcherInstrumentedTest
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#compactPocLayoutGivesBrowserMostOfScreenAndKeepsToolsOutsideViewport || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
@@ -503,9 +504,9 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  publish-tested-0579:
-    name: Publish tested Android 0.5.79
-    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-profile-reader'
+  publish-tested-0580:
+    name: Publish tested Android 0.5.80
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-joined-groups'
     needs: [guard, build, instrumented, verified-apk]
     runs-on: ubuntu-24.04
     permissions:
@@ -520,23 +521,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-profile-reader --jq .object.sha)" = '${{ github.sha }}'
+          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-joined-groups --jq .object.sha)" = '${{ github.sha }}'
           apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
           test -n "$apk_path" && test -f "$apk_path"
-          cp "$apk_path" flip-watcher-0.5.79-arm64.apk
-          unzip -p flip-watcher-0.5.79-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.79")process.exit(1)})'
-          unzip -p flip-watcher-0.5.79-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
-          sha256sum flip-watcher-0.5.79-arm64.apk > SHA256SUMS
+          cp "$apk_path" flip-watcher-0.5.80-arm64.apk
+          unzip -p flip-watcher-0.5.80-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.80")process.exit(1)})'
+          unzip -p flip-watcher-0.5.80-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
+          sha256sum flip-watcher-0.5.80-arm64.apk > SHA256SUMS
           cat > release-notes.md <<'NOTES'
-          Android 0.5.79 dodaje skanowanie włączonych profili z Managera obok grup.
+          Android 0.5.80 dodaje wykrywanie grup z zalogowanej sesji telefonu.
 
-          - Wspólna lista źródeł obejmuje grupy i profile; nie trzeba przepisywać konfiguracji.
-          - Profil musi potwierdzić właściciela strony, a każdy post własny adres. Cytaty i cudze posty są odrzucane.
-          - Odczyt obejmuje własny tekst oraz OCR zdjęć, również ogłoszeń na kolorowym tle.
-          - Do Managera trafia wyłącznie potwierdzona sprzedaż nieruchomości z minimum jednym zapisanym zdjęciem.
-          - Status pokazuje źródło, czas i konkretną przyczynę braków. Nieudany profil nie blokuje kolejnych źródeł.
-          - Zachowuje zapisane oferty, logowanie, harmonogram oraz kolejkę wysyłki.
+          - Na ekranie postępu wybierz „Wykryj moje grupy na Facebooku”. Odczyt dotyczy strony „Twoje grupy”, z pominięciem rekomendacji „Dołącz”.
+          - Odczytuje nazwy i adresy, przewija listę i zachowuje grupy z wcześniej załadowanych fragmentów. Limit: 200 grup i ograniczony czas odczytu; wynik nie potwierdza całej historii członkostw.
+          - Przekazuje wynik do Managera, który automatycznie dodaje nowe łódzkie grupy nieruchomościowe. Istniejące źródła są pomijane, niejednoznaczne wyniki pozostają do przejrzenia.
+          - Wykrywanie nie dołącza do grup, nie publikuje i nie odczytuje postów ani zdjęć.
+          - Jawne odrzucenie kontekstu grupy ma osobny komunikat zamiast ogólnego SCAN_PROTOCOL.
+          - Zachowuje skanowanie grup i profili, zapisane oferty, zdjęcia, logowanie i harmonogram.
 
-          Instaluj jako aktualizację. Testy emulatora używają lokalnych stron i nie potwierdzają dostępu do konkretnego posta w prywatnej sesji Facebooka.
+          Instaluj jako aktualizację, bez odinstalowywania. Testy Androida używają lokalnych stron i nie potwierdzają listy prywatnych grup na telefonie.
           NOTES
-          gh release create gecko-poc-0.5.79 flip-watcher-0.5.79-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.79 — grupy i profile w automacie' --prerelease --notes-file release-notes.md
+          gh release create gecko-poc-0.5.80 flip-watcher-0.5.80-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.80 — wykrywanie moich grup na telefonie' --prerelease --notes-file release-notes.md

@@ -10,11 +10,11 @@ poc="android/flip-watcher-gecko-poc"
 
 changed="$(git diff --name-only "$base"...HEAD)"
 echo "Changed files vs $base:"; echo "$changed" | sed 's/^/  /'
-outside="$(echo "$changed" | grep -v -E "^($poc/|\.github/workflows/android-gecko-poc\.yml$|app/api/collector/facebook/mobile/(scan/)?route\.ts$|features/collector/facebook-((mobile(-scan)?|groups-feed)(\.test)?|import(\.test)?)\.ts$|supabase/migrations/20261104201506_collector_mobile_scan_reports\.sql$)" || true)"
+outside="$(echo "$changed" | grep -v -E "^($poc/|\.github/workflows/(android-gecko-poc|mobile-discovery-contract)\.yml$|app/api/collector/facebook/mobile/(scan/|groups/discover/)?route\.ts$|features/collector/facebook-((mobile(-(scan|discovery))?|groups-feed)(\.test)?|import(\.test)?)\.ts$|supabase/migrations/20261104201506_collector_mobile_scan_reports\.sql$)" || true)"
 if [ -n "$outside" ]; then echo "FAIL: files outside the POC were changed:"; echo "$outside"; exit 1; fi
 
 src="$poc/app/src/main"
-if grep -R -n -i -E "okhttp|HttpURLConnection|URLConnection|retrofit|supabase|onrender\.com|vercel\.app|fetch\(" "$src" --include='*.kt' --include='*.js' --include='*.json' --exclude='main-transport.js' --exclude='main-bootstrap.js' --exclude='WatcherLink.kt' --exclude='WatcherUpload.kt'; then
+if grep -R -n -i -E "okhttp|HttpURLConnection|URLConnection|retrofit|supabase|onrender\.com|vercel\.app|fetch\(" "$src" --include='*.kt' --include='*.js' --include='*.json' --exclude='main-transport.js' --exclude='main-bootstrap.js' --exclude='WatcherLink.kt' --exclude='WatcherUpload.kt' --exclude='WatcherDiscoveryUpload.kt'; then
   echo "FAIL: network client or backend reference in POC sources"; exit 1
 fi
 # WatcherLink.kt is the explicit device-token boundary for read-only group synchronization.
@@ -102,4 +102,12 @@ const s=require('node:fs').readFileSync(process.argv[2],'utf8');
 if(!s.includes('URL(WatcherLink.ORIGIN+"/api/collector/facebook/mobile")')||!s.includes('connection.instanceFollowRedirects=false'))process.exit(1);
 if(!s.includes('"Idempotency-Key",item.id')||!s.includes('response.getString("idempotencyKey")==item.id')||!s.includes('bytes.size<=512*1024'))process.exit(1);
 if(/CookieManager|GeckoSession|setRequestProperty\("Cookie"/.test(s))process.exit(1);
+NODE
+
+# Joined-directory handoff is paired metadata only; it cannot write group configuration.
+node - "$src/java/pl/jakubokruszek/flipwatcher/geckopoc/WatcherDiscoveryUpload.kt" <<'NODE'
+const s=require('node:fs').readFileSync(process.argv[2],'utf8');
+if(!s.includes('URL(WatcherLink.ORIGIN+"/api/collector/facebook/mobile/groups/discover")')||!s.includes('connection.instanceFollowRedirects=false')||!s.includes('bytes.size<=128*1024'))process.exit(1);
+if(/CookieManager|GeckoSession|Bitmap|SavedPhoto|DesktopRow|setRequestProperty\("Cookie"/.test(s))process.exit(1);
+if((s.match(/openConnection\(/g)||[]).length!==1||!s.includes('#group-discovery='))process.exit(1);
 NODE
