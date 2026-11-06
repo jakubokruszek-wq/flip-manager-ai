@@ -91,6 +91,43 @@ class WatcherAutomationInstrumentedTest {
             assertEquals(1,org.json.JSONObject(valid.body).getJSONArray("photos").length())
         }}finally{context.deleteDatabase("watcher-outbox-v1.db")}
     }
+    @Test fun fullHeldEvidenceCannotBlockAReadyOfferOrEraseExistingSnapshots(){
+        context.deleteDatabase("watcher-outbox-v1.db")
+        try{WatcherOutbox(context).use{q->
+            val base=result();val savedAt=base.savedAt-5000;val oldBytes=byteArrayOf(1,2,3)
+            val db=q.writableDatabase;db.beginTransaction()
+            try{
+                repeat(1000){index->
+                    db.execSQL("INSERT INTO outbox(id,device,source,post,saved_at,body,state) VALUES(?,?,?,?,?,?,?)",arrayOf<Any>("held-$index",device,group.key,if(index==0)base.rows.single().postId else (550000000001000L+index).toString(),savedAt,oldBytes,"quality_hold"))
+                }
+                db.setTransactionSuccessful()
+            }finally{db.endTransaction()}
+            val missing=base.rows.single().copy(postId="550000000000092",permalink=group.url+"posts/550000000000092/")
+            // The incomplete row comes first: skipping it must not abort the whole scan transaction.
+            q.enqueue(device,group,base.copy(rows=listOf(missing)+base.rows))
+            val item=checkNotNull(q.next(device,Long.MAX_VALUE))
+            assertEquals(base.rows.single().postId,org.json.JSONObject(item.body).getJSONObject("row").getString("postId"))
+            assertEquals(1,org.json.JSONObject(item.body).getJSONArray("photos").length())
+            db.rawQuery("SELECT saved_at FROM outbox WHERE id=?",arrayOf(item.id)).use{assertTrue(it.moveToFirst());assertEquals(savedAt,it.getLong(0))}
+            q.acknowledge(item.id,"keep-receipt")
+            q.enqueue(device,group,base)
+            assertNull("Already confirmed offers must not be replayed",q.next(device,Long.MAX_VALUE))
+            db.rawQuery("SELECT COUNT(*) FROM outbox WHERE state='quality_hold'",null).use{assertTrue(it.moveToFirst());assertEquals(1000,it.getInt(0))}
+            db.rawQuery("SELECT body FROM outbox WHERE id='held-0'",null).use{assertTrue(it.moveToFirst());assertArrayEquals(oldBytes,it.getBlob(0))}
+            assertTrue(q.status().contains("QUALITY_HOLD_LIMIT"))
+            assertEquals(mapOf("queuePending" to 0,"queueBlocked" to 0,"queueQualityHeld" to 1000,"queueSent" to 1),q.transferCounts())
+        }}finally{context.deleteDatabase("watcher-outbox-v1.db")}
+    }
+    @Test fun fullDeliveryQueueStillRefusesMoreReadyOffersWithoutChangingExistingData(){
+        context.deleteDatabase("watcher-outbox-v1.db")
+        try{WatcherOutbox(context).use{q->
+            val db=q.writableDatabase;db.beginTransaction()
+            try{repeat(1000){index->db.execSQL("INSERT INTO outbox(id,device,body,state) VALUES(?,?,?,?)",arrayOf<Any>("pending-$index",device,byteArrayOf(9),"pending"))};db.setTransactionSuccessful()}finally{db.endTransaction()}
+            val failure=runCatching{q.enqueue(device,group,result())}.exceptionOrNull()
+            assertEquals("QUEUE_FULL",failure?.message)
+            db.rawQuery("SELECT COUNT(*) FROM outbox WHERE state='pending'",null).use{assertTrue(it.moveToFirst());assertEquals(1000,it.getInt(0))}
+        }}finally{context.deleteDatabase("watcher-outbox-v1.db")}
+    }
     @Test fun savedDateCleanupPreservesUnknownDatesAndReceiptsAndDoesNotResurrectPosts() {
         context.deleteDatabase("watcher-outbox-v1.db")
         val before=System.currentTimeMillis()-30L*86400000

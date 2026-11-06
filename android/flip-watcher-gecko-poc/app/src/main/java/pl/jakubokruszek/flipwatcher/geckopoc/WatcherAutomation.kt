@@ -210,7 +210,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             }
                             val issue=WatcherCaptureReport.issue(scanned)
                             val prior=queue.cycleReports(slot).any{it.getString("groupId")==group.key}
-                            val evidence=WatcherCaptureReport.create(context,slot,run,group,scanned,issue,android.os.SystemClock.elapsedRealtime()-groupClock)
+                            val evidence=WatcherCaptureReport.create(context,slot,run,group,scanned,issue,android.os.SystemClock.elapsedRealtime()-groupClock,queue.transferCounts())
                             queue.report(credentials.deviceId,slot,group.key,evidence)
                             // One bounded retry for degraded capture; do not spin forever on the same source.
                             if(issue.isEmpty()||prior){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
@@ -231,7 +231,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                 lastIssue=if(WatcherAutomation.uiVisible)"WAITING_FOR_BACKGROUND"else WatcherAutomation.errorCode(e)
                                 queue.log(lastIssue)
                                 val hadAttempt=queue.cycleReports(slot).any{it.optString("groupId")==group.key}
-                                val evidence=WatcherCaptureReport.create(context,slot,run,group,null,lastIssue,android.os.SystemClock.elapsedRealtime()-groupClock)
+                                val evidence=WatcherCaptureReport.create(context,slot,run,group,null,lastIssue,android.os.SystemClock.elapsedRealtime()-groupClock,queue.transferCounts())
                                 runCatching{queue.report(credentials.deviceId,slot,group.key,evidence)}
                                 if(hadAttempt&&lastIssue !in setOf("LOGIN_REQUIRED","CAPTCHA","CHECKPOINT","WAITING_FOR_BACKGROUND")){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
                                 WatcherScanStatus.update(context,run){it.copy(phase="PREPARING",reason=lastIssue,done=groups.count{g->queue.scanned(slot,g.key)})}

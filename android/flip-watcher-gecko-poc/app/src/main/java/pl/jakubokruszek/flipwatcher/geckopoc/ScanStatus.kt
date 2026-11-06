@@ -49,6 +49,7 @@ object ScanStatusText {
         "WINDOW_NOT_DUE"->"Nowy termin skanu jeszcze nie nastąpił."
         "INTERRUPTED"->"Praca została przerwana. Zapisane wyniki i kolejka pozostają zachowane."
         "AUTOMATION_DISABLED"->"Automat jest wyłączony."
+        "QUEUE_FULL"->"Kolejka ofert gotowych do wysłania jest pełna. Zachowano dane w telefonie; wysyłka wymaga ponowienia."
         "UPLOAD_RETRY"->"Wysyłka nie została potwierdzona; dane pozostają w kolejce."
         else->if(code.startsWith("UPLOAD_HTTP_"))"Manager odrzucił wysyłkę (${code.removePrefix("UPLOAD_HTTP_")}). Sprawdź połączenie i dziennik." else "Nie zakończono etapu ($code). Szczegóły są w dzienniku."
     }

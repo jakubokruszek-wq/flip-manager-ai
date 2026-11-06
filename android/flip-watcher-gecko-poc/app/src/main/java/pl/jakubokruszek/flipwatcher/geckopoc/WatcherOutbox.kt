@@ -69,6 +69,9 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
         require(SavedResultCodec.rows(JSONArray(value.rows.map(SavedResultCodec::row)),group.id,true,group.type=="PROFILE")==value.rows)
         val db=writableDatabase;db.beginTransaction()
         try {
+            var held=db.rawQuery("SELECT COUNT(*) FROM outbox WHERE state='quality_hold'",null).use{it.moveToFirst();it.getInt(0)}
+            var pending=db.rawQuery("SELECT COUNT(*) FROM outbox WHERE state NOT IN ('sent','deleted','quality_hold')",null).use{it.moveToFirst();it.getInt(0)}
+            var skippedHeld=0
             for(row in value.rows) {
                 if(db.rawQuery("SELECT 1 FROM removed_posts WHERE source=? AND post=?",arrayOf(group.key,row.postId)).use{it.moveToFirst()})continue
                 val firstSaved=db.rawQuery("SELECT MIN(saved_at) FROM outbox WHERE source=? AND post=?",arrayOf(group.key,row.postId)).use{if(it.moveToFirst()&&!it.isNull(0))it.getLong(0)else value.savedAt}
@@ -79,18 +82,30 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
                     .put("photos",JSONArray(photos.map{JSONObject().put("slot",it.slot).put("jpeg",Base64.encodeToString(it.jpeg,Base64.NO_WRAP))})).toString().toByteArray()
                 require(body.size<=512*1024)
                 val id="mobile-v1:"+AutomationPolicy.digest((device+"/"+group.id+"/"+row.postId+"/").toByteArray()+body)
-                val values=ContentValues().apply{put("id",id);put("device",device);put("source",group.key);put("post",row.postId);put("saved_at",firstSaved);put("body",seal(id,body));put("state",if(OfferQuality.reason(row,photos.size)==null)"pending"else"quality_hold")}
                 val exists=db.rawQuery("SELECT 1 FROM outbox WHERE id=?",arrayOf(id)).use{it.moveToFirst()}
                 if(!exists){
-                    check(db.rawQuery("SELECT COUNT(*) FROM outbox WHERE state NOT IN ('sent','deleted')",null).use{it.moveToFirst();it.getInt(0)}<1000){"QUEUE_FULL"}
+                    val ready=OfferQuality.reason(row,photos.size)==null
+                    // Incomplete candidates must never consume the delivery capacity.
+                    // Keep existing held evidence intact; skip only NEW held snapshots at its own cap.
+                    if(!ready&&held>=1000){skippedHeld++;continue}
+                    if(ready)check(pending<1000){"QUEUE_FULL"}
+                    val values=ContentValues().apply{put("id",id);put("device",device);put("source",group.key);put("post",row.postId);put("saved_at",firstSaved);put("body",seal(id,body));put("state",if(ready)"pending"else"quality_hold")}
                     check(db.insertOrThrow("outbox",null,values)>0)
+                    if(ready)pending++ else held++
                 }
             }
+            if(skippedHeld>0)log("QUALITY_HOLD_LIMIT",skippedHeld)
             db.setTransactionSuccessful()
         } finally {db.endTransaction()}
     }
     data class Item(val id:String,val body:String,val attempt:Int) {override fun toString()="PendingWatcherUpload(redacted)"}
     fun hasDue(device:String,now:Long)=readableDatabase.rawQuery("SELECT 1 FROM outbox WHERE device=? AND state='pending' AND next_at<=? LIMIT 1",arrayOf(device,now.toString())).use{it.moveToFirst()}
+    fun transferCounts():Map<String,Int>{
+        val names=mapOf("pending" to "queuePending","blocked" to "queueBlocked","quality_hold" to "queueQualityHeld","sent" to "queueSent")
+        val counts=names.values.associateWith{0}.toMutableMap()
+        readableDatabase.rawQuery("SELECT state,COUNT(*) FROM outbox GROUP BY state",null).use{c->while(c.moveToNext())names[c.getString(0)]?.let{counts[it]=c.getInt(1).coerceIn(0,100_000_000)}}
+        return counts
+    }
     fun next(device:String,now:Long):Item? = readableDatabase.rawQuery("SELECT id,body,attempt FROM outbox WHERE device=? AND state='pending' AND next_at<=? ORDER BY rowid LIMIT 1",arrayOf(device,now.toString())).use{
         if(!it.moveToFirst())null else Item(it.getString(0),open(it.getString(0),it.getBlob(1)),it.getInt(2))
     }
@@ -146,7 +161,7 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
         }finally{db.endTransaction()}
     }
     fun status():String=buildString {
-        appendLine("quality_hold: czekają na potwierdzoną sprzedaż lub przypisane zdjęcie. deleted: usunięte dane, zachowany klucz ponowień.")
+        appendLine("quality_hold: czekają na potwierdzoną sprzedaż lub przypisane zdjęcie; mają osobny limit i nie blokują wysyłki gotowych ofert. deleted: usunięte dane, zachowany klucz ponowień.")
         readableDatabase.rawQuery("SELECT state,COUNT(*) FROM outbox GROUP BY state",null).use{while(it.moveToNext())appendLine("${it.getString(0)}: ${it.getInt(1)}")}
         readableDatabase.rawQuery("SELECT at,code,count FROM journal ORDER BY id DESC LIMIT 12",null).use{while(it.moveToNext())appendLine("${ScanStatusText.time(it.getLong(0),java.time.ZoneId.systemDefault())}: ${it.getString(1)} (${it.getInt(2)})")}
     }
