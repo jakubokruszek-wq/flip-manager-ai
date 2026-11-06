@@ -1,17 +1,14 @@
 import Link from "next/link";
 import { getProperties } from "@/services/properties.service";
+import { isInvestmentStatus, INVESTMENT_STATUS_LABELS } from "@/features/properties/utils/investment-status";
 
 export const metadata = { title: "Inwestycje" };
 
-const investmentStatuses = new Set(["acquired", "renovation", "listed", "sold"]);
-const labels: Record<string, string> = {
-  acquired: "Kupiona", renovation: "Remont", listed: "W sprzedaży", sold: "Sprzedana",
-};
 const money = (value: number | null) =>
   value === null ? "—" : new Intl.NumberFormat("pl-PL", { style: "currency", currency: "PLN", maximumFractionDigits: 0 }).format(value);
 
 export default async function InvestmentsPage() {
-  const properties = (await getProperties()).filter((property) => investmentStatuses.has(property.status));
+  const properties = (await getProperties()).filter((property) => isInvestmentStatus(property.status));
   return (
     <section className="space-y-6">
       <div>
@@ -31,7 +28,7 @@ export default async function InvestmentsPage() {
           {properties.map((property) => (
             <article key={property.id} className="ui-card space-y-4 p-5">
               <div>
-                <p className="text-xs font-semibold text-muted-foreground">{labels[property.status]}</p>
+                <p className="text-xs font-semibold text-muted-foreground">{INVESTMENT_STATUS_LABELS[property.status]}</p>
                 <h2 className="mt-1 text-lg font-bold">{property.address || property.title || "Nieruchomość"}</h2>
                 <p className="text-sm text-muted-foreground">{[property.district, property.city].filter(Boolean).join(", ")}</p>
               </div>
