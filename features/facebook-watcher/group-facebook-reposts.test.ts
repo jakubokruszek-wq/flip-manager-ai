@@ -22,7 +22,7 @@ test("different facts or operator workflow remain separate even with a reused ph
   }
 });
 test("arbitrary image filenames, shared placeholders and missing parameters cannot group offers",()=>{
-  for(const patch of [{images:["https://cdn.test/same.jpg"]},{images:[]},{price:null},{area:null}]) assert.equal(groupFacebookReposts([item("123456",patch),item("234567",patch)]).length,2);
+  for(const patch of [{images:["https://cdn.test/same.jpg"]},{images:[]},{price:null},{area:null,images:[]}]) assert.equal(groupFacebookReposts([item("123456",patch),item("234567",patch)]).length,2);
 });
 
 test("three groups with recompressed photos and identical detailed own text render once with all source links",()=>{
@@ -96,4 +96,14 @@ test("integer area or absent rooms or conflicting price never create a location-
     const second=item("234567",{...first,...patch,listingId:"234567"});
     assert.equal(groupFacebookReposts([first,second]).length,2,JSON.stringify(patch));
   }
+});
+
+test("same uploaded photo with matching price and missing area groups safely",()=>{
+ const first=item("123456",{price:408000,area:null,rooms:null,city:null,street:"Retkinia"});
+ const second=item("234567",{price:408000,area:null,rooms:null,city:null,street:"Retkinia",images:[image("234567")]});
+ const grouped=groupFacebookReposts([first,second]);
+ assert.equal(grouped.length,1);assert.equal(grouped[0].relatedPosts?.length,2);
+ assert.equal(grouped[0].relatedPostMatch,"confirmed");
+ assert.equal(groupFacebookReposts([first,{...second,price:409000}]).length,2);
+ assert.equal(groupFacebookReposts([first,{...second,images:[image("234567","b".repeat(64))]}]).length,2);
 });
