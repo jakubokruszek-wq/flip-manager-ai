@@ -51,6 +51,7 @@ object WatcherLink {
         try {
             connection.instanceFollowRedirects=false;connection.connectTimeout=10000;connection.readTimeout=15000
             connection.useCaches=false;connection.setRequestProperty("Accept","application/json")
+            if(path=="/api/collector/facebook/groups") connection.setRequestProperty("X-Watcher-Group-Protocol","2")
             connection.setRequestProperty("Authorization","Bearer "+credentials.token)
             val status=connection.responseCode
             if(status==401)error("WATCHER_PAIRING_REQUIRED")
