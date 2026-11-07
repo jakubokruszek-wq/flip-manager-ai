@@ -53,7 +53,15 @@ function compatible(a: FacebookWatcherListing, b: FacebookWatcherListing): boole
   return true;
 }
 
-/** A third repost may share a photo only with the second member. Preserve\n * strict matching facts against the first member without requiring its photo. */\nfunction compatibleUnpicturedMember(a: FacebookWatcherListing,b: FacebookWatcherListing):boolean {\n  return a.source==="facebook" && b.source==="facebook" && a.area===null && b.area===null && a.price!=null && a.price===b.price &&\n    a.street!=null && b.street!=null && fact(a.street,"street")===fact(b.street,"street") &&\n    a.rooms===b.rooms && a.status===b.status && a.lifecycleStatus===b.lifecycleStatus;\n}\n\nfunction mobilePhotoHashes(images: string[]): string[] {
+/** A third repost may share a photo only with the second member. Preserve
+ * strict matching facts against the first member without requiring its photo. */
+function compatibleUnpicturedMember(a: FacebookWatcherListing,b: FacebookWatcherListing):boolean {
+  return a.source==="facebook" && b.source==="facebook" && a.area===null && b.area===null && a.price!=null && a.price===b.price &&
+    a.street!=null && b.street!=null && fact(a.street,"street")===fact(b.street,"street") &&
+    a.rooms===b.rooms && a.status===b.status && a.lifecycleStatus===b.lifecycleStatus;
+}
+
+function mobilePhotoHashes(images: string[]): string[] {
   return images.flatMap(value => {
     try {
       const url = new URL(value);
