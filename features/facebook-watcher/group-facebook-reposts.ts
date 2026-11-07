@@ -12,7 +12,7 @@ export function groupFacebookReposts(records: FacebookWatcherListing[]): Faceboo
     const candidates = [...new Set([...(buckets.get(bucketKey) ?? []), ...mobilePhotoHashes(item.images).flatMap(hash => imageBuckets.get(hash) ?? [])])];
     const target = candidates.find(candidate => {
       const previous = members.get(candidate)!;
-      return previous.every(member => compatible(member,item)) && previous.some(member => sameEvidence(member,item) || possibleRepost(member,item));
+      return previous.every(member => compatible(member,item) || compatibleUnpicturedMember(member,item)) && previous.some(member => (compatible(member,item) && (sameEvidence(member,item) || possibleRepost(member,item))));
     });
     if (!target) { const copy={ ...item }; groups.push(copy); members.set(copy,[item]); if (!buckets.has(bucketKey)) buckets.set(bucketKey,[]); buckets.get(bucketKey)!.push(copy); for (const hash of mobilePhotoHashes(item.images)) { if (!imageBuckets.has(hash)) imageBuckets.set(hash,[]); imageBuckets.get(hash)!.push(copy); } continue; }
     const publications = [...(target.relatedPosts ?? [publication(target)]), publication(item)];
@@ -51,6 +51,14 @@ function compatible(a: FacebookWatcherListing, b: FacebookWatcherListing): boole
     if (a[key] != null && b[key] != null && fact(a[key],key) !== fact(b[key],key)) return false;
   }
   return true;
+}
+
+/** A third repost may share a photo only with the second member. Preserve
+ * strict matching facts against the first member without requiring its photo. */
+function compatibleUnpicturedMember(a: FacebookWatcherListing,b: FacebookWatcherListing):boolean {
+  return a.source==="facebook" && b.source==="facebook" && a.area===null && b.area===null && a.price!=null && a.price===b.price &&
+    a.street!=null && b.street!=null && fact(a.street,"street")===fact(b.street,"street") &&
+    a.rooms===b.rooms && a.status===b.status && a.lifecycleStatus===b.lifecycleStatus;
 }
 
 function mobilePhotoHashes(images: string[]): string[] {
