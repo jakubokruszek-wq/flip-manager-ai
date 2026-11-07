@@ -40,7 +40,7 @@ function compatible(a: FacebookWatcherListing, b: FacebookWatcherListing): boole
       !(a.street && b.street && fact(a.street,"street")===fact(b.street,"street") &&
         fact(a.street,"street").toString().length>=6 &&
         a.rooms != null && a.rooms===b.rooms && !Number.isInteger(a.area))) return false;
-  if (a.workflowStatus !== b.workflowStatus || a.status !== b.status || a.lifecycleStatus !== b.lifecycleStatus) return false;
+  if (a.status !== b.status || a.lifecycleStatus !== b.lifecycleStatus) return false;
   for (const key of ["rooms", "floor", "city", "district", "neighborhood", "street"] as const) {
     if (a[key] != null && b[key] != null && fact(a[key],key) !== fact(b[key],key)) return false;
   }
@@ -93,7 +93,8 @@ function fact(value:string|number,key:string): string|number {
  * photos. Keep them together for review only when their exact price and area
  * also share location evidence, or a fractional area and known room count. */
 function possibleRepost(a:FacebookWatcherListing,b:FacebookWatcherListing):boolean {
-  if(!compatible(a,b) || (a.description?.trim() && b.description?.trim()))return false;
+  // Weak OCR-only candidates must not merge across independent CRM decisions.
+  if(!compatible(a,b) || a.workflowStatus !== b.workflowStatus || (a.description?.trim() && b.description?.trim()))return false;
   const location=(["street","neighborhood","district"] as const).some(key=>a[key] && b[key] && fact(a[key],key)===fact(b[key],key));
   // Android OCR frequently misses the price entirely. Only present these as
   // POSSIBLE reposts when the same specific street, fractional area and room
