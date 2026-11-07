@@ -151,6 +151,8 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             currentCoroutineContext().ensureActive()
                             if(WatcherAutomation.uiVisible||!WatcherAutomation.enabled(context))break
                             if(queue.scanned(slot,group.id))continue
+                            // Three failed attempts per source and scan window; leave it incomplete, do not loop forever.
+                            if(queue.failureCount(slot,group.id)>=3){queue.log("GROUP_RETRY_LIMIT");continue}
                             if(remaining()<120_000){budgetReached=true;break}
                             queue.log("GROUP_"+(WatcherGroups.configured.indexOfFirst{it.id==group.id}+1))
                             check(prefs.edit().putString("last_attempted_source",group.id).commit())
@@ -176,6 +178,8 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             }catch(e:CancellationException){throw e}
                             catch(e:Exception){
                                 if(e is WatcherUpload.HttpFailure&&e.status in setOf(401,403))throw e
+                                val attempts=queue.recordScanFailure(slot,group.id)
+                                if(attempts>=3)queue.log("GROUP_RETRY_LIMIT")
                                 lastIssue=if(WatcherAutomation.uiVisible)"WAITING_FOR_BACKGROUND"else WatcherAutomation.errorCode(e)
                                 queue.log(lastIssue)
                                 WatcherScanStatus.update(context,run){it.copy(phase="PREPARING",reason=lastIssue)}
@@ -194,7 +198,8 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             if(allDone&&requested!=null&&prefs.getString("requested_scan",null)==requested)
                                 check(prefs.edit().remove("requested_scan").commit())
                         }
-                        retryNeeded=!allDone&&!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(context)&&groups.isNotEmpty()&&lastIssue !in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA")
+                        val retryable=groups.any{!queue.scanned(slot,it.id)&&queue.failureCount(slot,it.id)<3}
+                        retryNeeded=!allDone&&retryable&&!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(context)&&groups.isNotEmpty()&&lastIssue !in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA")
                         val reason=when{!WatcherAutomation.enabled(context)->"AUTOMATION_DISABLED";WatcherAutomation.uiVisible->"WAITING_FOR_BACKGROUND";budgetReached->"BATCH_CONTINUE";else->lastIssue}
                         val phase=when{!WatcherAutomation.enabled(context)->"ERROR";allDone->"DONE";WatcherAutomation.uiVisible->"WAITING_UI";budgetReached||retryNeeded->"RETRY";else->"PARTIAL"}
                         WatcherScanStatus.finish(context,run,phase,reason)
