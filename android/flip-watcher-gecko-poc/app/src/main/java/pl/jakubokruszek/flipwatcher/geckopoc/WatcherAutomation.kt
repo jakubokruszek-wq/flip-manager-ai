@@ -199,8 +199,9 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                 check(prefs.edit().remove("requested_scan").commit())
                         }
                         val retryable=groups.any{!queue.scanned(slot,it.id)&&queue.failureCount(slot,it.id)<3}
+                        val exhausted=groups.any{!queue.scanned(slot,it.id)&&queue.failureCount(slot,it.id)>=3}
                         retryNeeded=!allDone&&retryable&&!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(context)&&groups.isNotEmpty()&&lastIssue !in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA")
-                        val reason=when{!WatcherAutomation.enabled(context)->"AUTOMATION_DISABLED";WatcherAutomation.uiVisible->"WAITING_FOR_BACKGROUND";budgetReached->"BATCH_CONTINUE";else->lastIssue}
+                        val reason=when{!WatcherAutomation.enabled(context)->"AUTOMATION_DISABLED";WatcherAutomation.uiVisible->"WAITING_FOR_BACKGROUND";budgetReached->"BATCH_CONTINUE";exhausted&&!retryable->"GROUP_RETRY_LIMIT";else->lastIssue}
                         val phase=when{!WatcherAutomation.enabled(context)->"ERROR";allDone->"DONE";WatcherAutomation.uiVisible->"WAITING_UI";budgetReached||retryNeeded->"RETRY";else->"PARTIAL"}
                         WatcherScanStatus.finish(context,run,phase,reason)
                     }
