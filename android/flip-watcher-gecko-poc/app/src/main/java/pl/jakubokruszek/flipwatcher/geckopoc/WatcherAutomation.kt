@@ -99,13 +99,14 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
             WatcherOutbox(context).use { queue ->
                 val run=id.toString();var begun=false;var ticker:Job?=null
                 fun begin(){if(!begun){WatcherScanStatus.begin(context,run);begun=true;ticker=launch{while(isActive){WatcherScanStatus.beat(context,run);delay(5_000)}}}}
-                var budgetReached=false;var retryNeeded=false;var retryable=false;var lastIssue=""
+                var budgetReached=false;var retryNeeded=false;var retryable=false;var lastIssue="";var failureStage="INIT"
                 try {
                     // Ordinary WorkManager jobs need no background-started foreground service.
                     // Stay below the ten-minute job limit and resume from durable group receipts.
                     val deadline=android.os.SystemClock.elapsedRealtime()+8*60*1000L
                     fun remaining()=deadline-android.os.SystemClock.elapsedRealtime()
                     withTimeout(9*60*1000L){
+                        failureStage="PAIRING"
                         val credentials=credentials(context)?:error("PAIRING_REQUIRED")
                         val prefs=WatcherAutomation.preferences(context)
                         val window=AutomationPolicy.current(Instant.now(),ZoneId.systemDefault(),WatcherAutomation.schedule(context))
@@ -138,10 +139,12 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                 catch(_:Exception){queue.defer(item);lastIssue="UPLOAD_RETRY";queue.log(lastIssue);return}
                             }
                         }
+                        failureStage="UPLOAD"
                         flush()
                         // Uploads use frozen snapshots and do not own the browser: drain even with UI visible.
                         if(alreadyCompleted||!scheduleDue||budgetReached){WatcherScanStatus.finish(context,run,if(budgetReached)"RETRY"else"UPLOAD_DONE",if(budgetReached)"BATCH_CONTINUE"else lastIssue);return@withTimeout}
                         if(WatcherAutomation.uiVisible){queue.log("WAITING_FOR_BACKGROUND");WatcherScanStatus.finish(context,run,"WAITING_UI","WAITING_FOR_BACKGROUND");return@withTimeout}
+                        failureStage="FETCH_GROUPS"
                         val groups=groups(credentials)
                         // Resume after the last attempted source if a slow group exhausted the worker budget.
                         val cursor=groups.indexOfFirst{it.id==prefs.getString("last_attempted_source",null)}
@@ -160,6 +163,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             val groupStartedAt=android.os.SystemClock.elapsedRealtime()
                             WatcherScanStatus.update(context,run){it.copy(phase="LOADING",group=group.name,position=index+1,reason="")}
                             try {
+                            failureStage="SCAN_GROUP"
                             val scanned=scan(group){phase->WatcherScanStatus.update(context,run){it.copy(phase=phase)}}
                             WatcherScanStatus.update(context,run){it.copy(phase="SAVING")}
                             val offers=scanned.rows.filter{DesktopSummary.eligible(it)||DesktopPresentation.reviewable(it)}
@@ -168,12 +172,14 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             if(result.rows.isNotEmpty()){
                                 // The encrypted automation database is independent: manual archives remain byte-for-byte intact.
                                 // Frozen independent encrypted copies survive later scans and process death.
+                                failureStage="SAVE_RESULTS"
                                 queue.enqueue(credentials.deviceId,group,result)
                             }
                             queue.completeScan(slot,group.id)
                             if(requested!=null)queue.completeScan(window.key,group.id)
                             queue.log("SCAN_SAVED",result.rows.size)
                             WatcherScanStatus.update(context,run){it.copy(done=groups.count{g->queue.scanned(slot,g.id)},posts=it.posts+result.rows.size,photos=it.photos+result.photos.size)}
+                            failureStage="UPLOAD"
                             flush()
                             }catch(e:CancellationException){throw e}
                             catch(e:Exception){
@@ -211,7 +217,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                     }
                     if((budgetReached&&retryable)||retryNeeded){if(budgetReached)queue.log("BATCH_CONTINUE");Result.retry()}else Result.success()
                 }catch(e:CancellationException){queue.log("INTERRUPTED");if(begun)WatcherScanStatus.finish(context,run,"ERROR","INTERRUPTED");throw e}
-                catch(e:Exception){val reason=if(e is WatcherUpload.HttpFailure)"UPLOAD_HTTP_"+e.status else WatcherAutomation.errorCode(e);queue.log(reason);begin();WatcherScanStatus.finish(context,run,"ERROR",reason);Result.retry()}
+                catch(e:Exception){val code=if(e is WatcherUpload.HttpFailure)"UPLOAD_HTTP_"+e.status else WatcherAutomation.errorCode(e);val reason=if(code=="AUTOMATION_ERROR")"AUTOMATION_ERROR_"+failureStage else code;queue.log(reason);begin();WatcherScanStatus.finish(context,run,"ERROR",reason);Result.retry()}
                 finally{ticker?.cancel();runCatching{WatcherAutomation.scheduleNext(context)}}
             }
         }
