@@ -31,6 +31,12 @@ function publication(item: FacebookWatcherListing) {
 
 function compatible(a: FacebookWatcherListing, b: FacebookWatcherListing): boolean {
   if (a.source !== "facebook" || b.source !== "facebook" || !a.area || a.area !== b.area || a.price !== b.price) return false;
+  // A missing price is not enough evidence even when two uploads share a hash.
+  // Require a specific street, fractional area and known matching room count.
+  if (a.price == null && b.price == null &&
+      !(a.street && b.street && fact(a.street,"street")===fact(b.street,"street") &&
+        fact(a.street,"street").toString().length>=6 &&
+        a.rooms != null && a.rooms===b.rooms && !Number.isInteger(a.area))) return false;
   if (a.workflowStatus !== b.workflowStatus || a.status !== b.status || a.lifecycleStatus !== b.lifecycleStatus) return false;
   for (const key of ["rooms", "floor", "city", "district", "neighborhood", "street"] as const) {
     if (a[key] != null && b[key] != null && fact(a[key],key) !== fact(b[key],key)) return false;
