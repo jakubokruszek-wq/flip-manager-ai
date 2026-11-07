@@ -200,12 +200,16 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                         }
                         val retryable=groups.any{!queue.scanned(slot,it.id)&&queue.failureCount(slot,it.id)<3}
                         val exhausted=groups.any{!queue.scanned(slot,it.id)&&queue.failureCount(slot,it.id)>=3}
+                        // A manual scan with no retryable groups has reached a terminal partial result.
+                        // Keep its scan receipts and error journal, but do not keep requesting it forever.
+                        if(exhausted&&!retryable&&requested!=null&&prefs.getString("requested_scan",null)==requested)
+                            check(prefs.edit().remove("requested_scan").commit())
                         retryNeeded=!allDone&&retryable&&!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(context)&&groups.isNotEmpty()&&lastIssue !in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA")
                         val reason=when{!WatcherAutomation.enabled(context)->"AUTOMATION_DISABLED";WatcherAutomation.uiVisible->"WAITING_FOR_BACKGROUND";budgetReached->"BATCH_CONTINUE";exhausted&&!retryable->"GROUP_RETRY_LIMIT";else->lastIssue}
                         val phase=when{!WatcherAutomation.enabled(context)->"ERROR";allDone->"DONE";WatcherAutomation.uiVisible->"WAITING_UI";budgetReached||retryNeeded->"RETRY";else->"PARTIAL"}
                         WatcherScanStatus.finish(context,run,phase,reason)
                     }
-                    if(budgetReached||retryNeeded){if(budgetReached)queue.log("BATCH_CONTINUE");Result.retry()}else Result.success()
+                    if((budgetReached&&retryable)||retryNeeded){if(budgetReached)queue.log("BATCH_CONTINUE");Result.retry()}else Result.success()
                 }catch(e:CancellationException){queue.log("INTERRUPTED");if(begun)WatcherScanStatus.finish(context,run,"ERROR","INTERRUPTED");throw e}
                 catch(e:Exception){val reason=if(e is WatcherUpload.HttpFailure)"UPLOAD_HTTP_"+e.status else WatcherAutomation.errorCode(e);queue.log(reason);begin();WatcherScanStatus.finish(context,run,"ERROR",reason);Result.retry()}
                 finally{ticker?.cancel();runCatching{WatcherAutomation.scheduleNext(context)}}
