@@ -36,7 +36,7 @@ test("three groups with recompressed photos and identical detailed own text rend
   assert.deepEqual(posts,before,"source offers and group links remain unchanged");
   assert.deepEqual(grouped[0].images,posts[0].images,"photos remain bound to their own post");
   assert.equal(groupFacebookReposts([posts[0],{...posts[1],rooms:3}]).length,2);
-  assert.equal(groupFacebookReposts([posts[0],{...posts[1],description:description+" Inna oferta."}]).length,2);
+  assert.equal(groupFacebookReposts([posts[0],{...posts[1],description:"Sprzedam inne mieszkanie przy Rojnej, dwa pokoje, inny rozkład i inne wyposażenie."}]).length,2);
 });
 
 test("every member's photograph participates in detecting another publication",()=>{
@@ -78,4 +78,12 @@ test("verified pair with integer area and no location forms one confirmed card w
  const posts=["123456","234567"].map((id,i)=>item(id,{price:299000,area:60,rooms:3,city:null,street:null,description:null,confirmedDuplicateGroupId:"verified-pair",images:[image(id,String(i+1).repeat(64))]}));
  const grouped=groupFacebookReposts(posts);assert.equal(grouped.length,1);assert.equal(grouped[0].relatedPosts?.length,2);assert.equal(grouped[0].relatedPostMatch,"confirmed");
  assert.equal(groupFacebookReposts([posts[0],{...posts[1],price:999000}]).length,2,"a key never overrides conflicting facts");
+});
+
+test("small description edits do not split a verified long repost",()=>{
+  const description="Sprzedam bezpośrednio mieszkanie na Bałutach przy ulicy Rojnej w Łodzi. Dwa ustawne pokoje, oddzielna kuchnia, balkon i piwnica. Lokal dostępny od zaraz, po generalnym remoncie instalacji, podłóg oraz ścian. Cena obejmuje całe wyposażenie widoczne na zdjęciach.";
+  const first=item("123456",{description,street:"Rojna",images:[image("123456","a".repeat(64))]});
+  const second=item("234567",{description:description.replace("oddzielna kuchnia","osobna kuchnia"),street:"Rojna",images:[image("234567","b".repeat(64))]});
+  const grouped=groupFacebookReposts([first,second]);
+  assert.equal(grouped.length,1);assert.equal(grouped[0].relatedPostMatch,"confirmed");
 });
