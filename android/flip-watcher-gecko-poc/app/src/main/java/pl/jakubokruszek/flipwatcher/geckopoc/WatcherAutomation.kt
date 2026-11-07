@@ -99,7 +99,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
             WatcherOutbox(context).use { queue ->
                 val run=id.toString();var begun=false;var ticker:Job?=null
                 fun begin(){if(!begun){WatcherScanStatus.begin(context,run);begun=true;ticker=launch{while(isActive){WatcherScanStatus.beat(context,run);delay(5_000)}}}}
-                var budgetReached=false;var retryNeeded=false;var lastIssue=""
+                var budgetReached=false;var retryNeeded=false;var retryable=false;var lastIssue=""
                 try {
                     // Ordinary WorkManager jobs need no background-started foreground service.
                     // Stay below the ten-minute job limit and resume from durable group receipts.
@@ -198,7 +198,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             if(allDone&&requested!=null&&prefs.getString("requested_scan",null)==requested)
                                 check(prefs.edit().remove("requested_scan").commit())
                         }
-                        val retryable=groups.any{!queue.scanned(slot,it.id)&&queue.failureCount(slot,it.id)<3}
+                        retryable=groups.any{!queue.scanned(slot,it.id)&&queue.failureCount(slot,it.id)<3}
                         val exhausted=groups.any{!queue.scanned(slot,it.id)&&queue.failureCount(slot,it.id)>=3}
                         // A manual scan with no retryable groups has reached a terminal partial result.
                         // Keep its scan receipts and error journal, but do not keep requesting it forever.
