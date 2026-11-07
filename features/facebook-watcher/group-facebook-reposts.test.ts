@@ -125,3 +125,18 @@ test("third repost discovered by photo belonging only to second publication desp
  const grouped=groupFacebookReposts([a,b,c]);
  assert.equal(grouped.length,1);assert.equal(grouped[0].relatedPosts?.length,3);
 });
+
+test("production Dębowa fixture: 12 OCR variants plus unrelated home yield two cards",()=>{
+ const posts=Array.from({length:12},(_,i)=>item(String(500000+i),{
+   price:699000,area:75,rooms:null,floor:null,city:null,street:["Dębowa","Dębowej","ul. Dębowa","Dębowa 12"][i%4],
+   images:[image(String(500000+i),String(i%9+1).repeat(64))],description:null,
+   workflowStatus:i%2?"crm":"review"
+ }));
+ const other=item("999999",{price:699000,area:75,rooms:null,floor:null,city:null,street:"Piotrkowska",images:[]});
+ const before=structuredClone([...posts,other]);
+ const result=groupFacebookReposts([...posts,other]);
+ assert.equal(result.length,2);
+ assert.equal(result[0].relatedPosts?.length,12);
+ assert.equal(result[0].relatedPostMatch,"possible");
+ assert.deepEqual([...posts,other],before);
+});
