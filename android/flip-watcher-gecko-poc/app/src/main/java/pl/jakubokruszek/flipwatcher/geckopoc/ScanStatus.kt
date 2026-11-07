@@ -37,6 +37,7 @@ object ScanStatusText {
         "ANDROID_FOREGROUND_START_DENIED"->"Android odmówił uruchomienia usługi w tle."
         "ANDROID_PERMISSION_DENIED"->"Android odmówił uprawnienia potrzebnego do pracy."
         "BATCH_CONTINUE"->"Osiągnięto limit czasu partii. Pozostałe grupy czekają na kolejną próbę."
+        "GROUP_RETRY_LIMIT"->"Niektóre grupy nie przeszły skanu po trzech próbach. Zachowano wynik częściowy; pozostałe grupy nie będą przez nie blokowane."
         "SLOT_COMPLETED"->"To okno zostało już wykonane. Automat czeka na następny termin."
         "WINDOW_NOT_DUE"->"Nowy termin skanu jeszcze nie nastąpił."
         "INTERRUPTED"->"Praca została przerwana. Zapisane wyniki i kolejka pozostają zachowane."
