@@ -4,12 +4,16 @@ import type { FacebookWatcherListing } from "./types";
 export function groupFacebookReposts(records: FacebookWatcherListing[]): FacebookWatcherListing[] {
   const groups: FacebookWatcherListing[] = [];
   const members = new Map<FacebookWatcherListing, FacebookWatcherListing[]>();
+  // Candidate lookup by exact price and area avoids comparing every post with every other post.
+  const buckets = new Map<string, FacebookWatcherListing[]>();
   for (const item of records) {
-    const target = groups.find(candidate => {
+    const bucketKey = `${item.source}:${item.price ?? "?"}:${item.area ?? "?"}`;
+    const candidates = buckets.get(bucketKey) ?? [];
+    const target = candidates.find(candidate => {
       const previous = members.get(candidate)!;
       return previous.every(member => compatible(member,item)) && previous.some(member => sameEvidence(member,item) || possibleRepost(member,item));
     });
-    if (!target) { const copy={ ...item }; groups.push(copy); members.set(copy,[item]); continue; }
+    if (!target) { const copy={ ...item }; groups.push(copy); members.set(copy,[item]); if (!buckets.has(bucketKey)) buckets.set(bucketKey,[]); buckets.get(bucketKey)!.push(copy); continue; }
     const publications = [...(target.relatedPosts ?? [publication(target)]), publication(item)];
     // Keep the first result in the requested sort order; never combine photos
     // bound to separate posts or propagate a workflow decision across them.
