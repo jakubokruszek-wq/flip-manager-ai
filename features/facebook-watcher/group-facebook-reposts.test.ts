@@ -60,10 +60,12 @@ test("real Android snapshot shape: null descriptions/city/rooms and recompressed
   assert.deepEqual(snapshots.map(i=>i.relatedPosts),[undefined,undefined,undefined,undefined]);
 });
 
-test("fractional area and rooms without location never hide distinct apartments",()=>{
+test("precise fractional area, price and rooms group location-free Android snapshots as possible",()=>{
   const snapshots=["123456","234567","345678"].map((id,i)=>item(id,{price:337500,area:48.24,rooms:3,city:null,description:null,images:[image(id,String(i+1).repeat(64))]}));
   const grouped=groupFacebookReposts(snapshots);
-  assert.equal(grouped.length,3);
+  assert.equal(grouped.length,1);
+  assert.equal(grouped[0].relatedPostMatch,"possible");
+  assert.equal(grouped[0].relatedPosts?.length,3);
   assert.equal(grouped[0].city,null);assert.equal(grouped[0].street,null);
   const located=snapshots.map(p=>({...p,street:"Rojna"}));
   const possible=groupFacebookReposts(located);
@@ -86,4 +88,12 @@ test("small description edits do not split a verified long repost",()=>{
   const second=item("234567",{description:description.replace("oddzielna kuchnia","osobna kuchnia"),street:"Rojna",images:[image("234567","b".repeat(64))]});
   const grouped=groupFacebookReposts([first,second]);
   assert.equal(grouped.length,1);assert.equal(grouped[0].relatedPostMatch,"confirmed");
+});
+
+test("integer area or absent rooms or conflicting price never create a location-free candidate",()=>{
+  const first=item("123456",{price:337500,area:48.24,rooms:3,city:null,description:null,images:[]});
+  for(const patch of [{area:48},{rooms:null},{price:337600},{street:"Other"}]){
+    const second=item("234567",{...first,...patch,listingId:"234567"});
+    assert.equal(groupFacebookReposts([first,second]).length,2,JSON.stringify(patch));
+  }
 });
