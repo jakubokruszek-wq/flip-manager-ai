@@ -7,23 +7,26 @@ export function groupFacebookReposts(records: FacebookWatcherListing[]): Faceboo
   // Candidate lookup by exact price and area avoids comparing every post with every other post.
   const buckets = new Map<string, FacebookWatcherListing[]>();
   const imageBuckets = new Map<string, FacebookWatcherListing[]>();
+  const streetBuckets = new Map<string, FacebookWatcherListing[]>();
   for (const item of records) {
     const bucketKey = `${item.source}:${item.price ?? "?"}:${item.area ?? "?"}`;
-    const candidates = [...new Set([...(buckets.get(bucketKey) ?? []), ...mobilePhotoHashes(item.images).flatMap(hash => imageBuckets.get(hash) ?? [])])];
+    const streetKey = streetStem(item.street);
+    const candidates = [...new Set([...(buckets.get(bucketKey) ?? []), ...(streetKey ? streetBuckets.get(streetKey) ?? [] : []), ...mobilePhotoHashes(item.images).flatMap(hash => imageBuckets.get(hash) ?? [])])];
     const target = candidates.find(candidate => {
       const previous = members.get(candidate)!;
-      return previous.every(member => compatible(member,item) || compatibleUnpicturedMember(member,item)) && previous.some(member => (compatible(member,item) && (sameEvidence(member,item) || possibleRepost(member,item))));
+      return previous.every(member => compatible(member,item) || compatibleUnpicturedMember(member,item) || locationCandidate(member,item)) && previous.some(member => (compatible(member,item) && (sameEvidence(member,item) || possibleRepost(member,item))) || locationCandidate(member,item));
     });
-    if (!target) { const copy={ ...item }; groups.push(copy); members.set(copy,[item]); if (!buckets.has(bucketKey)) buckets.set(bucketKey,[]); buckets.get(bucketKey)!.push(copy); for (const hash of mobilePhotoHashes(item.images)) { if (!imageBuckets.has(hash)) imageBuckets.set(hash,[]); imageBuckets.get(hash)!.push(copy); } continue; }
+    if (!target) { const copy={ ...item }; groups.push(copy); members.set(copy,[item]); if (!buckets.has(bucketKey)) buckets.set(bucketKey,[]); buckets.get(bucketKey)!.push(copy); if (streetKey) { if (!streetBuckets.has(streetKey)) streetBuckets.set(streetKey,[]); streetBuckets.get(streetKey)!.push(copy); } for (const hash of mobilePhotoHashes(item.images)) { if (!imageBuckets.has(hash)) imageBuckets.set(hash,[]); imageBuckets.get(hash)!.push(copy); } continue; }
     const publications = [...(target.relatedPosts ?? [publication(target)]), publication(item)];
     // Keep the first result in the requested sort order; never combine photos
     // bound to separate posts or propagate a workflow decision across them.
     const confirmed = members.get(target)!.some(member=>sameEvidence(member,item));
-    target.relatedPostMatch = target.relatedPostMatch === "possible" || !confirmed ? "possible" : "confirmed";
+    target.relatedPostMatch = target.relatedPostMatch === "possible" || !confirmed || locationCandidate(members.get(target)![0],item) ? "possible" : "confirmed";
     target.relatedPosts = publications;
     members.get(target)!.push(item);
     // Index evidence from every publication, not only the first card. A later
     // repost can share a photograph with the second or third publication.
+    if (streetKey) { if (!streetBuckets.has(streetKey)) streetBuckets.set(streetKey,[]); if (!streetBuckets.get(streetKey)!.includes(target)) streetBuckets.get(streetKey)!.push(target); }
     for (const hash of mobilePhotoHashes(item.images)) {
       if (!imageBuckets.has(hash)) imageBuckets.set(hash, []);
       if (!imageBuckets.get(hash)!.includes(target)) imageBuckets.get(hash)!.push(target);
@@ -59,6 +62,45 @@ function compatibleUnpicturedMember(a: FacebookWatcherListing,b: FacebookWatcher
   return a.source==="facebook" && b.source==="facebook" && a.area===null && b.area===null && a.price!=null && a.price===b.price &&
     a.street!=null && b.street!=null && fact(a.street,"street")===fact(b.street,"street") &&
     a.rooms===b.rooms && a.status===b.status && a.lifecycleStatus===b.lifecycleStatus;
+}
+
+
+/** Normalized OCR street name, never a whole district. */
+function streetStem(value: string | null): string {
+  if (!value) return "";
+  let s = value.normalize("NFKC").toLocaleLowerCase("pl").trim()
+    .replace(/^(?:ul(?:ica|icy)?\\.?\\s+)/u, "")
+    .replace(/\\s+w łodzi\\s+na sprzedaż.*$/u, "")
+    .replace(/\\s+\\d+[a-z]?(?:\\/\\d+)?\\s*$/u, "")
+    .replace(/\\s+/gu, " ");
+  if (s.endsWith("owej")) s = s.slice(0,-4) + "owa";
+  return s.length >= 5 ? s : "";
+}
+function descriptionsConflict(a: FacebookWatcherListing,b: FacebookWatcherListing): boolean {
+  const left=a.description?.trim(),right=b.description?.trim();
+  if (!left || !right || left.length<120 || right.length<120) return false;
+  const tokens=(s:string)=>new Set(s.toLocaleLowerCase("pl").match(/[\\p{L}\\p{N}]{3,}/gu)??[]);
+  const x=tokens(left),y=tokens(right);
+  return [...x].filter(t=>y.has(t)).length/Math.max(x.size,y.size,1)<0.35;
+}
+/** Conservative, reversible possible repost: same specific street and matching
+ * known property facts. Missing OCR fields do not count as contradictions. */
+function locationCandidate(a:FacebookWatcherListing,b:FacebookWatcherListing):boolean {
+  if(a.source!=="facebook" || b.source!=="facebook") return false;
+  const street=streetStem(a.street);
+  if(!street || street!==streetStem(b.street) || descriptionsConflict(a,b)) return false;
+  for(const key of ["price","area","rooms","floor"] as const) {
+    if(a[key]!=null && b[key]!=null && a[key]!==b[key]) return false;
+  }
+  if(a.city && b.city && fact(a.city,"city")!==fact(b.city,"city")) return false;
+  // At least two independently matching numerical attributes prevent a
+  // shared street name alone from hiding unrelated apartments.
+  const shared=["price","area","rooms","floor"].filter(key=>{
+    const k=key as "price"|"area"|"rooms"|"floor";
+    return a[k]!=null && b[k]!=null && a[k]===b[k];
+  });
+  return shared.includes("price") && shared.length>=2 ||
+    shared.includes("area") && shared.length>=2 && a.price==null && b.price==null;
 }
 
 function mobilePhotoHashes(images: string[]): string[] {
