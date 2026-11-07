@@ -66,7 +66,7 @@ function sameEvidence(a: FacebookWatcherListing,b: FacebookWatcherListing): bool
   const left=tokens(own),right=tokens(other);
   const overlap=[...left].filter(token=>right.has(token)).length;
   const similarity=overlap/Math.max(left.size,right.size,1);
-  if(similarity<0.92 || overlap<20)return false;
+  if(similarity<0.88 || overlap<15)return false;
   return Boolean(a.city && b.city && text(a.city)===text(b.city) && a.rooms && a.rooms===b.rooms &&
     (["street","neighborhood","district"] as const).some(key=>a[key] && b[key] && text(a[key])===text(b[key])));
 }
