@@ -96,5 +96,13 @@ function possibleRepost(a:FacebookWatcherListing,b:FacebookWatcherListing):boole
   }
   // Fractional area plus room count alone is too weak when the location is unknown.
   // Keep it as a separate listing until an address or other property-specific evidence exists.
-  return Boolean(location);
+  if (location) return true;
+  // OCR can omit the entire location while retaining a precise combination
+  // of price, fractional area and room count. Treat as a POSSIBLE repost only.
+  // This does not assert identity or modify the source records.
+  return Boolean(a.price != null && b.price != null && a.price > 0 &&
+    a.rooms != null && b.rooms != null && a.rooms === b.rooms &&
+    !Number.isInteger(a.area) && a.area === b.area &&
+    !a.street && !b.street && !a.neighborhood && !b.neighborhood &&
+    !a.district && !b.district);
 }
