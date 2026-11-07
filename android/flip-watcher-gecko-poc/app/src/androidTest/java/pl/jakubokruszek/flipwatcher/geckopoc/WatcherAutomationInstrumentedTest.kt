@@ -22,6 +22,26 @@ class WatcherAutomationInstrumentedTest {
     private fun result(price:Double=430000.0)=SavedResult(System.currentTimeMillis(),listOf(
         DesktopRow("550000000000091",group.url+"posts/550000000000091/","DOM",price,"EXPLICIT_TOTAL",42.0,2,"Bałuty",null,null,"SELL_PROPERTY",true,0)
     ),emptyList(),listOf(photo()))
+    @Test fun groupFailuresAreDurableAndResetOnlyOnSuccessfulScan() {
+        context.deleteDatabase("watcher-outbox-v1.db")
+        try {
+            WatcherOutbox(context).use { q ->
+                assertEquals(0,q.failureCount("slot-A",group.id))
+                assertEquals(1,q.recordScanFailure("slot-A",group.id))
+                assertEquals(2,q.recordScanFailure("slot-A",group.id))
+                assertEquals(0,q.failureCount("slot-B",group.id))
+                assertFalse(q.scanned("slot-A",group.id))
+            }
+            WatcherOutbox(context).use { q ->
+                assertEquals(2,q.failureCount("slot-A",group.id))
+                assertEquals(3,q.recordScanFailure("slot-A",group.id))
+                assertFalse(q.scanned("slot-A",group.id))
+                q.completeScan("slot-A",group.id)
+                assertEquals(0,q.failureCount("slot-A",group.id))
+                assertTrue(q.scanned("slot-A",group.id))
+            }
+        } finally { context.deleteDatabase("watcher-outbox-v1.db") }
+    }
     @Test fun encryptedQueueSurvivesReopenLostReceiptAndRepeatedScan() {
         context.deleteDatabase("watcher-outbox-v1.db")
         val first=WatcherOutbox(context).use{q->q.enqueue(device,group,result());checkNotNull(q.next(device,Long.MAX_VALUE))}
