@@ -16,15 +16,20 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /** Independent of the existing encrypted local archive and Gecko profile. No token is stored here. */
-class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1.db",null,2) {
+class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1.db",null,3) {
     override fun onCreate(db:SQLiteDatabase) {
         db.execSQL("CREATE TABLE outbox (id TEXT PRIMARY KEY, device TEXT NOT NULL, body BLOB NOT NULL, state TEXT NOT NULL DEFAULT 'pending', attempt INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0, receipt TEXT, source TEXT, post TEXT, saved_at INTEGER)")
         db.execSQL("CREATE TABLE journal (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, code TEXT NOT NULL, count INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE scans (slot TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY(slot, source))")
         db.execSQL("CREATE TABLE removed_posts (source TEXT NOT NULL, post TEXT NOT NULL, PRIMARY KEY(source,post))")
+        db.execSQL("CREATE TABLE scan_failures (slot TEXT NOT NULL, source TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(slot,source))")
     }
     override fun onUpgrade(db:SQLiteDatabase,old:Int,new:Int){
-        check(old==1&&new==2)
+        check(old in 1..2&&new==3)
+        if(old==2){
+            db.execSQL("CREATE TABLE scan_failures (slot TEXT NOT NULL, source TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(slot,source))")
+            return
+        }
         db.execSQL("ALTER TABLE outbox ADD COLUMN source TEXT")
         db.execSQL("ALTER TABLE outbox ADD COLUMN post TEXT")
         db.execSQL("ALTER TABLE outbox ADD COLUMN saved_at INTEGER")
@@ -42,6 +47,7 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
                     put("state",if(ready)"pending"else"quality_hold");put("next_at",0);put("attempt",0)
                 },"id=?",arrayOf(c.getString(0)))}
         }}
+        db.execSQL("CREATE TABLE scan_failures (slot TEXT NOT NULL, source TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(slot,source))")
     }
     private fun key():SecretKey = synchronized(KEY_LOCK) {
         val store=KeyStore.getInstance("AndroidKeyStore").apply{load(null)}
@@ -101,8 +107,16 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
         check(writableDatabase.update("outbox",values,"id=?",arrayOf(item.id))==1)
     }
     fun retry(){writableDatabase.execSQL("UPDATE outbox SET state='pending',next_at=0,attempt=0 WHERE state NOT IN ('sent','deleted')")}
+    /** Persist failures across worker retries. A permanently failing group must not cause an infinite retry loop. */
+    fun failureCount(slot:String,group:String):Int=readableDatabase.rawQuery("SELECT attempts FROM scan_failures WHERE slot=? AND source=?",arrayOf(slot,group)).use{if(it.moveToFirst())it.getInt(0)else 0}
+    fun recordScanFailure(slot:String,group:String):Int {
+        val db=writableDatabase
+        db.execSQL("INSERT OR IGNORE INTO scan_failures(slot,source,attempts) VALUES(?,?,0)",arrayOf(slot,group))
+        db.execSQL("UPDATE scan_failures SET attempts=attempts+1 WHERE slot=? AND source=?",arrayOf(slot,group))
+        return failureCount(slot,group)
+    }
     fun scanned(slot:String,group:String)=readableDatabase.rawQuery("SELECT 1 FROM scans WHERE slot=? AND source=?",arrayOf(slot,group)).use{it.moveToFirst()}
-    fun completeScan(slot:String,group:String){writableDatabase.execSQL("INSERT OR IGNORE INTO scans(slot,source) VALUES(?,?)",arrayOf(slot,group))}
+    fun completeScan(slot:String,group:String){writableDatabase.execSQL("INSERT OR IGNORE INTO scans(slot,source) VALUES(?,?)",arrayOf(slot,group));writableDatabase.delete("scan_failures","slot=? AND source=?",arrayOf(slot,group))}
     fun log(code:String,count:Int=0) {
         require(code.matches(Regex("[A-Z0-9_]{1,60}")))
         writableDatabase.insertOrThrow("journal",null,ContentValues().apply{put("at",System.currentTimeMillis());put("code",code);put("count",count)})
