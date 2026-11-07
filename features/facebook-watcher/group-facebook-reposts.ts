@@ -22,6 +22,12 @@ export function groupFacebookReposts(records: FacebookWatcherListing[]): Faceboo
     target.relatedPostMatch = target.relatedPostMatch === "possible" || !confirmed ? "possible" : "confirmed";
     target.relatedPosts = publications;
     members.get(target)!.push(item);
+    // Index evidence from every publication, not only the first card. A later
+    // repost can share a photograph with the second or third publication.
+    for (const hash of mobilePhotoHashes(item.images)) {
+      if (!imageBuckets.has(hash)) imageBuckets.set(hash, []);
+      if (!imageBuckets.get(hash)!.includes(target)) imageBuckets.get(hash)!.push(target);
+    }
   }
   return groups;
 }

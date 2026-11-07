@@ -117,3 +117,11 @@ test("verified identical uploaded photo groups across review and CRM while prese
  assert.equal(grouped[0].relatedPosts?.length,2);
  assert.equal(a.workflowStatus,"review");assert.equal(b.workflowStatus,"crm");
 });
+
+test("third repost discovered by photo belonging only to second publication despite different OCR area",()=>{
+ const a=item("111111",{price:408000,area:null,rooms:null,street:"Retkinia",images:[image("111111","a".repeat(64))]});
+ const b=item("222222",{price:408000,area:null,rooms:null,street:"Retkinia",images:[image("222222","a".repeat(64)),image("222222","b".repeat(64))]});
+ const c=item("333333",{price:408000,area:null,rooms:null,street:"Retkinia",images:[image("333333","b".repeat(64))]});
+ const grouped=groupFacebookReposts([a,b,c]);
+ assert.equal(grouped.length,1);assert.equal(grouped[0].relatedPosts?.length,3);
+});
