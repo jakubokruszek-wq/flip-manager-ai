@@ -22,12 +22,12 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
         db.execSQL("CREATE TABLE journal (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, code TEXT NOT NULL, count INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE scans (slot TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY(slot, source))")
         db.execSQL("CREATE TABLE removed_posts (source TEXT NOT NULL, post TEXT NOT NULL, PRIMARY KEY(source,post))")
-        db.execSQL("CREATE TABLE scan_failures (slot TEXT NOT NULL, source TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(slot,source))")
+        db.execSQL("CREATE TABLE IF NOT EXISTS scan_failures (slot TEXT NOT NULL, source TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(slot,source))")
     }
     override fun onUpgrade(db:SQLiteDatabase,old:Int,new:Int){
         check(old in 1..2&&new==3)
         if(old==2){
-            db.execSQL("CREATE TABLE scan_failures (slot TEXT NOT NULL, source TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(slot,source))")
+            db.execSQL("CREATE TABLE IF NOT EXISTS scan_failures (slot TEXT NOT NULL, source TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(slot,source))")
             return
         }
         db.execSQL("ALTER TABLE outbox ADD COLUMN source TEXT")
@@ -47,7 +47,7 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
                     put("state",if(ready)"pending"else"quality_hold");put("next_at",0);put("attempt",0)
                 },"id=?",arrayOf(c.getString(0)))}
         }}
-        db.execSQL("CREATE TABLE scan_failures (slot TEXT NOT NULL, source TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(slot,source))")
+        db.execSQL("CREATE TABLE IF NOT EXISTS scan_failures (slot TEXT NOT NULL, source TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(slot,source))")
     }
     private fun key():SecretKey = synchronized(KEY_LOCK) {
         val store=KeyStore.getInstance("AndroidKeyStore").apply{load(null)}
