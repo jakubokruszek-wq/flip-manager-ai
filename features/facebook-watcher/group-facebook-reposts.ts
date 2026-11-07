@@ -30,7 +30,7 @@ function publication(item: FacebookWatcherListing) {
 }
 
 function compatible(a: FacebookWatcherListing, b: FacebookWatcherListing): boolean {
-  if (a.source !== "facebook" || b.source !== "facebook" || !a.price || !a.area || a.price !== b.price || a.area !== b.area) return false;
+  if (a.source !== "facebook" || b.source !== "facebook" || !a.area || a.area !== b.area || a.price !== b.price) return false;
   if (a.workflowStatus !== b.workflowStatus || a.status !== b.status || a.lifecycleStatus !== b.lifecycleStatus) return false;
   for (const key of ["rooms", "floor", "city", "district", "neighborhood", "street"] as const) {
     if (a[key] != null && b[key] != null && fact(a[key],key) !== fact(b[key],key)) return false;
@@ -86,6 +86,14 @@ function fact(value:string|number,key:string): string|number {
 function possibleRepost(a:FacebookWatcherListing,b:FacebookWatcherListing):boolean {
   if(!compatible(a,b) || (a.description?.trim() && b.description?.trim()))return false;
   const location=(["street","neighborhood","district"] as const).some(key=>a[key] && b[key] && fact(a[key],key)===fact(b[key],key));
+  // Android OCR frequently misses the price entirely. Only present these as
+  // POSSIBLE reposts when the same specific street, fractional area and room
+  // count all match. Never infer a confirmed identity from these facts.
+  if (a.price == null && b.price == null) {
+    return Boolean(a.street && b.street && fact(a.street,"street")===fact(b.street,"street") &&
+      fact(a.street,"street").toString().length>=6 && a.rooms && a.rooms===b.rooms &&
+      !Number.isInteger(a.area) && location);
+  }
   // Fractional area plus room count alone is too weak when the location is unknown.
   // Keep it as a separate listing until an address or other property-specific evidence exists.
   return Boolean(location);
