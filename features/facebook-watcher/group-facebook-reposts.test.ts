@@ -22,7 +22,7 @@ test("different facts or operator workflow remain separate even with a reused ph
   }
 });
 test("arbitrary image filenames, shared placeholders and missing parameters cannot group offers",()=>{
-  for(const patch of [{images:["https://cdn.test/same.jpg"]},{images:[]},{price:null},{area:null}]) assert.equal(groupFacebookReposts([item("123456",patch),item("234567",patch)]).length,2);
+  for(const patch of [{images:["https://cdn.test/same.jpg"]},{images:[]},{price:null},{area:null,images:[]}]) assert.equal(groupFacebookReposts([item("123456",patch),item("234567",patch)]).length,2);
 });
 
 test("three groups with recompressed photos and identical detailed own text render once with all source links",()=>{
