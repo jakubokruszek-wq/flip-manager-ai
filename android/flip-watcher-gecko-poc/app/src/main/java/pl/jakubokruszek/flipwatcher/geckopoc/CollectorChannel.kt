@@ -58,20 +58,26 @@ class CollectorChannel(
                 "ready" -> ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                 "reviewImagesResult", "reviewPostResult", "desktopDocumentProof", "desktopArmed", "desktopPreviewResult", "shareLinkContextResult", "mainTransportResult", "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
-                    pending.remove(json.optString("nonce"))?.complete(json)
+                    pending.remove(json.optString("nonce"))?.let { reply ->
+                        android.os.Handler(android.os.Looper.getMainLooper()).post { reply.complete(if (port === this@CollectorChannel.port) json else null) }
+                    }
                 }
             }
         }
 
         override fun onDisconnect(port: WebExtension.Port) {
             if (port !== this@CollectorChannel.port) return
-            onPageDisconnect()
             this@CollectorChannel.port = null
             connectedUrl = null
             portReady = CompletableDeferred()
-            // The page went away: every waiting request ends now.
-            pending.values.forEach { it.complete(null) }
+            val interrupted = pending.values.toList()
             pending.clear()
+            // Gecko tears down its native port AFTER this callback returns.
+            // Main.immediate awaiters must not close the session reentrantly.
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                interrupted.forEach { it.complete(null) }
+            }
+            onPageDisconnect()
         }
     }
 
@@ -84,7 +90,15 @@ class CollectorChannel(
                 port.disconnect()
                 return
             }
-            this@CollectorChannel.port?.let { old -> runCatching { old.disconnect() } }
+            if (this@CollectorChannel.port != null) {
+                val interrupted = pending.values.toList()
+                pending.clear()
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    interrupted.forEach { it.complete(null) }
+                }
+            }
+            // Gecko owns the physical teardown of old document ports. Explicitly
+            // disconnecting here can race a queued disconnectFromExtension event.
             this@CollectorChannel.port = port
             connectedUrl = sender.url
             connectionGeneration++
@@ -287,7 +301,8 @@ class CollectorChannel(
         abortDesktop()
         stopShareLinkContext()
         connectedUrl = null
-        port?.let { runCatching { it.disconnect() } }
+        // Invalidate native access immediately. The owning GeckoSession closes
+        // its port; do not shut the same EventDispatcher down twice.
         port = null
         pending.values.forEach { it.complete(null) }
         pending.clear()
