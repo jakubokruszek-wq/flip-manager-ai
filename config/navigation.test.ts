@@ -11,7 +11,7 @@ import {
 } from "./navigation.ts";
 
 const routeFiles = new Map([
-  ["/dashboard", "app/(app)/dashboard/page.tsx"],
+  ["/investments", "app/(app)/investments/page.tsx"],
   ["/properties", "app/(app)/properties/page.tsx"],
   ["/flip-finder", "app/(app)/flip-finder/page.tsx"],
   ["/facebook-watcher", "app/(app)/facebook-watcher/page.tsx"],
@@ -44,17 +44,17 @@ test("desktop navigation and mobile navigation use the same active item list", (
   assert.match(mobileSource, /workingNavigationItems\.map/);
 });
 
-test("active state matches exact and nested routes without activating Dashboard globally", () => {
+test("active state matches exact and nested routes without activating Investments globally", () => {
   assert.equal(isNavigationItemActive("/flip-finder", "/flip-finder"), true);
   assert.equal(isNavigationItemActive("/properties/new", "/properties"), true);
   assert.equal(isNavigationItemActive("/facebook-watcher/groups", "/facebook-watcher"), true);
   assert.equal(isNavigationItemActive("/price-radar", "/price-radar"), true);
   assert.equal(isNavigationItemActive("/settings/alerts", "/settings"), true);
-  assert.equal(isNavigationItemActive("/properties", "/dashboard"), false);
+  assert.equal(isNavigationItemActive("/properties", "/investments"), false);
 });
 
 test("nested pages receive the correct top navigation title", () => {
-  assert.equal(getModuleTitle("/dashboard"), "Pulpit");
+  assert.equal(getModuleTitle("/investments"), "Inwestycje");
   assert.equal(getModuleTitle("/unknown"), "Pulpit");
   assert.equal(getModuleTitle("/properties/new"), "Nieruchomości");
   assert.equal(getModuleTitle("/facebook-watcher/groups"), "Facebook Watcher");
