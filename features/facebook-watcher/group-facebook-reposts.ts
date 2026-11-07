@@ -6,14 +6,15 @@ export function groupFacebookReposts(records: FacebookWatcherListing[]): Faceboo
   const members = new Map<FacebookWatcherListing, FacebookWatcherListing[]>();
   // Candidate lookup by exact price and area avoids comparing every post with every other post.
   const buckets = new Map<string, FacebookWatcherListing[]>();
+  const imageBuckets = new Map<string, FacebookWatcherListing[]>();
   for (const item of records) {
     const bucketKey = `${item.source}:${item.price ?? "?"}:${item.area ?? "?"}`;
-    const candidates = buckets.get(bucketKey) ?? [];
+    const candidates = [...new Set([...(buckets.get(bucketKey) ?? []), ...mobilePhotoHashes(item.images).flatMap(hash => imageBuckets.get(hash) ?? [])])];
     const target = candidates.find(candidate => {
       const previous = members.get(candidate)!;
       return previous.every(member => compatible(member,item)) && previous.some(member => sameEvidence(member,item) || possibleRepost(member,item));
     });
-    if (!target) { const copy={ ...item }; groups.push(copy); members.set(copy,[item]); if (!buckets.has(bucketKey)) buckets.set(bucketKey,[]); buckets.get(bucketKey)!.push(copy); continue; }
+    if (!target) { const copy={ ...item }; groups.push(copy); members.set(copy,[item]); if (!buckets.has(bucketKey)) buckets.set(bucketKey,[]); buckets.get(bucketKey)!.push(copy); for (const hash of mobilePhotoHashes(item.images)) { if (!imageBuckets.has(hash)) imageBuckets.set(hash,[]); imageBuckets.get(hash)!.push(copy); } continue; }
     const publications = [...(target.relatedPosts ?? [publication(target)]), publication(item)];
     // Keep the first result in the requested sort order; never combine photos
     // bound to separate posts or propagate a workflow decision across them.
@@ -30,7 +31,9 @@ function publication(item: FacebookWatcherListing) {
 }
 
 function compatible(a: FacebookWatcherListing, b: FacebookWatcherListing): boolean {
-  if (a.source !== "facebook" || b.source !== "facebook" || !a.area || a.area !== b.area || a.price !== b.price) return false;
+  if (a.source !== "facebook" || b.source !== "facebook" || a.area !== b.area || a.price !== b.price || (a.area == null && a.price == null)) return false;
+  const sharedImage = mobilePhotoHashes(a.images).some(hash=>mobilePhotoHashes(b.images).includes(hash));
+  if (a.area == null && !sharedImage) return false;
   // A missing price is not enough evidence even when two uploads share a hash.
   // Require a specific street, fractional area and known matching room count.
   if (a.price == null && b.price == null &&
