@@ -59,7 +59,14 @@ function sameEvidence(a: FacebookWatcherListing,b: FacebookWatcherListing): bool
   if(mobilePhotoHashes(b.images).some(hash=>hashes.includes(hash))) return true;
   const text=(value:string|null)=>value?.normalize("NFKC").toLocaleLowerCase("pl").replace(/\s+/gu," ").trim()??"";
   const own=text(a.description);
-  if(own.length<120 || own.split(" ").length<20 || own!==text(b.description)) return false;
+  const other=text(b.description);
+  if(own.length<120 || other.length<120 || own.split(" ").length<20 || other.split(" ").length<20)return false;
+  // Allow small edits, punctuation and extra contact details, but not generic property templates.
+  const tokens=(value:string)=>new Set(value.match(/[\\p{L}\\p{N}]{3,}/gu)??[]);
+  const left=tokens(own),right=tokens(other);
+  const overlap=[...left].filter(token=>right.has(token)).length;
+  const similarity=overlap/Math.max(left.size,right.size,1);
+  if(similarity<0.92 || overlap<20)return false;
   return Boolean(a.city && b.city && text(a.city)===text(b.city) && a.rooms && a.rooms===b.rooms &&
     (["street","neighborhood","district"] as const).some(key=>a[key] && b[key] && text(a[key])===text(b[key])));
 }
