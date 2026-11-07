@@ -22,6 +22,27 @@ class WatcherAutomationInstrumentedTest {
     private fun result(price:Double=430000.0)=SavedResult(System.currentTimeMillis(),listOf(
         DesktopRow("550000000000091",group.url+"posts/550000000000091/","DOM",price,"EXPLICIT_TOTAL",42.0,2,"Bałuty",null,null,"SELL_PROPERTY",true,0)
     ),emptyList(),listOf(photo()))
+    @Test fun versionTwoMigrationAddsFailureTrackingWithoutLosingReceipts() {
+        context.deleteDatabase("watcher-outbox-v1.db")
+        try {
+            val original=WatcherOutbox(context).use { q ->
+                q.enqueue(device,group,result())
+                val item=checkNotNull(q.next(device,Long.MAX_VALUE))
+                q.acknowledge(item.id,"receipt-before-v3")
+                q.writableDatabase.execSQL("DROP TABLE scan_failures")
+                q.writableDatabase.version=2
+                item
+            }
+            WatcherOutbox(context).use { q ->
+                assertEquals(0,q.failureCount("slot-A",group.id))
+                assertEquals(1,q.recordScanFailure("slot-A",group.id))
+                q.readableDatabase.rawQuery("SELECT receipt FROM outbox WHERE id=?",arrayOf(original.id)).use { c ->
+                    assertTrue(c.moveToFirst())
+                    assertEquals("receipt-before-v3",c.getString(0))
+                }
+            }
+        } finally { context.deleteDatabase("watcher-outbox-v1.db") }
+    }
     @Test fun groupFailuresAreDurableAndResetOnlyOnSuccessfulScan() {
         context.deleteDatabase("watcher-outbox-v1.db")
         try {
