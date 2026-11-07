@@ -155,6 +155,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             queue.log("GROUP_"+(WatcherGroups.configured.indexOfFirst{it.id==group.id}+1))
                             check(prefs.edit().putString("last_attempted_source",group.id).commit())
                             queue.log("SCAN_STARTED")
+                            val groupStartedAt=android.os.SystemClock.elapsedRealtime()
                             WatcherScanStatus.update(context,run){it.copy(phase="LOADING",group=group.name,position=index+1,reason="")}
                             try {
                             val scanned=scan(group){phase->WatcherScanStatus.update(context,run){it.copy(phase=phase)}}
@@ -180,6 +181,10 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                 WatcherScanStatus.update(context,run){it.copy(phase="PREPARING",reason=lastIssue)}
                                 // A single unavailable group cannot starve every later source.
                                 if(e.message in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA"))break
+                            }finally {
+                                // Count-only timing, no post content or group names in diagnostics.
+                                val seconds=((android.os.SystemClock.elapsedRealtime()-groupStartedAt)/1000L).coerceIn(0L,600L).toInt()
+                                queue.log("GROUP_DURATION_SEC",seconds)
                             }
                         }
                         val allDone=groups.isNotEmpty()&&groups.all{queue.scanned(slot,it.id)}
