@@ -60,13 +60,17 @@ test("real Android snapshot shape: null descriptions/city/rooms and recompressed
   assert.deepEqual(snapshots.map(i=>i.relatedPosts),[undefined,undefined,undefined,undefined]);
 });
 
-test("real Android fractional area and rooms can create a possible group without manufacturing location",()=>{
+test("fractional area and rooms without location never hide distinct apartments",()=>{
   const snapshots=["123456","234567","345678"].map((id,i)=>item(id,{price:337500,area:48.24,rooms:3,city:null,description:null,images:[image(id,String(i+1).repeat(64))]}));
   const grouped=groupFacebookReposts(snapshots);
-  assert.equal(grouped.length,1);assert.equal(grouped[0].relatedPostMatch,"possible");
+  assert.equal(grouped.length,3);
   assert.equal(grouped[0].city,null);assert.equal(grouped[0].street,null);
-  assert.equal(groupFacebookReposts([snapshots[0],{...snapshots[1],rooms:2}]).length,2);
-  assert.equal(groupFacebookReposts([snapshots[0],{...snapshots[1],workflowStatus:"crm"}]).length,2);
+  const located=snapshots.map(p=>({...p,street:"Rojna"}));
+  const possible=groupFacebookReposts(located);
+  assert.equal(possible.length,1);
+  assert.equal(possible[0].relatedPostMatch,"possible");
+  assert.equal(groupFacebookReposts([located[0],{...located[1],rooms:2}]).length,2);
+  assert.equal(groupFacebookReposts([located[0],{...located[1],workflowStatus:"crm"}]).length,2);
 });
 
 
