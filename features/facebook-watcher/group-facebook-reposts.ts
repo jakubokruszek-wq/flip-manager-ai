@@ -62,7 +62,7 @@ function sameEvidence(a: FacebookWatcherListing,b: FacebookWatcherListing): bool
   const other=text(b.description);
   if(own.length<120 || other.length<120 || own.split(" ").length<20 || other.split(" ").length<20)return false;
   // Allow small edits, punctuation and extra contact details, but not generic property templates.
-  const tokens=(value:string)=>new Set(value.match(/[\\p{L}\\p{N}]{3,}/gu)??[]);
+  const tokens=(value:string)=>new Set(value.match(/[\p{L}\p{N}]{3,}/gu)??[]);
   const left=tokens(own),right=tokens(other);
   const overlap=[...left].filter(token=>right.has(token)).length;
   const similarity=overlap/Math.max(left.size,right.size,1);
