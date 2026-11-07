@@ -36,7 +36,7 @@ object WatcherLink {
         val a=j.getJSONArray("groups");require(a.length()<=200)
         val groups=(0 until a.length()).map{index->
             val row=a.getJSONObject(index);val id=row.getString("groupId")
-            require(WatcherGroups.find(id)!=null) // This release supports the reviewed eleven sources.
+            // The server supplies the active group set; validate the identity and URL, not a stale local allowlist.
             require(row.getString("url")=="https://www.facebook.com/groups/$id/")
             val name=row.getString("name");require(name.isNotBlank()&&name.length<=500)
             WatcherGroup(id,name)
@@ -51,6 +51,7 @@ object WatcherLink {
         try {
             connection.instanceFollowRedirects=false;connection.connectTimeout=10000;connection.readTimeout=15000
             connection.useCaches=false;connection.setRequestProperty("Accept","application/json")
+            if(path=="/api/collector/facebook/groups") connection.setRequestProperty("X-Watcher-Group-Protocol","2")
             connection.setRequestProperty("Authorization","Bearer "+credentials.token)
             val status=connection.responseCode
             if(status==401)error("WATCHER_PAIRING_REQUIRED")

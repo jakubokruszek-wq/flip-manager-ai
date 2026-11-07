@@ -23,15 +23,21 @@ class BackgroundChannel {
         override fun onPortMessage(message: Any, port: WebExtension.Port) {
             if (port !== this@BackgroundChannel.port) return
             val json = ScanProtocol.asJson(message) ?: return
-            pending.remove(json.optString("nonce"))?.complete(json)
+            pending.remove(json.optString("nonce"))?.let { reply ->
+                android.os.Handler(android.os.Looper.getMainLooper()).post { reply.complete(if (port === this@BackgroundChannel.port) json else null) }
+            }
         }
 
         override fun onDisconnect(port: WebExtension.Port) {
             if (port !== this@BackgroundChannel.port) return
             this@BackgroundChannel.port = null
             portReady = CompletableDeferred()
-            pending.values.forEach { it.complete(null) }
+            val interrupted = pending.values.toList()
             pending.clear()
+            // Resume clients after Gecko finishes native disconnection.
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                interrupted.forEach { it.complete(null) }
+            }
         }
     }
 
@@ -39,7 +45,14 @@ class BackgroundChannel {
         override fun onConnect(port: WebExtension.Port) {
             // Only the extension's background (no session) may open this port.
             if (port.sender.session != null) { port.disconnect(); return }
-            this@BackgroundChannel.port?.let { old -> runCatching { old.disconnect() } }
+            if (this@BackgroundChannel.port != null) {
+                val interrupted = pending.values.toList()
+                pending.clear()
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    interrupted.forEach { it.complete(null) }
+                }
+            }
+            // The extension owns physical teardown of its previous port.
             this@BackgroundChannel.port = port
             port.setDelegate(portDelegate)
             // Ack the extension even when its first connect preceded registration.

@@ -9,6 +9,8 @@ import android.os.HandlerThread
 import android.view.MotionEvent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.mozilla.geckoview.GeckoDisplay
@@ -18,16 +20,18 @@ import java.util.UUID
 
 /** Phone-only Gecko session using the existing profile, parser, document proofs and photo binding. */
 class BackgroundWatcherScan(private val context:Context) {
-    suspend fun run(group:WatcherGroup,alive:()->Boolean):SavedResult=runTarget(group,group.url,false,alive)
+    suspend fun run(group:WatcherGroup,alive:()->Boolean,progress:(String)->Unit={}):SavedResult=runTarget(group,group.url,false,alive,progress)
     internal suspend fun runFixture(target:String,alive:()->Boolean):SavedResult {
         require(java.net.URI(target).host=="127.0.0.1")
         return runTarget(WatcherGroup(FIXTURE_GROUP_ID,"Fixture"),target,true,alive)
     }
-    private suspend fun runTarget(group:WatcherGroup,target:String,fixture:Boolean,alive:()->Boolean):SavedResult=withContext(Dispatchers.Main){
+    private suspend fun runTarget(group:WatcherGroup,target:String,fixture:Boolean,alive:()->Boolean,progress:(String)->Unit={}):SavedResult=withContext(Dispatchers.Main){
         withTimeout(if(fixture)300_000 else 110_000){
             check(alive())
             val browser=GeckoSession()
             val images=DesktopThumbnails()
+            progress("LOADING")
+            var observer:Job?=null
             var gate:DesktopTrial?=null
             var current:String?=null;var pageReady=false;var initial=true;var stopReason:String?=null
             val channel=CollectorChannel(browser,fixtureMode=fixture)
@@ -70,6 +74,7 @@ class BackgroundWatcherScan(private val context:Context) {
                 val actualTarget=checkNotNull(current)
                 val trial=DesktopTrial(actualTarget,{android.os.SystemClock.elapsedRealtime()},fixture,groupId=group.id,allowRootQuery=true)
                 gate=trial;initial=false;check(trial.begin(true));val nonce=UUID.randomUUID().toString()
+                observer=launch{var last="";while(true){val phase=if(trial.phase==DesktopTrial.Phase.READING)"READING"else"LOADING";if(phase!=last){last=phase;progress(phase)};delay(500)}}
                 channel.viewportBridge=DesktopViewportBridge(checkNotNull(surface),nonce,images,{live()&&trial.active&&trial.phase==DesktopTrial.Phase.READING})
                 val result=DesktopSessionPreview.run(browser,channel,trial,nonce,actualTarget,{current},{pageReady&&live()},fastScroll=true,fixture=fixture,groupId=group.id,alive=::live)
                 check(live()&&result.reason=="DONE"){stopReason?:"SCAN_"+result.reason}
@@ -77,6 +82,7 @@ class BackgroundWatcherScan(private val context:Context) {
                 val photos=rows.flatMap{row->images.rows(row.postId).mapIndexed{slot,b->ResultArchive.photo(row.postId,slot,false,b)}}
                 SavedResult(System.currentTimeMillis(),rows,emptyList(),photos)
             }finally {
+                observer?.cancel()
                 runCatching{channel.close()};runCatching{surface?.close()};images.clear()
                 runCatching{browser.stop()};runCatching{browser.setActive(false)};runCatching{browser.close()}
             }

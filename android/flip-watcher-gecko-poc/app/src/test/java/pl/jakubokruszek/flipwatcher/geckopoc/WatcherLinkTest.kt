@@ -24,10 +24,18 @@ class WatcherLinkTest {
         assertEquals(listOf(WatcherGroups.LEGACY_GROUP,"402796264871862"),groups.map{it.id});assertEquals("Łódź",groups[0].name)
         assertEquals(0,WatcherLink.parseGroups(feed().toString()).size)
     }
-    @Test fun corruptUnsupportedDuplicateAndCrossGroupFeedFailsBeforeChangingCatalog(){
+    @Test fun corruptDuplicateAndCrossGroupFeedFailsBeforeChangingCatalog(){
         val bad=feed(WatcherGroups.LEGACY_GROUP);bad.getJSONArray("groups").getJSONObject(0).put("url","https://www.facebook.com/groups/402796264871862/")
-        for(value in listOf(bad,feed("foreign"),feed(WatcherGroups.LEGACY_GROUP,WatcherGroups.LEGACY_GROUP),feed().put("version",2)))assertTrue(runCatching{WatcherLink.parseGroups(value.toString())}.isFailure)
+        for(value in listOf(bad,feed("bad/id"),feed(WatcherGroups.LEGACY_GROUP,WatcherGroups.LEGACY_GROUP),feed().put("version",2)))assertTrue(runCatching{WatcherLink.parseGroups(value.toString())}.isFailure)
         assertEquals(11,WatcherGroups.active.size)
+    }
+    @Test fun serverFeedSupportsFiftyTwoActiveGroupsWithoutLegacyAllowlist(){
+        val ids=(1..52).map{"group_$it"}
+        val groups=WatcherLink.parseGroups(feed(*ids.toTypedArray()).toString())
+        WatcherGroups.setActive(groups)
+        assertEquals(52,WatcherGroups.active.size)
+        assertNotNull(WatcherGroups.find("group_52"))
+        assertEquals("saved-search-group_52-v1.bin",WatcherGroups.archiveFile("group_52"))
     }
     @Test fun disablingSelectedSourceStopsAutomationWithoutDeletingHistoricalArchive(){
         PocPolicy.selectGroup(WatcherGroups.LEGACY_GROUP)

@@ -3,6 +3,7 @@
 
     <!-- GeckoView loads pages. OCR is local. Opted-in automation sends selected offer fields and bound image crops to the paired Manager. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Foreground data sync covers opted-in automatic scans and the local screen-off test. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -28,6 +29,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity android:name=".ScanStatusActivity" android:exported="false" />
 
         <receiver
             android:name=".ScreenOffAlarmReceiver"
