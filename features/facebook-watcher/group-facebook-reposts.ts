@@ -79,5 +79,7 @@ function fact(value:string|number,key:string): string|number {
 function possibleRepost(a:FacebookWatcherListing,b:FacebookWatcherListing):boolean {
   if(!compatible(a,b) || (a.description?.trim() && b.description?.trim()))return false;
   const location=(["street","neighborhood","district"] as const).some(key=>a[key] && b[key] && fact(a[key],key)===fact(b[key],key));
-  return Boolean(location || (a.area && !Number.isInteger(a.area) && a.rooms && a.rooms===b.rooms));
+  // Fractional area plus room count alone is too weak when the location is unknown.
+  // Keep it as a separate listing until an address or other property-specific evidence exists.
+  return Boolean(location);
 }
