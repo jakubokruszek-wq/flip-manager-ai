@@ -15,8 +15,8 @@ test("matching uploaded bytes and parameters group reposts without mutating reco
 test("equal price and area alone never hide another post",()=>{
   assert.equal(groupFacebookReposts([item("123456"),item("234567",{images:[image("234567","b".repeat(64))]})]).length,2);
 });
-test("different facts or operator workflow remain separate even with a reused photograph",()=>{
-  for(const patch of [{price:310000},{area:51},{rooms:3},{street:"Inna"},{workflowStatus:"crm" as const},{status:"removed"}]){
+test("different property facts remain separate even with a reused photograph",()=>{
+  for(const patch of [{price:310000},{area:51},{rooms:3},{street:"Inna"},{status:"removed"}]){
     const first=item("123456",{street:"Rojna"}),second=item("234567",{street:"Rojna",...patch});
     assert.equal(groupFacebookReposts([first,second]).length,2,JSON.stringify(patch));
   }
@@ -106,4 +106,14 @@ test("same uploaded photo with matching price and missing area groups safely",()
  assert.equal(grouped[0].relatedPostMatch,"confirmed");
  assert.equal(groupFacebookReposts([first,{...second,price:409000}]).length,2);
  assert.equal(groupFacebookReposts([first,{...second,images:[image("234567","b".repeat(64))]}]).length,2);
+});
+
+test("verified identical uploaded photo groups across review and CRM while preserving original statuses",()=>{
+ const a=item("123456",{workflowStatus:"review",street:"Rojna"});
+ const b=item("234567",{workflowStatus:"crm",street:"Rojna"});
+ const grouped=groupFacebookReposts([a,b]);
+ assert.equal(grouped.length,1);
+ assert.equal(grouped[0].relatedPostMatch,"confirmed");
+ assert.equal(grouped[0].relatedPosts?.length,2);
+ assert.equal(a.workflowStatus,"review");assert.equal(b.workflowStatus,"crm");
 });
