@@ -4,12 +4,16 @@ import type { FacebookWatcherListing } from "./types";
 export function groupFacebookReposts(records: FacebookWatcherListing[]): FacebookWatcherListing[] {
   const groups: FacebookWatcherListing[] = [];
   const members = new Map<FacebookWatcherListing, FacebookWatcherListing[]>();
+  // Candidate lookup by exact price and area avoids comparing every post with every other post.
+  const buckets = new Map<string, FacebookWatcherListing[]>();
   for (const item of records) {
-    const target = groups.find(candidate => {
+    const bucketKey = `${item.source}:${item.price ?? "?"}:${item.area ?? "?"}`;
+    const candidates = buckets.get(bucketKey) ?? [];
+    const target = candidates.find(candidate => {
       const previous = members.get(candidate)!;
       return previous.every(member => compatible(member,item)) && previous.some(member => sameEvidence(member,item) || possibleRepost(member,item));
     });
-    if (!target) { const copy={ ...item }; groups.push(copy); members.set(copy,[item]); continue; }
+    if (!target) { const copy={ ...item }; groups.push(copy); members.set(copy,[item]); if (!buckets.has(bucketKey)) buckets.set(bucketKey,[]); buckets.get(bucketKey)!.push(copy); continue; }
     const publications = [...(target.relatedPosts ?? [publication(target)]), publication(item)];
     // Keep the first result in the requested sort order; never combine photos
     // bound to separate posts or propagate a workflow decision across them.
@@ -55,7 +59,14 @@ function sameEvidence(a: FacebookWatcherListing,b: FacebookWatcherListing): bool
   if(mobilePhotoHashes(b.images).some(hash=>hashes.includes(hash))) return true;
   const text=(value:string|null)=>value?.normalize("NFKC").toLocaleLowerCase("pl").replace(/\s+/gu," ").trim()??"";
   const own=text(a.description);
-  if(own.length<120 || own.split(" ").length<20 || own!==text(b.description)) return false;
+  const other=text(b.description);
+  if(own.length<120 || other.length<120 || own.split(" ").length<20 || other.split(" ").length<20)return false;
+  // Allow small edits, punctuation and extra contact details, but not generic property templates.
+  const tokens=(value:string)=>new Set(value.match(/[\p{L}\p{N}]{3,}/gu)??[]);
+  const left=tokens(own),right=tokens(other);
+  const overlap=[...left].filter(token=>right.has(token)).length;
+  const similarity=overlap/Math.max(left.size,right.size,1);
+  if(similarity<0.88 || overlap<15)return false;
   return Boolean(a.city && b.city && text(a.city)===text(b.city) && a.rooms && a.rooms===b.rooms &&
     (["street","neighborhood","district"] as const).some(key=>a[key] && b[key] && text(a[key])===text(b[key])));
 }
@@ -75,5 +86,7 @@ function fact(value:string|number,key:string): string|number {
 function possibleRepost(a:FacebookWatcherListing,b:FacebookWatcherListing):boolean {
   if(!compatible(a,b) || (a.description?.trim() && b.description?.trim()))return false;
   const location=(["street","neighborhood","district"] as const).some(key=>a[key] && b[key] && fact(a[key],key)===fact(b[key],key));
-  return Boolean(location || (a.area && !Number.isInteger(a.area) && a.rooms && a.rooms===b.rooms));
+  // Fractional area plus room count alone is too weak when the location is unknown.
+  // Keep it as a separate listing until an address or other property-specific evidence exists.
+  return Boolean(location);
 }

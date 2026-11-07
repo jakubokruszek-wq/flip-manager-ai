@@ -1,4 +1,5 @@
 import { visibleFacebookSale } from "./offer-quality";
+import { groupFacebookReposts } from "./group-facebook-reposts";
 import "server-only";
 
 import { calculateFlipScore } from "@/features/flip-score/calculate-flip-score";
@@ -703,7 +704,7 @@ export async function listFacebookWatcher(): Promise<FacebookWatcherListing[]> {
     if (rightQuality !== leftQuality) return rightQuality - leftQuality;
     return Date.parse(right.sourceMetadataCollectedAt ?? right.importedAt) - Date.parse(left.sourceMetadataCollectedAt ?? left.importedAt);
   });
-  return dedupeByListingIdentity(preferred, (item) => ({ listingId: item.listingId, source: item.source, externalListingId: item.externalListingId, sourcePostUrl: item.sourcePostUrl, originalUrl: item.originalUrl, facebookPostId: item.facebookPostId, parameterFingerprint: item.parameterFingerprint, contentFingerprint: item.contentFingerprint }));
+  return groupFacebookReposts(dedupeByListingIdentity(preferred, (item) => ({ listingId: item.listingId, source: item.source, externalListingId: item.externalListingId, sourcePostUrl: item.sourcePostUrl, originalUrl: item.originalUrl, facebookPostId: item.facebookPostId, parameterFingerprint: item.parameterFingerprint, contentFingerprint: item.contentFingerprint })));
 }
 
 /**
