@@ -152,6 +152,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Offline OCR and consent on API 36 (dedicated device)
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -190,6 +191,7 @@ jobs:
           retention-days: 14
 
       - name: Release the offline emulator disk before creating the fresh device
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086'
         run: avdmanager delete avd --name gecko-ocr-offline
       - name: Online Gecko flow and full regression on API 36 (fresh device)
         uses: reactivecircus/android-emulator-runner@v2
@@ -206,6 +208,9 @@ jobs:
             adb logcat -c || true
             for network_attempt in $(seq 1 30); do if adb -e shell dumpsys connectivity | grep -Eq 'Active default network: [0-9]+'; then break; fi; sleep 1; done
             adb -e shell dumpsys connectivity | grep -Eq 'Active default network: [0-9]+'
+            if [ "$GITHUB_REF" = "refs/heads/codex/android-schema-recovery-086" ]; then
+              ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherLinkInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.GroupArchiveInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ProfileWatcherInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SavedResultInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            else
             # Regression: session cleanup must not reenter Gecko's native port teardown.
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#integratedMainTransportUsesNativeConsentPrivateApiAndNestedFeedWithStopAndCleanRetry || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#integratedMainTransportUsesNativeConsentPrivateApiAndNestedFeedWithStopAndCleanRetry || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
@@ -217,6 +222,7 @@ jobs:
             adb -e shell am force-stop pl.jakubokruszek.flipwatcher.geckopoc
             adb -e shell pm clear pl.jakubokruszek.flipwatcher.geckopoc | grep -q Success
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            fi
             adb logcat -d -s GeckoPocTest:I > logcat-tests.txt || true
             adb exec-out run-as pl.jakubokruszek.flipwatcher.geckopoc cat files/consent-ui-compact-large.png > app/build/reports/androidTests/consent-ui-compact-large.png || true
             adb exec-out run-as pl.jakubokruszek.flipwatcher.geckopoc cat files/consent-ui-compact-expanded.png > app/build/reports/androidTests/consent-ui-compact-expanded.png || true
@@ -507,8 +513,8 @@ jobs:
           retention-days: 30
 
   publish-tested-0585:
-    name: Publish tested Android 0.5.85
-    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-outbox-capacity'
+    name: Publish tested Android 0.5.86
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-schema-recovery-086'
     needs: [guard, build, instrumented, verified-apk]
     runs-on: ubuntu-24.04
     permissions:
@@ -523,22 +529,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-outbox-capacity --jq .object.sha)" = '${{ github.sha }}'
+          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-schema-recovery-086 --jq .object.sha)" = '${{ github.sha }}'
           apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
           test -n "$apk_path" && test -f "$apk_path"
-          cp "$apk_path" flip-watcher-0.5.85-arm64.apk
-          unzip -p flip-watcher-0.5.85-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.85")process.exit(1)})'
-          unzip -p flip-watcher-0.5.85-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
-          sha256sum flip-watcher-0.5.85-arm64.apk > SHA256SUMS
+          cp "$apk_path" flip-watcher-0.5.86-arm64.apk
+          unzip -p flip-watcher-0.5.86-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.86")process.exit(1)})'
+          unzip -p flip-watcher-0.5.86-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
+          sha256sum flip-watcher-0.5.86-arm64.apk > SHA256SUMS
           cat > release-notes.md <<'NOTES'
-          Android 0.5.85 usuwa blokowanie transferu przez niezakwalifikowanych kandydatów.
+          Android 0.5.86 naprawia konflikt dwóch układów lokalnej bazy w wersji 3.
 
-          - Kandydaci quality_hold mają osobny limit i nie zużywają miejsca w kolejce gotowych ofert.
-          - Po zapełnieniu puli kandydatów pomijane są tylko nowe niegotowe kopie. Zachowane dane, zdjęcia i potwierdzenia wysyłki nie są usuwane.
-          - Limity gotowych wysyłek i wymaganie potwierdzonej sprzedaży nieruchomości z rzeczywistym zdjęciem pozostają aktywne.
-          - Raport zawiera osobne liczniki gotowych, zablokowanych, niezakwalifikowanych i potwierdzonych wysyłek.
-          - Zawiera poprawki 0.5.84: odtworzenie renderowania profili i kontynuowanie partii.
+          - Wersja bazy 4 zachowuje tabele diagnostyki i ponowień z obu gałęzi aplikacji.
+          - Migracja nie przepisuje zaszyfrowanych ofert, zdjęć, stanów wysyłki ani potwierdzeń odbioru.
+          - Test Androida odtwarza oba stare układy i potwierdza identyczne bajty po aktualizacji.
+          - Zawiera obsługę dynamicznych grup i profili oraz poprawki kolejki i kontynuowania z 0.5.85.
+          - Zakres testów: migracje, pełna klasa automatu i kolejki, parowanie, profile, archiwa, harmonogram i status; parser/OCR bez zmian.
 
-          Instaluj jako aktualizację, bez odinstalowywania i kasowania bazy. Testy korzystają z lokalnych stron i danych syntetycznych.
+          Instaluj jako aktualizację bez odinstalowywania i kasowania bazy. Testy używają lokalnych stron i danych syntetycznych.
           NOTES
-          gh release create gecko-poc-0.5.85 flip-watcher-0.5.85-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.85 — odblokowanie kolejki transferu ofert' --prerelease --notes-file release-notes.md
+          gh release create gecko-poc-0.5.86 flip-watcher-0.5.86-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.86 — naprawa migracji i startu automatu' --prerelease --notes-file release-notes.md

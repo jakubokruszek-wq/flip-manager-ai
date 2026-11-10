@@ -149,6 +149,39 @@ class WatcherAutomationInstrumentedTest {
             q.readableDatabase.rawQuery("SELECT COUNT(*) FROM outbox",null).use{c->assertTrue(c.moveToFirst());assertEquals(3,c.getInt(0))}
         }}finally{context.deleteDatabase("watcher-outbox-v1.db")}
     }
+    @Test fun bothVersionThreeLayoutsUpgradeWithoutRewritingFrozenOffersOrReceipts(){
+        // 0.5.85 used v3 for capture_reports; the later 0.5.73-0.5.75 branch
+        // used v3 for scan_failures. Android skips onUpgrade between equal versions.
+        for(missing in listOf("scan_failures","capture_reports")){
+            context.deleteDatabase("watcher-outbox-v1.db")
+            try {
+                fun snapshots(db:android.database.sqlite.SQLiteDatabase)=db.rawQuery("SELECT id,hex(body),state,attempt,next_at,receipt,source,post,saved_at FROM outbox ORDER BY id",null).use{c->
+                    buildList{while(c.moveToNext())add((0 until c.columnCount).map{if(c.isNull(it))null else c.getString(it)})}
+                }
+                val before=WatcherOutbox(context).use{q->
+                    q.enqueue(device,group,result());val sent=checkNotNull(q.next(device,Long.MAX_VALUE));q.acknowledge(sent.id,"keep-v3-receipt")
+                    q.enqueue(device,group,result(440000.0))
+                    q.enqueue(device,group,result(450000.0).let{it.copy(rows=it.rows.map{r->r.copy(intent="UNKNOWN",usable=false)},photos=emptyList())})
+                    val db=q.writableDatabase
+                    db.execSQL("INSERT INTO scan_failures(slot,source,attempts) VALUES ('keep-slot',?,2)",arrayOf(group.id))
+                    db.execSQL("INSERT INTO capture_reports(id,device,slot,source,body,sent) VALUES ('keep-report',?,'keep-slot',?,X'010203',1)",arrayOf(device,group.id))
+                    db.execSQL("DROP TABLE $missing")
+                    db.version=3
+                    val failure=runCatching{db.rawQuery("SELECT * FROM $missing",null).use{it.moveToFirst()}}.exceptionOrNull()
+                    assertTrue("The previous helper fails when its v3 support table is missing",failure is android.database.sqlite.SQLiteException)
+                    snapshots(db)
+                }
+                WatcherOutbox(context).use{q->
+                    val db=q.writableDatabase;assertEquals(4,db.version)
+                    assertEquals("Upgrade must not replay, reseal, reset or erase business records",before,snapshots(db))
+                    for(table in listOf("scan_failures","capture_reports"))db.rawQuery("SELECT COUNT(*) FROM $table",null).use{assertTrue(it.moveToFirst());assertEquals(if(table==missing)0 else 1,it.getInt(0))}
+                    db.rawQuery("SELECT attempts FROM scan_failures WHERE slot=? AND source=?",arrayOf("new-slot",group.id)).use{assertFalse(it.moveToFirst())}
+                    assertNotNull("A ready pending offer must still be deliverable",q.next(device,Long.MAX_VALUE))
+                    assertEquals(1,q.transferCounts()["queueSent"]);assertEquals(1,q.transferCounts()["queuePending"]);assertEquals(1,q.transferCounts()["queueQualityHeld"])
+                }
+            }finally{context.deleteDatabase("watcher-outbox-v1.db")}
+        }
+    }
     @Test fun versionOneMigrationPreservesFrozenBytesAndLeavesUnknownDatesUnknown(){
         context.deleteDatabase("watcher-outbox-v1.db")
         try {

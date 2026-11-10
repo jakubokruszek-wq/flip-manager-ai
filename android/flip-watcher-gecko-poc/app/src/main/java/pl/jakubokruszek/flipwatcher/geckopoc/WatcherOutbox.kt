@@ -16,13 +16,13 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /** Independent of the existing encrypted local archive and Gecko profile. No token is stored here. */
-class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1.db",null,3) {
+class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1.db",null,4) {
     override fun onCreate(db:SQLiteDatabase) {
         db.execSQL("CREATE TABLE outbox (id TEXT PRIMARY KEY, device TEXT NOT NULL, body BLOB NOT NULL, state TEXT NOT NULL DEFAULT 'pending', attempt INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0, receipt TEXT, source TEXT, post TEXT, saved_at INTEGER)")
         db.execSQL("CREATE TABLE journal (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, code TEXT NOT NULL, count INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE scans (slot TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY(slot, source))")
         db.execSQL("CREATE TABLE removed_posts (source TEXT NOT NULL, post TEXT NOT NULL, PRIMARY KEY(source,post))")
-        createReports(db)
+        createSupportTables(db)
     }
     override fun onUpgrade(db:SQLiteDatabase,old:Int,new:Int){
         if(old<2){
@@ -44,9 +44,12 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
                 },"id=?",arrayOf(c.getString(0)))}
         }}
         }
-        createReports(db)
+        createSupportTables(db)
     }
-    private fun createReports(db:SQLiteDatabase){
+    /** Two released branches used schema 3 for different auxiliary tables.
+     * Schema 4 unions both layouts without reading or rewriting any frozen body. */
+    private fun createSupportTables(db:SQLiteDatabase){
+        db.execSQL("CREATE TABLE IF NOT EXISTS scan_failures (slot TEXT NOT NULL, source TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(slot,source))")
         db.execSQL("CREATE TABLE IF NOT EXISTS capture_reports (id TEXT PRIMARY KEY, device TEXT NOT NULL, slot TEXT NOT NULL, source TEXT NOT NULL, body BLOB NOT NULL, sent INTEGER NOT NULL DEFAULT 0)")
     }
     private fun key():SecretKey = synchronized(KEY_LOCK) {
