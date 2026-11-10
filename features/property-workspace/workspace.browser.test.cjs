@@ -14,7 +14,7 @@ test('manual property, viewing, direct private documents, acquisition, costs, co
   if(req.method==='OPTIONS'){res.writeHead(204);res.end();return;}
   const u=new URL(req.url,'http://localhost'); const chunks=[]; for await(const chunk of req)chunks.push(chunk); const bytes=Buffer.concat(chunks);let body={};try{body=JSON.parse(bytes.toString()||'{}')}catch{}
   const send=(value,status=200)=>{res.writeHead(status,{'content-type':'application/json'});res.end(JSON.stringify(value))};
-  const matches=row=>[...u.searchParams].every(([key,value])=>!value.startsWith('eq.')||String(row[key])===value.slice(3));
+  const matches=row=>[...u.searchParams].every(([key,value])=>value.startsWith('eq.')?String(row[key])===value.slice(3):value.startsWith('in.(')?value.slice(4,-1).split(',').includes(String(row[key])):value.startsWith('lt.')?String(row[key])<value.slice(3):true);
   if(u.pathname==='/auth/v1/user')return send(operatorUser);
   if(u.pathname.startsWith('/storage/v1/')){
    const marker='/property-workspace-private/'; const pos=u.pathname.indexOf(marker);const key=pos>=0?decodeURIComponent(u.pathname.slice(pos+marker.length)):'';
@@ -69,5 +69,5 @@ test('manual property, viewing, direct private documents, acquisition, costs, co
   const corrupt=await page.request.post(`http://127.0.0.1:3189/api/properties/${ID}/files`,{data:{action:'prepare',name:'corrupt.png',mime:'image/png',size:4,category:'invoice',sha256:'a'.repeat(64)}});const reservation=await corrupt.json();assert.equal(corrupt.status(),200);await fetch(reservation.uploadUrl,{method:'PUT',body:'oops'});const fail=await page.request.post(`http://127.0.0.1:3189/api/properties/${ID}/files`,{data:{action:'finalize',id:reservation.id}});assert.equal(fail.status(),400);assert.equal(files.length,2);
   fs.mkdirSync('test-artifacts',{recursive:true});for(const width of [375,390,768,1440]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`overflow at ${width}`);await page.screenshot({path:`test-artifacts/investment-${width}.png`,fullPage:true})}
   const anonymous=await browser.newContext();const rejected=await anonymous.request.put(`http://127.0.0.1:3189/api/properties/${ID}/workspace`,{data:{version:workspace.version,data:workspace.data}});assert.ok([401,403].includes(rejected.status()));await anonymous.close();
- }finally{await browser?.close();app?.kill('SIGTERM');await new Promise(r=>backend.close(r))}
+ }finally{if(browser){fs.mkdirSync('test-artifacts',{recursive:true});for(const context of browser.contexts())for(const p of context.pages()){await p.screenshot({path:'test-artifacts/last-page.png',fullPage:true}).catch(()=>{});fs.writeFileSync('test-artifacts/last-page.html',await p.content().catch(()=>''));}}await browser?.close();app?.kill('SIGTERM');await new Promise(r=>backend.close(r))}
 });
