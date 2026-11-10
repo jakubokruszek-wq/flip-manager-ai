@@ -88,7 +88,8 @@ export function NewPropertyPage() {
   const cancelFacebook = () => { setManualFacebook(false); setPostText(""); setImages([]); setImageUrls(""); setImportedProperty(null); setFormValues(null); setFacebookMeta(null); setFinderImport(null); setImportError(null); };
 
   return <div className="mx-auto max-w-4xl space-y-8">
-    <div className="border-b border-border pb-6"><h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">Dodaj nieruchomość</h1><p className="mt-2 text-sm leading-6 text-muted-foreground">Wklej link do ogłoszenia, aby rozpocząć bezpieczny import danych.</p></div>
+    <div className="border-b border-border pb-6"><h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">Dodaj nieruchomość</h1><p className="mt-2 text-sm leading-6 text-muted-foreground">Wklej link do ogłoszenia lub dodaj mieszkanie ręcznie.</p></div>
+    <Link href="/properties/manual" className="inline-flex min-h-12 items-center rounded-xl border px-4 font-semibold">Wpisz nieruchomość ręcznie</Link>
     <div className="ui-section space-y-5">
       <Input aria-label="Link do ogłoszenia" placeholder="https://www.otodom.pl/... lub https://www.facebook.com/..." value={url} onChange={(event) => setUrl(event.target.value)} />
       {manualFacebook && <section className="space-y-4 rounded-xl border border-primary/30 bg-primary/5 p-4" onPaste={(event) => { const files = [...event.clipboardData.items].filter((item) => item.kind === "file" && item.type.startsWith("image/")).map((item) => item.getAsFile()).filter((file): file is File => Boolean(file)); if (files.length) { event.preventDefault(); void uploadFiles(files); } }}>

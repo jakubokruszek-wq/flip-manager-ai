@@ -1,0 +1,70 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
+const assert = require('node:assert/strict');
+const test = require('node:test');
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const {spawn} = require('node:child_process');
+const {chromium} = require('playwright');
+const {operatorUser, addOperatorSessionCookie, ensureProductionBuild} = require('../test-support/browser-auth.cjs');
+const ID='11111111-1111-4111-8111-111111111111';
+test('manual property, viewing, direct private documents, acquisition, costs, conflict and sale survive reload', {timeout:480000}, async()=>{
+ let property=null, workspace=null; const files=[], uploads=[], events=[], objects=new Map(); let directBytes=0;
+ const backend=http.createServer(async(req,res)=>{
+  res.setHeader('access-control-allow-origin','*');res.setHeader('access-control-allow-methods','GET,POST,PUT,PATCH,DELETE,HEAD,OPTIONS');res.setHeader('access-control-allow-headers','*');
+  if(req.method==='OPTIONS'){res.writeHead(204);res.end();return;}
+  const u=new URL(req.url,'http://localhost'); const chunks=[]; for await(const chunk of req)chunks.push(chunk); const bytes=Buffer.concat(chunks);let body={};try{body=JSON.parse(bytes.toString()||'{}')}catch{}
+  const send=(value,status=200)=>{res.writeHead(status,{'content-type':'application/json'});res.end(JSON.stringify(value))};
+  const matches=row=>[...u.searchParams].every(([key,value])=>!value.startsWith('eq.')||String(row[key])===value.slice(3));
+  if(u.pathname==='/auth/v1/user')return send(operatorUser);
+  if(u.pathname.startsWith('/storage/v1/')){
+   const marker='/property-workspace-private/'; const pos=u.pathname.indexOf(marker);const key=pos>=0?decodeURIComponent(u.pathname.slice(pos+marker.length)):'';
+   if(u.pathname.startsWith('/storage/v1/object/upload/sign/')&&req.method==='POST')return send({url:`/object/upload/sign/property-workspace-private/${key}?token=test`});
+   if(req.method==='PUT'){objects.set(key,bytes);directBytes=Math.max(directBytes,bytes.length);return send({Key:key});}
+   if(u.pathname==='/storage/v1/object/sign/property-workspace-private')return send(body.paths.map(p=>({path:p,signedURL:`/object/sign/property-workspace-private/${p}?token=test`,error:null})));
+   if(req.method==='GET'){const data=objects.get(key);if(!data)return send({},404);res.writeHead(200,{'content-type':key.endsWith('.pdf')?'application/pdf':'image/png'});res.end(data);return;}
+   if(req.method==='DELETE'){for(const p of body.prefixes??[])objects.delete(p);return send([]);}
+  }
+  if(u.pathname==='/rest/v1/rpc/save_property_workspace'){
+   if((workspace?.version??0)!==body.p_expected_version)return send({message:'WORKSPACE_CONFLICT',code:'40001'},409);
+   workspace={property_id:ID,owner_id:operatorUser.id,data:body.p_data,version:(workspace?.version??0)+1};property.status=['acquired','renovation','listed','sold'].includes(body.p_data.stage)?body.p_data.stage:'analysis';events.push({version:workspace.version,stage:body.p_data.stage,expense_count:body.p_data.expenses.length,task_count:body.p_data.tasks.length,created_at:new Date().toISOString()});return send(workspace.version);
+  }
+  if(u.pathname==='/rest/v1/properties'){
+   if(req.method==='POST'){property={id:ID,created_at:new Date().toISOString(),...body};return send({id:ID},201)}
+   return send(req.headers.accept?.includes('vnd.pgrst.object')?property:property?[property]:[]);
+  }
+  const table=u.pathname.split('/').pop();let rows=table==='property_workspaces'?(workspace?[workspace]:[]):table==='property_workspace_files'?files:table==='property_workspace_uploads'?uploads:table==='property_workspace_events'?events:[];
+  if(req.method==='POST'&&['property_workspace_uploads','property_workspace_files'].includes(table)){rows.push({created_at:new Date().toISOString(),expires_at:new Date(Date.now()+7200000).toISOString(),...body});return send(null,201)}
+  if(req.method==='DELETE'){for(let i=rows.length-1;i>=0;i--)if(matches(rows[i]))rows.splice(i,1);return send(null)}
+  if(req.method==='PATCH'){const found=rows.find(matches);if(found)Object.assign(found,body);return send(found??null)}
+  rows=rows.filter(matches);if(req.method==='HEAD'){res.setHeader('content-range',`0-${rows.length-1}/${rows.length}`);res.writeHead(200);res.end();return;}
+  return send(req.headers.accept?.includes('vnd.pgrst.object')?(rows[0]??null):rows);
+ });
+ await new Promise(r=>backend.listen(0,'127.0.0.1',r)); const authUrl=`http://127.0.0.1:${backend.address().port}`;
+ const root=process.cwd(),nextBin=require.resolve('next/dist/bin/next');let app,browser;
+ try{
+  const env={...process.env,NEXT_PUBLIC_SUPABASE_URL:authUrl,NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'browser-key',SUPABASE_SECRET_KEY:'browser-secret',SUPABASE_SERVICE_ROLE_KEY:'browser-secret'};
+  await ensureProductionBuild(nextBin,root,env);
+  app=spawn(process.execPath,[nextBin,'start','--hostname','127.0.0.1','--port','3189'],{env,stdio:['ignore','pipe','pipe']});let output='';app.stdout.on('data',x=>output+=x);app.stderr.on('data',x=>output+=x);
+  for(let i=0;i<120;i++){try{if((await fetch('http://127.0.0.1:3189/login')).ok)break}catch{}await new Promise(r=>setTimeout(r,500));if(i===119)throw Error(output)}
+  browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:390,height:844}});await addOperatorSessionCookie(context,'http://127.0.0.1:3189');const page=await context.newPage();page.setDefaultTimeout(15000);
+  await page.goto('http://127.0.0.1:3189/properties/manual');await page.getByLabel('Adres',{exact:true}).fill('Testowa 7');await page.getByLabel('Tytuł',{exact:true}).fill('Mieszkanie testowe');await page.getByLabel('Cena (zł)',{exact:true}).fill('320000');await page.getByRole('button',{name:'Zapisz nieruchomość',exact:true}).click();await page.waitForURL(`**/properties/${ID}`);
+  const save=async()=>{await page.getByRole('button',{name:'Zapisz zmiany',exact:true}).click();await page.getByText('Zapisano zmiany.',{exact:true}).waitFor()};
+  await page.getByRole('tab',{name:'Oglądanie i notatki'}).click();await page.getByLabel('Notatki z oglądania, ustalenia i negocjacje').fill('Instalacja do wymiany');await page.getByLabel('Stan prawny i opłaty',{exact:true}).check();await save();await page.reload();await page.getByRole('tab',{name:'Oglądanie i notatki'}).click();assert.equal(await page.getByLabel('Notatki z oglądania, ustalenia i negocjacje').inputValue(),'Instalacja do wymiany');
+  await page.getByRole('tab',{name:'Zdjęcia i dokumenty'}).click();await page.getByLabel('Kategoria dokumentu',{exact:true}).selectOption('deed');const pdf=Buffer.alloc(5*1024*1024,32);pdf.write('%PDF-1.4\n');await page.getByLabel('Zdjęcia lub PDF (do 12 MB każdy)').setInputFiles({name:'akt.pdf',mimeType:'application/pdf',buffer:pdf});await page.getByText('akt.pdf',{exact:true}).waitFor();assert.equal(directBytes,pdf.length);assert.equal(files.length,1);
+  await page.getByLabel('Zdjęcia lub PDF (do 12 MB każdy)').setInputFiles({name:'akt.pdf',mimeType:'application/pdf',buffer:pdf});await page.getByText('Zapisano 1 plików.',{exact:false}).waitFor();assert.equal(files.length,1);
+  await page.getByRole('tab',{name:'Podsumowanie',exact:true}).click();await page.getByLabel('Faktyczna cena zakupu, zł',{exact:true}).fill('300000');await page.getByLabel('Data zakupu',{exact:true}).fill('2026-11-10');await page.getByRole('button',{name:'Kupiona — utwórz inwestycję'}).click();await page.waitForURL(`**/investments/${ID}`);assert.equal(property.id,ID);assert.equal(workspace.data.notes,'Instalacja do wymiany');assert.equal(files.length,1);
+  await page.goto('http://127.0.0.1:3189/properties');assert.equal(await page.getByRole('heading',{name:'Mieszkanie testowe',exact:true}).count(),0);await page.goto('http://127.0.0.1:3189/investments');await page.getByRole('heading',{name:'Mieszkanie testowe',exact:true}).click();
+  await page.getByRole('tab',{name:'Budżet i faktury'}).click();
+  const invoice=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=1600;c.height=800;const x=c.getContext('2d');x.fillStyle='white';x.fillRect(0,0,1600,800);x.fillStyle='black';x.font='42px Arial';['Faktura VAT nr FV/123/2026','Sprzedawca NIP 1234563218','Data wystawienia: 2026-11-10','Farba i materialy remontowe','Razem brutto: 1234,56 PLN'].forEach((line,i)=>x.fillText(line,60,100+i*110));return c.toDataURL('image/png').split(',')[1]});
+  await page.getByLabel('Zdjęcie faktury — odczytaj OCR').setInputFiles({name:'faktura-test.png',mimeType:'image/png',buffer:Buffer.from(invoice,'base64')});await page.getByText('Zdjęcie zapisane, odczyt gotowy.',{exact:false}).waitFor({timeout:180000});assert.equal(await page.getByLabel('Kwota brutto, zł',{exact:true}).inputValue(),'1234.56');assert.equal(await page.getByLabel('Numer faktury lub paragonu').inputValue(),'FV/123/2026');assert.equal(workspace.data.expenses.length,0);
+  await page.getByRole('button',{name:'Potwierdź dane i dodaj koszt'}).click();await page.getByText('Koszt zapisany i uwzględniony w rozliczeniu.',{exact:true}).waitFor();assert.equal(workspace.data.expenses.length,1);
+  await page.getByRole('button',{name:'Usuń koszt z rozliczenia'}).click();await save();assert.equal(workspace.data.expenses.length,0);
+  await page.getByLabel('Opis kosztu',{exact:true}).fill('Farba');await page.getByLabel('Sprzedawca / NIP').fill('Sklep');await page.getByLabel('Numer faktury lub paragonu').fill('FV/1');await page.getByLabel('Kwota brutto, zł',{exact:true}).fill('123,45');await page.getByRole('button',{name:'Potwierdź dane i dodaj koszt'}).click();await page.getByText('Koszt zapisany i uwzględniony w rozliczeniu.',{exact:true}).waitFor();assert.equal(workspace.data.expenses[0].amount,12345);
+  await page.getByLabel('Opis kosztu',{exact:true}).fill('Powtórka');await page.getByLabel('Sprzedawca / NIP').fill('Sklep');await page.getByLabel('Numer faktury lub paragonu').fill('FV/1');await page.getByLabel('Kwota brutto, zł',{exact:true}).fill('123,45');await page.getByRole('button',{name:'Potwierdź dane i dodaj koszt'}).click();await page.getByRole('alert').filter({hasText:'już zapisane'}).waitFor();assert.equal(workspace.data.expenses.length,1);
+  await page.reload();await page.getByRole('tab',{name:'Oglądanie i notatki'}).click();await page.getByLabel('Kontakt do właściciela / pośrednika').fill('Kontakt');workspace.version++;await page.getByRole('button',{name:'Zapisz zmiany',exact:true}).click();await page.getByRole('alert').waitFor();assert.notEqual(workspace.data.contact,'Kontakt');assert.equal(await page.getByLabel('Kontakt do właściciela / pośrednika').inputValue(),'Kontakt');await page.reload();
+  await page.getByRole('tab',{name:'Sprzedaż',exact:true}).click();await page.getByLabel('Faktyczna cena sprzedaży, zł').fill('350000');await page.getByLabel('Data sprzedaży',{exact:true}).fill('2026-11-10');await page.getByRole('button',{name:'Oznacz jako sprzedaną i zapisz'}).click();await page.getByText('Zapisano zmiany.',{exact:true}).waitFor();assert.equal(workspace.data.stage,'sold');assert.equal(workspace.data.purchasePrice,30000000);assert.equal(workspace.data.expenses.length,1);
+  fs.mkdirSync('test-artifacts',{recursive:true});for(const width of [375,390,768,1440]){await page.setViewportSize({width,height:900});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`overflow at ${width}`);await page.screenshot({path:`test-artifacts/investment-${width}.png`,fullPage:true})}
+  const anonymous=await browser.newContext();const rejected=await anonymous.request.put(`http://127.0.0.1:3189/api/properties/${ID}/workspace`,{data:{version:workspace.version,data:workspace.data}});assert.ok([401,403].includes(rejected.status()));await anonymous.close();
+ }finally{await browser?.close();app?.kill('SIGTERM');await new Promise(r=>backend.close(r))}
+});

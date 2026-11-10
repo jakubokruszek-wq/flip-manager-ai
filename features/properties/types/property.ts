@@ -295,7 +295,7 @@ export type PropertiesInsert = {
   city: string | null;
   notes: string | null;
   original_url: string | null;
-  source: Extract<PropertySource, "otodom" | "facebook">;
+  source: Extract<PropertySource, "otodom" | "facebook"> | null;
   images: string[];
   status: "draft";
 };

@@ -164,9 +164,9 @@ function parseHttpsUrl(value: string, field: string): string {
   return url.toString();
 }
 
-function parseSource(value: string): SupportedPropertySource {
+function parseSource(value: string): SupportedPropertySource | null {
   if (!value) {
-    throw new Error("Pole source jest wymagane.");
+    return null;
   }
 
   const source = SUPPORTED_PROPERTY_SOURCES.find((candidate) => candidate === value);

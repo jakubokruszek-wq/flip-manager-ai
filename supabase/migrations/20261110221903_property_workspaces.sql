@@ -9,7 +9,7 @@ create table public.property_workspaces (
 alter table public.property_workspaces enable row level security;
 create policy workspace_read_owner on public.property_workspaces for select to authenticated
  using(owner_id=(select auth.uid()) and (select auth.jwt()->'app_metadata'->>'role')='operator');
-revoke all on public.property_workspaces from anon,authenticated;
+revoke all on public.property_workspaces from public,anon,authenticated;
 grant select on public.property_workspaces to authenticated;
 grant all on public.property_workspaces to service_role;
 create index property_workspaces_owner on public.property_workspaces(owner_id);
@@ -31,7 +31,7 @@ create table public.property_workspace_files (
 alter table public.property_workspace_files enable row level security;
 create policy workspace_file_read_owner on public.property_workspace_files for select to authenticated
  using(owner_id=(select auth.uid()) and (select auth.jwt()->'app_metadata'->>'role')='operator');
-revoke all on public.property_workspace_files from anon,authenticated;
+revoke all on public.property_workspace_files from public,anon,authenticated;
 grant select on public.property_workspace_files to authenticated;
 grant all on public.property_workspace_files to service_role;
 create index property_workspace_files_owner_property on public.property_workspace_files(owner_id,property_id,created_at desc);
@@ -49,10 +49,30 @@ create table public.property_workspace_events (
 alter table public.property_workspace_events enable row level security;
 create policy workspace_event_read_owner on public.property_workspace_events for select to authenticated
  using(owner_id=(select auth.uid()) and (select auth.jwt()->'app_metadata'->>'role')='operator');
-revoke all on public.property_workspace_events from anon,authenticated;
+revoke all on public.property_workspace_events from public,anon,authenticated;
 grant select on public.property_workspace_events to authenticated;
 grant all on public.property_workspace_events to service_role;
 create index property_workspace_events_owner_property on public.property_workspace_events(owner_id,property_id,version desc);
+
+-- Short-lived reservations bind each direct storage upload to its operator.
+create table public.property_workspace_uploads (
+ id uuid primary key,
+ property_id uuid not null references public.properties(id) on delete cascade,
+ owner_id uuid not null references auth.users(id),
+ name text not null,
+ category text not null,
+ mime text not null,
+ size integer not null check(size>0 and size<=12582912),
+ sha256 text not null check(sha256~'^[a-f0-9]{64}$'),
+ path text not null unique,
+ created_at timestamptz not null default now(),
+ expires_at timestamptz not null default now()+interval '2 hours',
+ check(path like owner_id::text||'/'||property_id::text||'/%')
+);
+alter table public.property_workspace_uploads enable row level security;
+revoke all on public.property_workspace_uploads from public,anon,authenticated;
+grant all on public.property_workspace_uploads to service_role;
+create index property_workspace_uploads_owner_expiry on public.property_workspace_uploads(owner_id,expires_at);
 
 -- No public bucket and no client-side object read policies. Server issues 15-minute
 -- signed links only after checking operator session, property and document owner.

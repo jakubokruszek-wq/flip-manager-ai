@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { isNavigationItemActive, workingNavigationItems } from "@/config/navigation";
+import { isNavigationItemActive, mobileNavigationItems } from "@/config/navigation";
 import { cn } from "@/lib/utils";
 
 export function MobileBottomNav() {
@@ -12,7 +12,7 @@ export function MobileBottomNav() {
   return (
     <nav aria-label="Nawigacja mobilna" className="mobile-bottom-nav fixed inset-x-0 bottom-0 z-50 border-t bg-surface-elevated/95 px-1 pt-1.5 backdrop-blur-xl lg:hidden">
       <div className="mx-auto grid h-16 max-w-lg grid-cols-5 items-center">
-        {workingNavigationItems.map((item) => {
+        {mobileNavigationItems.map((item) => {
           const Icon = item.icon;
           const active = isNavigationItemActive(pathname, item.href);
           return (

@@ -5,7 +5,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "Flip Manager by Jakub Okruszek",
     short_name: "Flip Manager",
     description: "Flip Manager by Jakub Okruszek",
-    start_url: "/flip-finder",
+    start_url: "/investments",
     display: "standalone",
     background_color: "#0D0F12",
     theme_color: "#0D0F12",
