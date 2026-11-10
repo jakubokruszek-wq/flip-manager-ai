@@ -193,7 +193,22 @@ jobs:
       - name: Release the offline emulator disk before creating the fresh device
         if: github.ref != 'refs/heads/codex/android-schema-recovery-086'
         run: avdmanager delete avd --name gecko-ocr-offline
+      - name: Schema migration and complete Watcher worker regressions on API 36
+        if: github.ref == 'refs/heads/codex/android-schema-recovery-086'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          working-directory: android/flip-watcher-gecko-poc
+          avd-name: gecko-schema-recovery
+          force-avd-creation: true
+          script: |
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherLinkInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.GroupArchiveInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ProfileWatcherInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SavedResultInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
       - name: Online Gecko flow and full regression on API 36 (fresh device)
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -208,9 +223,6 @@ jobs:
             adb logcat -c || true
             for network_attempt in $(seq 1 30); do if adb -e shell dumpsys connectivity | grep -Eq 'Active default network: [0-9]+'; then break; fi; sleep 1; done
             adb -e shell dumpsys connectivity | grep -Eq 'Active default network: [0-9]+'
-            if [ "$GITHUB_REF" = "refs/heads/codex/android-schema-recovery-086" ]; then
-              ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherLinkInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.GroupArchiveInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ProfileWatcherInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SavedResultInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
-            else
             # Regression: session cleanup must not reenter Gecko's native port teardown.
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#integratedMainTransportUsesNativeConsentPrivateApiAndNestedFeedWithStopAndCleanRetry || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#integratedMainTransportUsesNativeConsentPrivateApiAndNestedFeedWithStopAndCleanRetry || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
@@ -222,7 +234,6 @@ jobs:
             adb -e shell am force-stop pl.jakubokruszek.flipwatcher.geckopoc
             adb -e shell pm clear pl.jakubokruszek.flipwatcher.geckopoc | grep -q Success
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
-            fi
             adb logcat -d -s GeckoPocTest:I > logcat-tests.txt || true
             adb exec-out run-as pl.jakubokruszek.flipwatcher.geckopoc cat files/consent-ui-compact-large.png > app/build/reports/androidTests/consent-ui-compact-large.png || true
             adb exec-out run-as pl.jakubokruszek.flipwatcher.geckopoc cat files/consent-ui-compact-expanded.png > app/build/reports/androidTests/consent-ui-compact-expanded.png || true
