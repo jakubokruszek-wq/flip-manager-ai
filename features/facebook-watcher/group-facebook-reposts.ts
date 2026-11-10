@@ -56,6 +56,9 @@ function compatible(a: FacebookWatcherListing, b: FacebookWatcherListing): boole
 /** A third repost may share a photo only with the second member. Preserve
  * strict matching facts against the first member without requiring its photo. */
 function compatibleUnpicturedMember(a: FacebookWatcherListing,b: FacebookWatcherListing):boolean {
+  for (const key of ["rooms", "floor", "city", "district", "neighborhood", "street"] as const) {
+    if (a[key] != null && b[key] != null && fact(a[key],key) !== fact(b[key],key)) return false;
+  }
   return a.source==="facebook" && b.source==="facebook" && a.area===null && b.area===null && a.price!=null && a.price===b.price &&
     a.street!=null && b.street!=null && fact(a.street,"street")===fact(b.street,"street") &&
     a.rooms===b.rooms && a.status===b.status && a.lifecycleStatus===b.lifecycleStatus;
