@@ -15,7 +15,9 @@ async function database() {
  grant usage on schema public,auth to authenticated; grant select on public.properties to authenticated; grant all on public.properties to service_role;
  insert into auth.users values ('${OWNER}'),('${OTHER}');
  insert into public.properties values ('${PROPERTY}','draft','Original notes','["https://example.test/a.jpg"]');`);
- await db.exec(fs.readFileSync(new URL("../../docs/sql/property-workspaces.sql", import.meta.url), "utf8"));
+ const migration = fs.readFileSync(new URL("../../supabase/migrations/20261110221903_property_workspaces.sql", import.meta.url), "utf8");
+ assert.equal(migration, fs.readFileSync(new URL("../../docs/sql/property-workspaces.sql", import.meta.url), "utf8"));
+ await db.exec(migration);
  return db;
 }
 async function asOwner(db: PGlite, owner = OWNER, role = "operator") { await db.exec(`reset role; set request.jwt.claim.sub = '${owner}'; set request.jwt.claim.role = '${role}'; set role authenticated;`); }
@@ -38,6 +40,10 @@ test("acquisition updates the same property atomically, preserves original data,
 test("private workspace is invisible to other operators, role claims cannot bypass owner checks", async () => {
  const db = await database(); try {
  await db.exec("set role service_role"); await db.query("select public.save_property_workspace($1,$2,0,$3::jsonb)", [PROPERTY, OWNER, JSON.stringify(emptyWorkspace())]);
+ await asOwner(db);
+ assert.equal((await db.query("select * from property_workspaces")).rows.length, 1);
+ await assert.rejects(db.query("update property_workspaces set version=20"), /permission denied/);
+ await assert.rejects(db.query("select * from property_workspace_uploads"), /permission denied/);
  await asOwner(db, OTHER);
  assert.equal((await db.query("select * from property_workspaces")).rows.length, 0);
  await assert.rejects(db.query("select public.save_property_workspace($1,$2,1,$3::jsonb)", [PROPERTY, OWNER, JSON.stringify(emptyWorkspace())]), /permission denied/);

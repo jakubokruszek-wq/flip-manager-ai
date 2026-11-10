@@ -1,4 +1,3 @@
-/* eslint-disable @next/next/no-img-element -- Private signed image URLs must bypass the public image optimizer. */
 "use client";
 import Link from "next/link";
 import { useEffect, useState, useRef } from "react";
