@@ -1,5 +1,4 @@
 import { visibleFacebookSale } from "./offer-quality";
-import { groupFacebookReposts } from "./group-facebook-reposts";
 import "server-only";
 
 import { calculateFlipScore } from "@/features/flip-score/calculate-flip-score";
@@ -704,7 +703,10 @@ export async function listFacebookWatcher(): Promise<FacebookWatcherListing[]> {
     if (rightQuality !== leftQuality) return rightQuality - leftQuality;
     return Date.parse(right.sourceMetadataCollectedAt ?? right.importedAt) - Date.parse(left.sourceMetadataCollectedAt ?? left.importedAt);
   });
-  return groupFacebookReposts(dedupeByListingIdentity(preferred, (item) => ({ listingId: item.listingId, source: item.source, externalListingId: item.externalListingId, sourcePostUrl: item.sourcePostUrl, originalUrl: item.originalUrl, facebookPostId: item.facebookPostId, parameterFingerprint: item.parameterFingerprint, contentFingerprint: item.contentFingerprint })));
+  // Keep every distinct publication searchable. The inbox filters first and
+  // groups the matching publications only for display; grouping here loses
+  // the other groups, descriptions and workflow states before filtering.
+  return dedupeByListingIdentity(preferred, (item) => ({ listingId: item.listingId, source: item.source, externalListingId: item.externalListingId, sourcePostUrl: item.sourcePostUrl, originalUrl: item.originalUrl, facebookPostId: item.facebookPostId, parameterFingerprint: item.parameterFingerprint, contentFingerprint: item.contentFingerprint }));
 }
 
 /**

@@ -824,4 +824,31 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     assertNoUnexpectedNoise(handle,{expectedPatchFailures:0});
   });
 
+  await t.test("L: search, group filter and CRM tab can select a non-leading repost", async (t) => {
+    const secondId = "00000000-0000-4000-8000-000000000006";
+    const handle = await setupWatcherPage(browser, baseUrl, { listingsPayload: () => ({ listings: [
+      makeListing({ listingId: NORMAL_ID, groupName: "Grupa A", description: "Opis pierwszej publikacji", workflowStatus: "new", confirmedDuplicateGroupId: "search-pair", sourcePostUrl: "https://www.facebook.com/groups/group-a/posts/111111/" }),
+      makeListing({ listingId: secondId, groupName: "Grupa B", description: "Unikalny opis loggia", workflowStatus: "crm", confirmedDuplicateGroupId: "search-pair", sourcePostUrl: "https://www.facebook.com/groups/group-b/posts/222222/" }),
+    ] }) });
+    const { page } = handle;
+    t.after(() => Promise.all([page.close(), handle.context.close()]));
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.locator(`#facebook-inbox-${NORMAL_ID}`).waitFor({ state: "visible" });
+    assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(), 1);
+    const search = page.getByRole("textbox", { name: "Szukaj ofert Facebook" });
+    await search.fill("loggia");
+    await page.locator(`#facebook-inbox-${secondId}`).waitFor({ state: "visible" });
+    assert.equal(await page.locator(`#facebook-inbox-${NORMAL_ID}`).count(), 0);
+    await search.fill("");
+    const group = page.getByLabel("Grupa", { exact: true }).filter({ visible: true });
+    await group.selectOption("Grupa B");
+    await page.locator(`#facebook-inbox-${secondId}`).waitFor({ state: "visible" });
+    await group.selectOption("");
+    await page.getByRole("navigation", { name: "Status ofert Facebook" }).getByRole("button", { name: /^Dodane do CRM/ }).click();
+    await page.locator(`#facebook-inbox-${secondId}`).waitFor({ state: "visible" });
+    assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(), 1);
+    assert.equal(handle.patchRequests.length, 0, "search must not mutate any workflow");
+    assertNoUnexpectedNoise(handle);
+  });
+
 });

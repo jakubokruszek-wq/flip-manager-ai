@@ -159,3 +159,23 @@ test("a server-verified duplicate key survives the actual Watcher projection",as
   const result=await listFacebookWatcher();
   assert.equal(result.length,1);assert.equal(result[0].confirmedDuplicateGroupId,"verified-pair");
 });
+
+test("every repost remains searchable by its own group, text and workflow before display grouping", async () => {
+  const { filterFacebookInbox, EMPTY_FACEBOOK_INBOX_FILTERS } = await import("./facebook-inbox.ts");
+  const { groupFacebookReposts } = await import("./group-facebook-reposts.ts");
+  const hash = "a".repeat(64);
+  const photo = (post: string) => `https://storage.test/storage/v1/object/public/facebook-watcher-images/android/11111111-1111-4111-8111-111111111111/${post}/${hash}.jpg`;
+  rows = [
+    { source_post_url: "https://facebook.com/groups/group-a/posts/111111/", group_name: "Grupa A", collected_at: "2026-11-07T12:00:00Z", metadata: { listingIntent: "SELL_PROPERTY", workflowStatus: "new" }, listings: { ...listing("repost-a", 300000), external_listing_id: "111111", description: "Ogłoszenie z balkonu", images: [photo("111111")] } },
+    { source_post_url: "https://facebook.com/groups/group-b/posts/222222/", group_name: "Grupa B", collected_at: "2026-11-07T11:00:00Z", metadata: { listingIntent: "SELL_PROPERTY", workflowStatus: "crm" }, listings: { ...listing("repost-b", 300000), external_listing_id: "222222", description: "Unikalny opis loggia", images: [photo("222222")] } },
+  ];
+  const source = await listFacebookWatcher();
+  assert.equal(source.length, 2, "API must preserve both post records for client-side searching");
+  assert.equal(groupFacebookReposts(source).length, 1, "unfiltered view still groups proven reposts");
+  for (const filters of [{ group: "Grupa B" }, { query: "loggia" }]) {
+    const visible = groupFacebookReposts(filterFacebookInbox(source, "all", { ...EMPTY_FACEBOOK_INBOX_FILTERS, ...filters }));
+    assert.deepEqual(visible.map(item => item.listingId), ["repost-b"]);
+  }
+  assert.deepEqual(groupFacebookReposts(filterFacebookInbox(source, "crm", EMPTY_FACEBOOK_INBOX_FILTERS)).map(item => item.listingId), ["repost-b"]);
+  assert.equal(source[0].relatedPosts, undefined, "grouping must not modify raw searchable data");
+});

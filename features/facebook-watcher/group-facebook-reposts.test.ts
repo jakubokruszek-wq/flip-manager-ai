@@ -125,3 +125,13 @@ test("third repost discovered by photo belonging only to second publication desp
  const grouped=groupFacebookReposts([a,b,c]);
  assert.equal(grouped.length,1);assert.equal(grouped[0].relatedPosts?.length,3);
 });
+
+test("a photo chain cannot override conflicting city, district, neighborhood or floor", () => {
+  for (const conflict of [{ city: "Warszawa" }, { district: "Widzew" }, { neighborhood: "Stoki" }, { floor: 7 }]) {
+    const a = item("111111", { area: null, price: 408000, street: "Rojna", city: "Łódź", district: "Bałuty", neighborhood: "Teofilów", floor: 2, images: [image("111111", "a".repeat(64))] });
+    const missing = Object.fromEntries(Object.keys(conflict).map(key => [key, null]));
+    const b = item("222222", { ...a, ...missing, listingId: "222222", images: [image("222222", "a".repeat(64)), image("222222", "b".repeat(64))] });
+    const c = item("333333", { ...b, ...conflict, listingId: "333333", images: [image("333333", "b".repeat(64))] });
+    assert.equal(groupFacebookReposts([a, b, c]).length, 2, JSON.stringify(conflict));
+  }
+});
