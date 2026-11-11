@@ -1,9 +1,9 @@
-import { androidRelease as apk } from "./release";
-const etag = `"sha256-${apk.sha256}"`;
-function headers() { return new Headers({ "Content-Type": "application/vnd.android.package-archive", "Content-Disposition": `attachment; filename="${apk.filename}"`, "Accept-Ranges": "bytes", ETag: etag, "Cache-Control": "public, max-age=86400, immutable", "X-Content-Type-Options": "nosniff" }); }
+import { androidRelease, type AndroidRelease } from "./release";
+function headers(apk:AndroidRelease) { return new Headers({ "Content-Type": "application/vnd.android.package-archive", "Content-Disposition": `attachment; filename="${apk.filename}"`, "Accept-Ranges": "bytes", ETag: `"sha256-${apk.sha256}"`, "Cache-Control": "public, max-age=86400, immutable", "X-Content-Type-Options": "nosniff" }); }
 /** Stream opaque APK bytes; never allocate the full 214 MB in phone JS or function memory. */
-export async function downloadApk(request: Request): Promise<Response> {
-  const resultHeaders = headers();
+export async function downloadApk(request: Request, apk:AndroidRelease=androidRelease): Promise<Response> {
+  const etag=`"sha256-${apk.sha256}"`;
+  const resultHeaders = headers(apk);
   const range = request.headers.get("range");
   let wanted: string | null = null;
   if (range && (!request.headers.has("if-range") || request.headers.get("if-range") === etag)) {

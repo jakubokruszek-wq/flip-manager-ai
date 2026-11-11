@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { downloadApk } from "./download.ts";
-import { androidRelease as apk } from "./release.ts";
+import { androidRelease as apk, androidRelease087 } from "./release.ts";
 const url = `https://example.test${apk.path}`;
 test("public APK HEAD is exact and never buffers or downloads the file", async () => {
  const response=await downloadApk(new Request(url,{method:"HEAD"}));assert.equal(response.status,200);assert.equal(response.headers.get("content-length"),String(apk.bytes));assert.equal(response.headers.get("accept-ranges"),"bytes");assert.match(response.headers.get("content-disposition")!,/attachment.*\.apk/);
@@ -21,4 +21,8 @@ test("upstream errors or a wrong release size are never saved as an APK",async c
  for(const upstream of [new Response("error",{status:429}),new Response("oops",{headers:{"content-length":"4"}}),new Response("abc",{status:206,headers:{"content-length":"3","content-range":`bytes 3-5/${apk.bytes}`}})]) {
   context.mock.method(globalThis,"fetch",async()=>upstream);const response=await downloadApk(new Request(url,{headers:{range:"bytes=4-6"}}));assert.equal(response.status,503);assert.equal(response.headers.get("cache-control"),"no-store");assert.equal(response.headers.get("retry-after"),"30");
  }
+});
+
+test("the old versioned URL remains pinned when the latest release changes",async()=>{
+ const response=await downloadApk(new Request(`https://example.test${androidRelease087.path}`,{method:"HEAD"}),androidRelease087);assert.equal(response.headers.get("content-length"),"213802477");assert.match(response.headers.get("content-disposition")!,/flip-watcher-0\.5\.87-arm64\.apk/);assert.match(response.headers.get("etag")!,/c2c4b24e/);
 });
