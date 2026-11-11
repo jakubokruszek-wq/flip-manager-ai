@@ -12,13 +12,13 @@ export function groupFacebookReposts(records: FacebookWatcherListing[]): Faceboo
     const candidates = [...new Set([...(buckets.get(bucketKey) ?? []), ...mobilePhotoHashes(item.images).flatMap(hash => imageBuckets.get(hash) ?? [])])];
     const target = candidates.find(candidate => {
       const previous = members.get(candidate)!;
-      return previous.every(member => compatible(member,item) || compatibleUnpicturedMember(member,item)) && previous.some(member => (compatible(member,item) && (sameEvidence(member,item) || possibleRepost(member,item))));
+      return previous.every(member => compatible(member,item) || compatibleUnpicturedMember(member,item) || possiblePhotoRepost(member,item)) && previous.some(member => ((compatible(member,item) && (sameEvidence(member,item) || possibleRepost(member,item))) || possiblePhotoRepost(member,item)));
     });
     if (!target) { const copy={ ...item }; groups.push(copy); members.set(copy,[item]); if (!buckets.has(bucketKey)) buckets.set(bucketKey,[]); buckets.get(bucketKey)!.push(copy); for (const hash of mobilePhotoHashes(item.images)) { if (!imageBuckets.has(hash)) imageBuckets.set(hash,[]); imageBuckets.get(hash)!.push(copy); } continue; }
     const publications = [...(target.relatedPosts ?? [publication(target)]), publication(item)];
     // Keep the first result in the requested sort order; never combine photos
     // bound to separate posts or propagate a workflow decision across them.
-    const confirmed = members.get(target)!.some(member=>sameEvidence(member,item));
+    const confirmed = members.get(target)!.some(member=>compatible(member,item) && sameEvidence(member,item));
     target.relatedPostMatch = target.relatedPostMatch === "possible" || !confirmed ? "possible" : "confirmed";
     target.relatedPosts = publications;
     members.get(target)!.push(item);
@@ -62,6 +62,24 @@ function compatibleUnpicturedMember(a: FacebookWatcherListing,b: FacebookWatcher
   return a.source==="facebook" && b.source==="facebook" && a.area===null && b.area===null && a.price!=null && a.price===b.price &&
     a.street!=null && b.street!=null && fact(a.street,"street")===fact(b.street,"street") &&
     a.rooms===b.rooms && a.status===b.status && a.lifecycleStatus===b.lifecycleStatus;
+}
+
+/** Incomplete Android snapshots may show exactly the same uploaded photograph.
+ * Group these only as reversible candidates, never as a confirmed identity or
+ * a source of missing facts. Matching known rooms corroborate the photo;
+ * every known location/status must agree and every member must share evidence. */
+function possiblePhotoRepost(a: FacebookWatcherListing, b: FacebookWatcherListing): boolean {
+  if (a.source !== "facebook" || b.source !== "facebook" ||
+      a.price != null || b.price != null || a.area != null || b.area != null ||
+      a.rooms == null || !Number.isFinite(a.rooms) || a.rooms <= 0 || a.rooms !== b.rooms ||
+      a.description?.trim() || b.description?.trim() ||
+      a.status !== b.status || a.lifecycleStatus !== b.lifecycleStatus ||
+      a.workflowStatus !== b.workflowStatus) return false;
+  for (const key of ["floor", "city", "district", "neighborhood", "street"] as const) {
+    if (a[key] != null && b[key] != null && fact(a[key], key) !== fact(b[key], key)) return false;
+  }
+  const hashes = mobilePhotoHashes(a.images);
+  return mobilePhotoHashes(b.images).some(hash => hashes.includes(hash));
 }
 
 function mobilePhotoHashes(images: string[]): string[] {

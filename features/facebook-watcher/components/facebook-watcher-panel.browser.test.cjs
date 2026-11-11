@@ -779,6 +779,31 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     assertNoUnexpectedNoise(handle);
   });
 
+
+  await t.test("N: same bathroom photo without price or area groups reversibly and group filters still find the second post",async(t)=>{
+    const secondId="00000000-0000-4000-8000-000000000006";
+    const photo=(post)=>`https://project.supabase.co/storage/v1/object/public/facebook-watcher-images/android/11111111-1111-1111-1111-111111111111/${post}/${"0".repeat(64)}.jpg`;
+    const handle=await setupWatcherPage(browser,baseUrl,{listingsPayload:()=>({listings:[
+      makeListing({listingId:NORMAL_ID,title:"Oferta z Facebooka",price:null,area:null,rooms:2,city:null,district:null,street:null,description:null,pricePerSqm:null,pricePerM2:null,images:[photo("2341358629602565")],groupName:"Grupa pierwsza",sourcePostUrl:"https://www.facebook.com/groups/first/posts/2341358629602565/"}),
+      makeListing({listingId:secondId,title:"Oferta z Facebooka",price:null,area:null,rooms:2,city:null,district:null,street:null,description:null,pricePerSqm:null,pricePerM2:null,images:[photo("2246154092973037")],groupName:"Grupa druga",sourcePostUrl:"https://www.facebook.com/groups/second/posts/2246154092973037/"})
+    ]})});
+    const {page}=handle;t.after(()=>Promise.all([page.close(),handle.context.close()]));
+    await page.setViewportSize({width:390,height:844});
+    const card=page.locator(`#facebook-inbox-${NORMAL_ID}`);await card.waitFor();
+    assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(),1);
+    await card.getByText("Możliwe duplikaty: 1 · Powiązane publikacje (2)",{exact:true}).click();
+    assert.equal(await card.getByText("Za mało danych do oceny — brak ceny lub metrażu",{exact:true}).count(),1);
+    assert.equal(await card.getByText(/^Ocena inwestycji \\d/u).count(),0);
+    assert.ok(await card.locator('a[href="https://www.facebook.com/groups/second/posts/2246154092973037/"]').count());
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    await page.setViewportSize({width:1280,height:900});
+    await page.getByLabel("Grupa",{exact:true}).filter({visible:true}).selectOption("Grupa druga");
+    await page.locator(`#facebook-inbox-${secondId}`).waitFor();
+    assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(),1);
+    assert.equal(await page.getByText("Możliwe duplikaty:",{exact:false}).count(),0);
+    assertNoUnexpectedNoise(handle);
+  });
+
   await t.test("I: refresh and returning online update grouped counters without restarting the phone app",async(t)=>{
     let records=[makeListing({listingId:NORMAL_ID})];
     const handle=await setupWatcherPage(browser,baseUrl,{listingsPayload:()=>({listings:records})});

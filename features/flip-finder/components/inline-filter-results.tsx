@@ -1135,7 +1135,7 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
           <div className="mt-3">
             <p className="text-2xl font-bold leading-none tracking-tight text-foreground sm:text-3xl">{currency(result.price)}</p>
             <p className="type-financial-standard mt-1 text-sm font-semibold text-gold tabular-nums">{currencyPerSqm(result.pricePerSqm)}</p>
-            <span className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/[0.09] px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300"><span className="size-1.5 rounded-full bg-emerald-500 shadow-[0_0_0_3px] shadow-emerald-500/15" />Ocena inwestycji {flipScore.score} · {flipScore.label}</span>
+            {variant === "watcher" && !(result.price != null && result.price > 0 && result.area != null && result.area > 0) ? <span className="mt-2 inline-flex rounded-full border border-border px-2.5 py-1 text-xs font-semibold text-muted-foreground">Za mało danych do oceny — brak ceny lub metrażu</span> : <span className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/[0.09] px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300"><span className="size-1.5 rounded-full bg-emerald-500 shadow-[0_0_0_3px] shadow-emerald-500/15" />Ocena inwestycji {flipScore.score} · {flipScore.label}</span>}
           </div>
           <OpportunitySummary result={result} />
           <div className="mt-4 space-y-2.5 text-sm text-muted-foreground">
