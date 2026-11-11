@@ -24,3 +24,10 @@ test("reported 38.4m² one-room snapshots without price or location enter visual
  assert.equal(visualCandidates([a,b]).length,2);assert.equal(possibleVisualRepost(a,b),true);assert.equal(groupFacebookReposts([a,b]).length,1);
  assert.equal(possibleVisualRepost(a,{...b,photoFingerprints:[]}),false);assert.equal(possibleVisualRepost(a,{...b,area:37.4}),false);assert.equal(possibleVisualRepost(a,{...b,rooms:2}),false);assert.equal(possibleVisualRepost(a,{...b,workflowStatus:"crm"}),false);
 });
+
+test("priced 33.5m² snapshots without room counts can reach visual matching",()=>{
+ const a=item("123456","a".repeat(64),{area:33.5,price:215000,rooms:null,street:null,photoFingerprints:[proof("a".repeat(64))]}),b=item("234567","b".repeat(64),{area:33.5,price:215000,rooms:null,street:null,photoFingerprints:[proof("b".repeat(64))]});
+ assert.equal(visualCandidates([a,b]).length,2);assert.equal(groupFacebookReposts([a,b]).length,1);
+ assert.equal(possibleVisualRepost(a,{...b,price:220000}),false);assert.equal(possibleVisualRepost(a,{...b,photoFingerprints:[]}),false);
+ assert.equal(possibleVisualRepost({...a,rooms:2},{...b,rooms:3}),false);assert.equal(possibleVisualRepost({...a,price:null},{...b,price:null}),false);
+});
