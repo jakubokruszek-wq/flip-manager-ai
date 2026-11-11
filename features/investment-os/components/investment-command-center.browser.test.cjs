@@ -94,7 +94,7 @@ test("Finder prioritizes offers and keeps the modal as a quick preview with a ca
   });
 
   await page.goto(`${baseUrl}/flip-finder`, { waitUntil: "domcontentloaded" });
-  assert.ok(await page.getByRole("link", { name: "Pulpit" }).first().isVisible(), "the shared navigation title must be localized");
+  assert.ok(await page.getByRole("link", { name: "Inwestycje" }).first().isVisible(), "the shared navigation title must be localized");
   const listingCard = page.getByRole("button", { name: /Łódź · 2 pokoje · 45 m²/ }).first();
   await listingCard.waitFor({ state: "visible", timeout: 20_000 });
   assert.ok(await page.getByRole("button", { name: "Ustawienia filtra" }).first().isVisible(), "filter settings stay one click away");

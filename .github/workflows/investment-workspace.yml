@@ -1,0 +1,39 @@
+name: Investment workspace lifecycle
+on:
+  push:
+    branches: [codex/investment-workspace]
+  pull_request:
+    paths: ['features/property-workspace/**', 'app/api/properties/**', 'app/(app)/investments/**', 'supabase/migrations/*property_workspaces.sql', '.github/workflows/investment-workspace.yml']
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/property-workspace/model.test.ts features/property-workspace/database.test.ts config/navigation.test.ts features/properties/property-update.test.ts features/properties/server/property-delete-route.test.ts
+      - run: npx tsc --noEmit --incremental false
+      - run: npx eslint features/property-workspace app/api/properties config/navigation.ts components/layout/mobile-bottom-nav.tsx
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: node --test features/property-workspace/workspace.browser.test.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: investment-browser-screenshots
+          path: test-artifacts/

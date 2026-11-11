@@ -14,7 +14,8 @@ export async function PATCH(request: Request, { params }: Context) {
   const { id } = await params;
 
   try {
-    const values = parsePropertyUpdate(await request.json());
+    const body = await request.json();
+    const values = parsePropertyUpdate(body);
     const supabase = createAdminClient();
     const { data: existing, error: lookupError } = await supabase
       .from("properties")
@@ -28,9 +29,24 @@ export async function PATCH(request: Request, { params }: Context) {
     }
     if (!existing) return Response.json({ message: "Nie znaleziono nieruchomości." }, { status: 404 });
 
+    const columns = propertyUpdateColumns(values);
+    const mapping: Record<string, keyof typeof columns> = { totalFloors: "total_floors", description: "notes", originalUrl: "original_url", renovationCost: "renovation_cost", expectedSalePrice: "expected_sale_price" };
+    let updates: Partial<typeof columns> = columns;
+    if (Array.isArray(body.changedFields)) {
+      const selected = new Set(body.changedFields.map((key: string) => mapping[key] ?? key));
+      updates = Object.fromEntries(Object.entries(columns).filter(([key]) => selected.has(key)));
+    }
+    const workspace = await supabase.from("property_workspaces").select("owner_id").eq("property_id", id).maybeSingle();
+    if (workspace.error) return Response.json({ message: "Nie udało się sprawdzić karty nieruchomości." }, { status: 500 });
+    if (workspace.data) {
+      const actor = await requireOperator();
+      if (workspace.data.owner_id !== actor.id) return Response.json({ message: "Brak dostępu do karty." }, { status: 403 });
+      delete updates.status; delete updates.renovation_cost; delete updates.expected_sale_price; delete updates.profit; delete updates.roi;
+    }
+    if (!Object.keys(updates).length) return Response.json({ id });
     const { data, error } = await supabase
       .from("properties")
-      .update(propertyUpdateColumns(values))
+      .update(updates)
       .eq("id", id)
       .select("id")
       .maybeSingle();

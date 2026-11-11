@@ -43,3 +43,6 @@ yarn-error.log*
 next-env.d.ts
 
 .vercel
+
+# OCR assets generated from the locked npm packages
+/public/ocr/

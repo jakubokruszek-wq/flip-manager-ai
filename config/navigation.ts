@@ -3,8 +3,8 @@ import type { FeatureId } from "@/types";
 import type { NavItem, NavSection } from "@/types/navigation";
 
 export const workingNavigationIds = [
-  "dashboard",
   "properties",
+  "dashboard",
   "deals",
   "facebookWatcher",
   "priceRadar",
@@ -17,17 +17,9 @@ export const hiddenNavigationIds = modules
 
 export const workingNavigationItems: NavItem[] = workingNavigationIds.map(toNavigationItem);
 
+export const mobileNavigationItems = workingNavigationItems.filter(item => item.href !== "/settings");
 export const navigationSections: NavSection[] = [
-  { items: [toNavigationItem("dashboard")] },
-  {
-    label: "Praca",
-    items: [
-      toNavigationItem("properties"),
-      toNavigationItem("deals"),
-      toNavigationItem("facebookWatcher"),
-      toNavigationItem("priceRadar"),
-    ],
-  },
+  { label: "Praca", items: mobileNavigationItems },
   { label: "System", items: [toNavigationItem("settings")] },
 ];
 
