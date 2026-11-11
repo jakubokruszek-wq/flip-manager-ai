@@ -1,0 +1,20 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import test,{mock} from "node:test";
+class OperatorAuthorizationError extends Error { status=401; }
+let authorized=true;let rows:Array<{id:string;images:string[]}> = [];const queries:string[]=[];
+mock.module("@/features/auth/operator",{namedExports:{OperatorAuthorizationError,requireOperator:async()=>{if(!authorized)throw new OperatorAuthorizationError();return{id:"operator"};},operatorAuthorizationResponse:()=>Response.json({error:"auth"},{status:401})}});
+mock.module("next/cache.js",{namedExports:{unstable_cache:(fn:unknown)=>fn}});
+mock.module("@/features/facebook-watcher/supabase-admin",{namedExports:{createFacebookWatcherAdminClient:()=>({from:(table:string)=>{queries.push(table);return{select:()=>({eq:(key:string,value:string)=>{queries.push(`${key}:${value}`);return{in:(_key:string,ids:string[])=>Promise.resolve({data:rows.filter(r=>ids.includes(r.id)),error:null})};}})};}})}});
+mock.module("@/features/facebook-watcher/server/image-fingerprint",{namedExports:{fingerprintImage:async(_b:Uint8Array,assetHash:string)=>({assetHash,dhash:"1234567890abcdef",ahash:"1234567890abcdef",mean:[100,120,130],detail:40,aspect:1.3})}});
+const {POST}=await import("../../app/api/facebook-watcher/duplicates/photos/route.ts");
+const ID="11111111-1111-4111-8111-111111111111";
+process.env.NEXT_PUBLIC_SUPABASE_URL="https://project.supabase.co";
+const request=(body:unknown)=>new Request("https://app.test/api/facebook-watcher/duplicates/photos",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+test("photo analysis requires an authenticated operator",async()=>{authorized=false;assert.equal((await POST(request({ids:[ID]}))).status,401);authorized=true;});
+test("invalid and oversized bodies never fetch images",async()=>{for(const body of [{ids:[]},{ids:["not-a-uuid"]},{ids:Array(5).fill(ID)},{ids:[ID],padding:"x".repeat(3000)}])assert.equal((await POST(request(body))).status,400);});
+test("only the configured public uploader origin can be downloaded and exact bytes are verified",async(t)=>{const bytes=Buffer.from("jpeg-test"),hash=createHash("sha256").update(bytes).digest("hex");const path=`/storage/v1/object/public/facebook-watcher-images/android/${ID}/123456/${hash}.jpg`;let calls=0;
+ t.mock.method(globalThis,"fetch",async(input:unknown,init?:RequestInit)=>{calls++;assert.equal(String(input),`https://project.supabase.co${path}`);assert.equal(init?.redirect,"error");return new Response(bytes,{status:200});});
+ rows=[{id:ID,images:[`https://evil.test${path}`,`https://project.supabase.co${path}`]}];const r=await POST(request({ids:[ID]}));assert.equal(r.status,200);const b=await r.json();assert.equal(calls,1);assert.equal(b.results[0].fingerprints[0].assetHash,hash);assert.ok(queries.includes("source:facebook"));assert.match(r.headers.get("cache-control")!,/private, no-store/);
+});
+test("mismatched stored bytes cannot become identity evidence",async(t)=>{t.mock.method(globalThis,"fetch",async()=>new Response("different bytes"));rows=[{id:ID,images:[`https://project.supabase.co/storage/v1/object/public/facebook-watcher-images/android/${ID}/123456/${"a".repeat(64)}.jpg`]}];const r=await POST(request({ids:[ID]}));assert.equal(r.status,200);assert.deepEqual((await r.json()).results[0].fingerprints,[]);});

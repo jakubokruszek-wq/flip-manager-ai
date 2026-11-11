@@ -208,7 +208,7 @@ async function collectGeometry(page) {
  * nothing extra once contexts are already isolated, and would only slow the
  * suite down further).
  */
-async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode = "success", listingsPayload = freshListingsPayload } = {}) {
+async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode = "success", listingsPayload = freshListingsPayload, photoResults = null } = {}) {
   const context = await browser.newContext();
   const page = await context.newPage();
   await context.addCookies([{ name: "sb-127-auth-token", value: JSON.stringify(operatorSession), url: baseUrl, httpOnly: true, sameSite: "Lax" }]);
@@ -265,6 +265,7 @@ async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode 
   await page.route("**/api/alerts", route => route.fulfill({contentType:"application/json",body:JSON.stringify({alerts:[]}),status:200}));
   await page.route("**/api/facebook-watcher/**", async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname === "/api/facebook-watcher/duplicates/photos" && photoResults) return route.fulfill({status:200,contentType:"application/json",body:JSON.stringify({results:photoResults(JSON.parse(route.request().postData()||"{}").ids)})});
     if (url.pathname === "/api/facebook-watcher/listings" && route.request().method() === "GET") {
       listingsRequestCount += 1;
       resolveListingsRequest();
@@ -286,7 +287,6 @@ async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode 
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
   });
 
-  await page.route("https://project.supabase.co/**", route => route.fulfill({ status:200, contentType:"image/png", body:Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=","base64") }));
   await page.goto(`${baseUrl}/facebook-watcher`, { waitUntil: "domcontentloaded" });
   // Regression guard for the exact race this rearchitecture fixes: the
   // listings fetch for THIS page's own navigation must be explicitly
@@ -398,7 +398,7 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
   // Probe the real build-info route on this exact child-server port. A 404,
   // 500, HTML error page, or malformed body is not server readiness.
   await waitForServer(`http://127.0.0.1:${port}/api/build-info`, 90_000);
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH });
   t.after(() => browser.close());
   const baseUrl = `http://127.0.0.1:${port}`;
 
@@ -780,31 +780,6 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     assertNoUnexpectedNoise(handle);
   });
 
-
-  await t.test("N: same bathroom photo without price or area groups reversibly and group filters still find the second post",async(t)=>{
-    const secondId="00000000-0000-4000-8000-000000000006";
-    const photo=(post)=>`https://project.supabase.co/storage/v1/object/public/facebook-watcher-images/android/11111111-1111-1111-1111-111111111111/${post}/${"0".repeat(64)}.jpg`;
-    const handle=await setupWatcherPage(browser,baseUrl,{listingsPayload:()=>({listings:[
-      makeListing({listingId:NORMAL_ID,title:"Oferta z Facebooka",price:null,area:null,rooms:2,city:null,district:null,street:null,description:null,pricePerSqm:null,pricePerM2:null,images:[photo("2341358629602565")],groupName:"Grupa pierwsza",sourcePostUrl:"https://www.facebook.com/groups/first/posts/2341358629602565/"}),
-      makeListing({listingId:secondId,title:"Oferta z Facebooka",price:null,area:null,rooms:2,city:null,district:null,street:null,description:null,pricePerSqm:null,pricePerM2:null,images:[photo("2246154092973037")],groupName:"Grupa druga",sourcePostUrl:"https://www.facebook.com/groups/second/posts/2246154092973037/"})
-    ]})});
-    const {page}=handle;t.after(()=>Promise.all([page.close(),handle.context.close()]));
-    await page.setViewportSize({width:390,height:844});
-    const card=page.locator(`#facebook-inbox-${NORMAL_ID}`);await card.waitFor();
-    assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(),1);
-    await card.getByText("Możliwe duplikaty: 1 · Powiązane publikacje (2)",{exact:true}).click();
-    assert.equal(await card.getByText("Za mało danych do oceny — brak ceny lub metrażu",{exact:true}).count(),1);
-    assert.equal(await card.getByText(/^Ocena inwestycji \\d/u).count(),0);
-    assert.ok(await card.locator('a[href="https://www.facebook.com/groups/second/posts/2246154092973037/"]').count());
-    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
-    await page.setViewportSize({width:1280,height:900});
-    await page.getByLabel("Grupa",{exact:true}).filter({visible:true}).selectOption("Grupa druga");
-    await page.locator(`#facebook-inbox-${secondId}`).waitFor();
-    assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(),1);
-    assert.equal(await page.getByText("Możliwe duplikaty:",{exact:false}).count(),0);
-    assertNoUnexpectedNoise(handle);
-  });
-
   await t.test("I: refresh and returning online update grouped counters without restarting the phone app",async(t)=>{
     let records=[makeListing({listingId:NORMAL_ID})];
     const handle=await setupWatcherPage(browser,baseUrl,{listingsPayload:()=>({listings:records})});
@@ -846,35 +821,68 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     await tabs.getByRole("button",{name:/^Odrzucone/}).click();await card.waitFor({state:"visible"});
     await card.getByRole("button",{name:"Przywróć",exact:true}).click();await card.waitFor({state:"hidden"});
     await tabs.getByRole("button",{name:/^Wszystkie/}).click();await card.waitFor({state:"visible"});
-    assert.deepEqual(handle.patchRequests[1].body,{status:"review"});
-    assertNoUnexpectedNoise(handle,{expectedPatchFailures:0});
-  });
+    assert.deepEqual(handle.patchRequests[1].body,{status:"re…5641 tokens truncated…</div><h1 className="font-heading text-3xl font-bold tracking-tight">Facebook Watcher / Inbox</h1><p className="mt-2 max-w-2xl text-sm text-muted-foreground">Jedno miejsce do przeglądania, analizowania i przekazywania ofert Facebooka do CRM.</p></div><div className="flex flex-wrap gap-2"><Button nativeButton={false} variant="outline" render={<Link href="/facebook-watcher/groups"/>} className="min-h-11">Obserwowane grupy</Button><Button nativeButton={false} render={<Link href="/properties/new"/>} className="min-h-11"><Plus className="size-4"/>Dodaj post z Facebooka</Button><Button disabled={historyClearing} variant="outline" className="min-h-11" onClick={()=>void clearWatcherHistory()}>{historyClearing?"Czyszczenie…":"Wyczyść historię Watchera"}</Button></div></header>
+    <section className="flex flex-wrap items-end gap-3 rounded-xl border p-3" aria-label="Czyszczenie według daty zapisu">
+      <label className="text-sm">Usuń oferty zapisane przed<Input aria-label="Data zapisu oferty" type="date" value={cleanupDate} max={new Date().toISOString().slice(0,10)} onChange={event=>setCleanupDate(event.target.value)} disabled={historyClearing}/></label>
+      <Button variant="outline" disabled={!cleanupDate||historyClearing} onClick={()=>void cleanupSavedBefore()}>Podgląd i usuń starsze</Button>
+      <p className="w-full text-xs text-muted-foreground">Wiek według daty zapisania w bazie, nie publikacji ani ostatniego odczytu. Najpierw zobaczysz liczbę ofert. CRM i Deal Room pozostają chronione.</p>
+    </section>
+    <nav aria-label="Status ofert Facebook" className="-mx-4 flex snap-x gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0">{TABS.map(item=><button aria-pressed={tab===item.value} className={`min-h-11 shrink-0 snap-start rounded-xl border px-4 text-sm font-semibold ${tab===item.value?"border-gold/40 bg-gold/15 text-gold":"border-border bg-card text-muted-foreground hover:text-foreground"}`} key={item.value} onClick={()=>setTab(item.value)}>{item.label}<span className="ml-2 rounded-full bg-black/15 px-2 py-0.5 text-xs">{item.value==="all"?groupedListings.filter(value=>value.workflowStatus!=="rejected").length:groupedListings.filter(value=>value.workflowStatus===item.value).length}</span></button>)}</nav>
+    <section className="min-w-0 space-y-4" aria-label="Wyszukiwanie ofert Facebook"><div className="min-w-0 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_240px_auto]"><label className="relative min-w-0"><Search className="pointer-events-none absolute left-3 top-3.5 size-4 text-muted-foreground"/><Input aria-label="Szukaj ofert Facebook" className="h-11 pl-10" placeholder="Szukaj: tytuł, opis, ulica, osiedle, grupa" value={filters.query} onChange={event=>setFilters(current=>({...current,query:event.target.value}))}/></label><select aria-label="Sortowanie" className="h-11 min-w-0 w-full rounded-xl border border-input bg-background px-3 text-sm" value={sort} onChange={event=>setSort(event.target.value as FacebookInboxSort)}><option value="newest">Najnowsze</option><option value="opportunity">Najwyższy Opportunity Score</option><option value="flip">Najwyższy Flip Score</option><option value="price_per_sqm">Najniższa cena/m²</option><option value="price">Najniższa cena</option><option value="profit">Największy potencjalny zysk</option></select><details className="relative min-w-0 md:hidden"><summary className="flex min-h-11 cursor-pointer list-none items-center justify-center gap-2 rounded-xl border bg-card px-4 text-sm font-semibold"><Filter className="size-4"/>Filtry</summary><div className="mt-2 min-w-0 max-w-full rounded-xl border bg-card p-4"><FilterControls filters={filters} listings={listings} setFilters={setFilters}/></div></details></div><div className="hidden rounded-2xl border border-border/70 bg-card p-4 md:block"><FilterControls filters={filters} listings={listings} setFilters={setFilters}/></div>
+      <div className="flex min-w-0 flex-wrap items-center gap-3">
+        <Button type="button" disabled={Boolean(filterError)} onClick={saveFilters}>Zapisz filtry</Button>
+        <p className="text-xs text-muted-foreground">Zapis na tym urządzeniu. Po powrocie i odświeżeniu przywracamy zapisany zakres.</p>
+        <Link className="text-sm underline" href="/flip-finder/filters">Zarządzaj filtrami skanowania w Finderze</Link>
+      </div>
+      {filterError?<p role="alert" className="text-sm text-destructive">{filterError}</p>:null}
+      <div className="text-sm text-muted-foreground">Wyniki: <strong className="text-foreground">{visible.length}</strong></div>
+      {visible.some(item=>(item.relatedPosts?.length??0)>1)?<p className="text-xs text-muted-foreground">Po zgrupowaniu: {visible.length} kart · {visible.reduce((total,item)=>total+(item.relatedPosts?.length??1),0)} publikacji. „Możliwe duplikaty” oznaczają zgodne parametry bez potwierdzenia zdjęciem lub pełnym opisem. Każdy post pozostaje dostępny w „Powiązane publikacje”.</p>:null}
+      {error?<p className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</p>:null}{loading?<p className="py-12 text-center text-sm text-muted-foreground">Ładowanie Inboxu…</p>:null}
+      {!loading&&visible.length===0?<div className="rounded-2xl border border-dashed p-10 text-center text-muted-foreground">Brak ofert spełniających wybrane kryteria.</div>:null}
+      {photoComparisonProgress?<p role="status" className="text-xs text-muted-foreground">{photoComparisonProgress}</p>:null}<div className="grid gap-5 xl:grid-cols-2">{visible.map(item=><InboxItem addToCrm={addToCrm} registerAnalysisButton={registerAnalysisButton} busy={busyId===item.listingId} item={item} key={item.listingId} onAnalyze={openAnalysis} onRepairGallery={repairGallery} onRestoreToFinder={restoreToFinder} updateWorkflow={guardedUpdateWorkflow}/>)}</div>
+    </section>
+    {toast?<div aria-live="polite" className={`fixed inset-x-0 bottom-5 z-50 mx-auto w-fit max-w-[calc(100%-2rem)] rounded-xl border px-4 py-3 text-sm font-medium shadow-xl ${toast.tone==="success"?"border-emerald-500/30 bg-emerald-500/10 text-emerald-600":"border-destructive/30 bg-destructive/10 text-destructive"}`}>{toast.text}</div>:null}
+  </main>;
+}
 
-  await t.test("L: search, group filter and CRM tab can select a non-leading repost", async (t) => {
-    const secondId = "00000000-0000-4000-8000-000000000006";
-    const handle = await setupWatcherPage(browser, baseUrl, { listingsPayload: () => ({ listings: [
-      makeListing({ listingId: NORMAL_ID, groupName: "Grupa A", description: "Opis pierwszej publikacji", workflowStatus: "new", confirmedDuplicateGroupId: "search-pair", sourcePostUrl: "https://www.facebook.com/groups/group-a/posts/111111/" }),
-      makeListing({ listingId: secondId, groupName: "Grupa B", description: "Unikalny opis loggia", workflowStatus: "crm", confirmedDuplicateGroupId: "search-pair", sourcePostUrl: "https://www.facebook.com/groups/group-b/posts/222222/" }),
-    ] }) });
-    const { page } = handle;
-    t.after(() => Promise.all([page.close(), handle.context.close()]));
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await page.locator(`#facebook-inbox-${NORMAL_ID}`).waitFor({ state: "visible" });
-    assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(), 1);
-    const search = page.getByRole("textbox", { name: "Szukaj ofert Facebook" });
-    await search.fill("loggia");
-    await page.locator(`#facebook-inbox-${secondId}`).waitFor({ state: "visible" });
-    assert.equal(await page.locator(`#facebook-inbox-${NORMAL_ID}`).count(), 0);
-    await search.fill("");
-    const group = page.getByLabel("Grupa", { exact: true }).filter({ visible: true });
-    await group.selectOption("Grupa B");
-    await page.locator(`#facebook-inbox-${secondId}`).waitFor({ state: "visible" });
-    await group.selectOption("");
-    await page.getByRole("navigation", { name: "Status ofert Facebook" }).getByRole("button", { name: /^Dodane do CRM/ }).click();
-    await page.locator(`#facebook-inbox-${secondId}`).waitFor({ state: "visible" });
-    assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(), 1);
-    assert.equal(handle.patchRequests.length, 0, "search must not mutate any workflow");
-    assertNoUnexpectedNoise(handle);
-  });
+function InboxItem({item,busy,updateWorkflow,addToCrm,onAnalyze,onRepairGallery,onRestoreToFinder,registerAnalysisButton}:{item:FacebookWatcherListing;busy:boolean;updateWorkflow:(item:FacebookWatcherListing,change:{status?:FacebookWorkflowStatus;markRead?:boolean;crmPropertyId?:string})=>Promise<void>;addToCrm:(item:FacebookWatcherListing)=>Promise<void>;onAnalyze:(id:string)=>void;onRepairGallery:(item:FacebookWatcherListing)=>Promise<void>;onRestoreToFinder:(item:FacebookWatcherListing)=>Promise<void>;registerAnalysisButton:(id:string,button:HTMLButtonElement|null)=>void}) { const result=toFilterResult(item); const listingUrl=resolveListingUrl({source:"facebook",sourcePostUrl:item.sourcePostUrl,originalUrl:item.originalUrl}); const suspect=priceSuspect(item); const priceExplanation=item.priceQuality?facebookPriceReviewExplanation(item.priceQuality,item.price):null; const finderStatus=item.finderStatus??"HISTORICAL"; const presentation=resolveListingStatusPresentation({finderStatus,lifecycleStatus:facebookLifecycleStatus(item.lifecycleStatus)}); const currentLabel=item.currentFilterDecision&&item.currentFilterDecision!==finderStatus?` · teraz ${item.currentFilterDecision}`:""; return <article className="space-y-2 overflow-hidden rounded-[1.125rem] !border-2 !border-gold/55 transition-colors duration-300 hover:!border-gold/80 focus-within:!border-gold/80" id={`facebook-inbox-${item.listingId}`}><div className="bg-card px-3 py-3"><div className="flex flex-wrap items-center gap-2"><WorkflowBadge status={item.workflowStatus}/>{item.highPriority?<Badge text="🔥 Wysoki priorytet" tone="fire"/>:null}{suspect?<Badge text="Cena do weryfikacji"/>:null}{item.locationState==="AMBIGUOUS"||item.locationState==="MISSING"?<Badge text="Niepewna lokalizacja"/>:null}{item.availability&&item.availability!=="ACTIVE"?<Badge text={item.availability==="SOLD"?"Sprzedane":item.availability==="RESERVED"?"Zarezerwowane":"Nieaktualne"}/>:null}{item.freshness==="STALE"?<Badge text="Nieaktualny wpis"/>:null}{item.sellerType==="private"?<Badge text="Prywatny właściciel"/>:null}{item.condition==="renovation"?<Badge text="Do remontu"/>:null}{item.flags.filter(flag=>/bez pośred|pilne/i.test(flag)).slice(0,2).map(flag=><Badge key={flag} text={flag}/>)}</div>{priceExplanation?<p className="mt-2 text-xs text-muted-foreground">{priceExplanation}</p>:null}<div className="mt-3 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2"><span>Publikacja: {dateTime(item.publishedAt)}</span><span>Import: {dateTime(item.importedAt)}</span><span>Grupa: {item.groupName??"Facebook"}</span><span>{presentation.mode==="distinct"?<>Finder: <strong className="text-foreground">{presentation.finderLabel}</strong>{currentLabel} · cykl życia: <strong className="text-foreground">{presentation.lifecycleLabel}</strong></>:<>Status: <strong className="text-foreground">{presentation.label}</strong>{currentLabel}</>}</span><span>Opportunity Score: <strong className="text-gold">{item.opportunityScore}</strong> · Flip Score: <strong className="text-foreground">{item.flipScore}</strong></span></div>{item.crossSourceLinks.length?<div className="mt-2 flex flex-wrap gap-2">{item.crossSourceLinks.map(link=><a className="text-xs font-semibold text-sky-400 hover:underline" href={link.url} key={link.url} rel="noopener noreferrer" target="_blank">Znaleziona też na {sourceName(link.source)} ↗</a>)}</div>:null}<div className="mt-3 flex flex-wrap gap-2"><Action buttonRef={button=>registerAnalysisButton(item.listingId,button)} disabled={busy} label="Analizuj" onClick={()=>onAnalyze(item.listingId)}/><Action disabled={busy} label="Napraw galerię" onClick={()=>void onRepairGallery(item)}/>{item.lifecycleStatus==="ARCHIVED"||item.lifecycleStatus==="STALE"?<Action disabled={busy} label="Przywróć do Flip Finder" onClick={()=>void onRestoreToFinder(item)}/>:null}<Action disabled={busy} label="Interesująca" onClick={()=>void updateWorkflow(item,{status:"interesting"})}/><Action disabled={busy} label="Dodaj do CRM" onClick={()=>void addToCrm(item)}/>{item.workflowStatus==="rejected"?<Action disabled={busy} icon={<Undo2 className="size-3.5"/>} label="Przywróć" onClick={()=>void updateWorkflow(item,{status:"review"})}/>:<Action disabled={busy} icon={<XCircle className="size-3.5"/>} label="Odrzuć" onClick={()=>void updateWorkflow(item,{status:"rejected"})}/>} {listingUrl?<a className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold" href={listingUrl} rel="noopener noreferrer" target="_blank"><ExternalLink className="size-3.5"/>Facebook</a>:<button className="min-h-11 shrink-0 rounded-lg border px-3 text-xs font-semibold text-muted-foreground" disabled type="button">Brak prawidłowego linku do ogłoszenia</button>}</div></div>{item.relatedPosts&&item.relatedPosts.length>1?<details className="min-w-0 px-4 pb-3"><summary className="cursor-pointer text-sm">{item.relatedPostMatch === "possible" ? "Możliwe duplikaty" : "Duplikaty"}: {item.relatedPosts.length - 1} · Powiązane publikacje ({item.relatedPosts.length})</summary><ul className="mt-2 space-y-2 text-sm">{item.relatedPosts.map((post,index)=><li key={post.listingId}>{post.url?<a className="break-words underline" href={post.url} target="_blank" rel="noopener noreferrer">{post.groupName??`Publikacja ${index+1}`}</a>:"Brak linku do posta"}</li>)}</ul></details>:null}<ExpandableListingCard averagePricePerSqm={null} hideLifecycleBadge={presentation.mode!=="distinct"} marketType={item.marketType} onCrmImported={propertyId=>void updateWorkflow(item,{status:"crm",crmPropertyId:propertyId})} onOpen={()=>{if(!item.readAt)void updateWorkflow(item,{markRead:true});}} result={result} variant="watcher"/></article>; }
 
-});
+function FilterControls({filters,listings,setFilters}:{filters:FacebookInboxFilters;listings:FacebookWatcherListing[];setFilters:React.Dispatch<React.SetStateAction<FacebookInboxFilters>>}) {
+  const update=<K extends keyof FacebookInboxFilters>(key:K,value:FacebookInboxFilters[K])=>setFilters(current=>({...current,[key]:value}));
+  const options=(key:"neighborhood"|"district"|"groupName")=>[...new Set([...listings.map(item=>item[key]),key==="groupName"?filters.group:filters[key]].filter((value):value is string=>Boolean(value)))].sort((a,b)=>a.localeCompare(b,"pl"));
+  return <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+    <Select label="Osiedle" value={filters.neighborhood} onChange={value=>update("neighborhood",value)} options={options("neighborhood")}/>
+    <Select label="Dzielnica" value={filters.district} onChange={value=>update("district",value)} options={options("district")}/>
+    <Select label="Grupa" value={filters.group} onChange={value=>update("group",value)} options={options("groupName")}/>
+    <NumberFilter label="Cena minimalna (PLN)" value={filters.minPrice??null} onChange={value=>update("minPrice",value)}/>
+    <NumberFilter label="Cena maksymalna (PLN)" value={filters.maxPrice} onChange={value=>update("maxPrice",value)}/>
+    <NumberFilter label="Powierzchnia min. (m²)" value={filters.minArea??null} onChange={value=>update("minArea",value)}/>
+    <NumberFilter label="Powierzchnia maks. (m²)" value={filters.maxArea??null} onChange={value=>update("maxArea",value)}/>
+    <NumberFilter label="Maks. cena za m² (PLN)" value={filters.maxPricePerSqm} onChange={value=>update("maxPricePerSqm",value)}/>
+    <p className="text-xs text-muted-foreground">Przy limicie zł/m² oferty bez ceny za m² pozostają widoczne.</p>
+    <fieldset className="min-w-0"><legend className="mb-1 text-xs text-muted-foreground">Pokoje</legend><div className="flex flex-wrap gap-2">{[1,2,3,4,5,6].map(room=><label key={room} className="flex min-h-11 items-center gap-1 rounded-lg border px-2 text-sm"><input type="checkbox" checked={filters.roomOptions?.includes(room)??false} onChange={()=>setFilters(current=>({...current,rooms:null,roomOptions:current.roomOptions?.includes(room)?current.roomOptions.filter(value=>value!==room):[...(current.roomOptions??[]),room]}))}/>{room}</label>)}</div></fieldset>
+    <NumberFilter label="Piętro minimalne" value={filters.minFloor??null} onChange={value=>update("minFloor",value)}/>
+    <NumberFilter label="Piętro maksymalne" value={filters.maxFloor??null} onChange={value=>update("maxFloor",value)}/>
+    <label className="flex min-w-0 items-center gap-2 text-sm"><input type="checkbox" checked={filters.excludeGroundFloor??false} onChange={event=>update("excludeGroundFloor",event.target.checked)}/>Wyklucz parter</label>
+    <label className="flex min-w-0 items-center gap-2 text-sm"><input type="checkbox" checked={filters.excludeTopFloor??false} onChange={event=>update("excludeTopFloor",event.target.checked)}/>Wyklucz ostatnie piętro</label>
+    <NumberFilter label="Minimalny Flip Score" value={filters.minFlipScore} onChange={value=>update("minFlipScore",value)}/>
+    <NumberFilter label="Minimalny zysk (PLN)" value={filters.minProfit??null} onChange={value=>update("minProfit",value)}/>
+    <NumberFilter label="Opportunity min." value={filters.minOpportunityScore} onChange={value=>update("minOpportunityScore",value)}/>
+    <Select label="Rynek" value={filters.marketType==="all"?"":filters.marketType??""} onChange={value=>update("marketType",value?value as "primary"|"secondary":"all")} options={["primary","secondary"]} labels={{primary:"Pierwotny",secondary:"Wtórny"}}/>
+    <Select label="Sprzedający" value={filters.sellerType==="all"?"":filters.sellerType} onChange={value=>update("sellerType",value?value as "private"|"agency":"all")} options={["private","agency"]} labels={{private:"Prywatny",agency:"Pośrednik"}}/>
+    <Select label="Stan" value={filters.condition==="all"?"":filters.condition} onChange={value=>update("condition",value?value as "renovation"|"ready":"all")} options={["renovation","ready"]} labels={{renovation:"Do remontu",ready:"Do wejścia"}}/>
+    <Select label="Data publikacji" value={filters.publishedDays?.toString()??""} onChange={value=>update("publishedDays",value?Number(value):null)} options={["1","7","30","90"]} labels={{"1":"24 godziny","7":"7 dni","30":"30 dni","90":"90 dni"}}/>
+    <button type="button" className="min-h-11 min-w-0 self-end rounded-xl border px-3 text-sm font-semibold" onClick={()=>setFilters({...EMPTY_FACEBOOK_INBOX_FILTERS,roomOptions:[],query:filters.query})}>Wyczyść filtry</button>
+  </div>;
+}
+function Counter({label,value,tone}:{label:string;value:number;tone?:"fire"}){return <div className={`ui-card p-4 ${tone==="fire"?"border-orange-500/25 bg-orange-500/[0.06]":""}`}><p className="text-xs text-muted-foreground">{label}</p><p className={`mt-1 font-mono text-2xl font-bold ${tone==="fire"?"text-orange-400":""}`}>{value}</p></div>}
+function WorkflowBadge({status}:{status:FacebookWorkflowStatus}){return <Badge text={STATUS_LABELS[status]} tone={status==="interesting"?"gold":status==="rejected"?"fire":undefined}/>}
+function Badge({text,tone}:{text:string;tone?:"gold"|"fire"}){return <span className={`rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${tone==="gold"?"border-gold/30 bg-gold/10 text-gold":tone==="fire"?"border-orange-500/30 bg-orange-500/10 text-orange-400":"border-border bg-muted text-muted-foreground"}`}>{text}</span>}
+function Action({label,onClick,disabled,icon,buttonRef}:{label:string;onClick:()=>void;disabled:boolean;icon?:React.ReactNode;buttonRef?: (element:HTMLButtonElement|null)=>void}){return <button className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold hover:border-gold/40 hover:text-gold disabled:opacity-50" disabled={disabled} onClick={onClick} ref={buttonRef}>{icon}{label}</button>}
+function Select({label,value,onChange,options,labels={}}:{label:string;value:string;onChange:(value:string)=>void;options:string[];labels?:Record<string,string>}){return <label className="grid min-w-0 gap-1 text-xs text-muted-foreground">{label}<select aria-label={label} className="h-11 min-w-0 w-full max-w-full rounded-xl border bg-background px-2 text-sm text-foreground" value={value} onChange={event=>onChange(event.target.value)}><option value="">Wszystkie</option>{options.map(option=><option key={option} value={option}>{labels[option]??option}</option>)}</select></label>}
+function NumberFilter({label,value,onChange}:{label:string;value:number|null;onChange:(value:number|null)=>void}){return <label className="grid min-w-0 gap-1 text-xs text-muted-foreground">{label}<input className="h-11 min-w-0 w-full max-w-full rounded-xl border bg-background px-3 text-sm text-foreground" min="0" step="any" inputMode="decimal" type="number" value={value??""} onChange={event=>onChange(event.target.value?Number(event.target.value):null)}/></label>}
+function dateTime(value:string|null){return value?new Intl.DateTimeFormat("pl-PL",{dateStyle:"medium",timeStyle:"short"}).format(new Date(value)):"brak"}
+function sourceName(value:string){return value==="olx"?"OLX":value==="otodom"?"Otodom":value==="morizon"?"Morizon":value}
+const LIFECYCLE_STATUS_VALUES=new Set(["ACTIVE","REVIEW","STALE","ARCHIVED","REJECTED"]);
+function facebookLifecycleStatus(value:string|null|undefined):"ACTIVE"|"REVIEW"|"STALE"|"ARCHIVED"|"REJECTED"|undefined{return typeof value==="string"&&LIFECYCLE_STATUS_VALUES.has(value)?value as never:undefined;}
+function toFilterResult(item:FacebookWatcherListing):FilterResult { const eventAt=item.publishedAt??item.importedAt; const bucket=item.currentFilterDecision??"REJECTED"; const review=item.currentFilterReasons?.includes("review")===true; return {id:item.listingId,title:item.title,price:item.price,area:item.area,rooms:item.rooms,floor:item.floor===null?null:String(item.floor),totalFloors:item.totalFloors===null?null:String(item.totalFloors),buildingType:null,ownership:null,description:item.description,images:item.images,pricePerSqm:item.pricePerSqm,locationText:composeFacebookLocation({street:item.street,neighborhood:item.neighborhood,district:item.district,city:item.city}),address:item.street,city:item.city,district:item.district,thumbnailUrl:item.images[0]??null,sourcePostUrl:item.sourcePostUrl??null,originalUrl:resolveListingUrl({source:"facebook",sourcePostUrl:item.sourcePostUrl,originalUrl:item.originalUrl}),source:"facebook",listingStatus:item.status==="removed"||item.status==="sold"||item.status==="watched"?item.status:"active",lifecycleStatus:facebookLifecycleStatus(item.lifecycleStatus),isActive:item.status==="active",publishedAt:item.publishedAt,firstSeenAt:item.importedAt,lastSeenAt:eventAt,firstMatchedAt:item.importedAt,lastMatchedAt:item.importedAt,previousPrice:null,currentPrice:item.price,isNew:item.isNew,hasPriceDrop:false,priceDropAmount:null,matchReasons:item.currentFilterReasons??item.flags,unknownFields:item.currentFilterMissingFields??[],decisionBucket:bucket,canonicalDecisionDebug:undefined,finderStatus:item.finderStatus??(review?"REVIEW":bucket)}; }

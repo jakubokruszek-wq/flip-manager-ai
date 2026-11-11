@@ -1,9 +1,9 @@
 name: Watcher sale photo and saved-date cleanup
 on:
   push:
-    branches: [codex/watcher-quality-retention]
+    branches: [codex/watcher-quality-retention, codex/visual-reposts]
   pull_request:
-    paths: ['features/collector/**', 'features/facebook-watcher/**', 'app/api/facebook-watcher/history/**', 'app/api/collector/facebook/mobile/**', 'supabase/migrations/*watcher_quality_saved_date_cleanup.sql', '.github/workflows/watcher-quality-retention.yml']
+    paths: ['features/collector/**', 'features/facebook-watcher/**', 'app/api/facebook-watcher/history/**', 'app/api/facebook-watcher/duplicates/**', 'app/api/collector/facebook/mobile/**', 'supabase/migrations/*watcher_quality_saved_date_cleanup.sql', '.github/workflows/watcher-quality-retention.yml']
 permissions:
   contents: read
 jobs:
@@ -19,6 +19,10 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Sale, real image transport, duplicate receipts and cleanup boundaries
         run: node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/collector/facebook-groups-feed.test.ts features/collector/facebook-mobile.test.ts features/collector/mobile-jpeg.test.ts features/collector/facebook-import.test.ts features/facebook-watcher/offer-quality.test.ts features/facebook-watcher/saved-cleanup.test.ts features/facebook-watcher/saved-cleanup-route.test.ts features/facebook-watcher/saved-cleanup.rpc.test.ts features/facebook-watcher/history-clear.test.ts features/facebook-watcher/history-summary.integration.test.ts features/facebook-watcher/search-quality.test.ts features/facebook-watcher/facebook-inbox.test.ts features/facebook-watcher/saved-inbox-filters.test.ts features/facebook-watcher/group-facebook-reposts.test.ts features/facebook-watcher/list-facebook-watcher.test.ts
+      - name: Visual matching and reported live image regression
+        env:
+          WATCHER_VISUAL_LIVE_FIXTURES: "1"
+        run: node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/facebook-watcher/visual-reposts.test.ts features/facebook-watcher/visual-live.test.ts features/facebook-watcher/visual-photo-route.test.ts
       - run: npx tsc --noEmit --incremental false
       - run: npx eslint features/collector/facebook-mobile.ts features/collector/facebook-import.ts features/facebook-watcher/offer-quality.ts features/facebook-watcher/saved-cleanup.ts features/facebook-watcher/components/facebook-watcher-panel.tsx app/api/collector/facebook/mobile/route.ts app/api/facebook-watcher/history/by-saved-date/route.ts
 
@@ -32,6 +36,13 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: npx playwright install --with-deps chromium
+      - name: Use installed Chrome or install Chromium
+        run: |
+          browser_path="$(command -v google-chrome || command -v chromium || true)"
+          if [ -n "$browser_path" ]; then
+            echo "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$browser_path" >> "$GITHUB_ENV"
+          else
+            npx playwright install --with-deps chromium
+          fi
       - name: Watcher mobile layout, saved filters and card interactions
         run: node --test features/facebook-watcher/components/facebook-watcher-panel.browser.test.cjs

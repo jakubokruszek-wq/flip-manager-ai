@@ -1,0 +1,35 @@
+import type { FacebookWatcherListing } from "./types";
+export type PhotoFingerprint = { assetHash: string; dhash: string; ahash: string; mean: [number,number,number]; detail: number; aspect: number };
+export function mobileImageAsset(value: string): { hash: string; url: string } | null {
+  try { const u=new URL(value);const match=/^\/storage\/v1\/object\/public\/facebook-watcher-images\/android\/[0-9a-f-]{36}\/\d{5,30}\/([a-f0-9]{64})\.jpg$/u.exec(u.pathname);return u.protocol==="https:"&&match?{hash:match[1],url:u.href}:null; }catch{return null;}
+}
+export function readFingerprints(value: unknown): PhotoFingerprint[] {
+  if(!Array.isArray(value))return [];
+  return value.slice(0,3).flatMap(v=>{if(!v||typeof v!=="object")return [];const f=v as PhotoFingerprint;return /^[a-f0-9]{64}$/.test(f.assetHash)&&/^[a-f0-9]{16}$/.test(f.dhash)&&/^[a-f0-9]{16}$/.test(f.ahash)&&Array.isArray(f.mean)&&f.mean.length===3&&f.mean.every(n=>Number.isFinite(n)&&n>=0&&n<=255)&&Number.isFinite(f.detail)&&f.detail>=0&&f.detail<=255&&Number.isFinite(f.aspect)&&f.aspect>0&&f.aspect<=20?[f]:[];});
+}
+export function hamming(a:string,b:string) { const counts=[0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4];let count=0;for(let i=0;i<a.length;i++)count+=counts[parseInt(a[i],16)^parseInt(b[i],16)];return count; }
+export function similarPhoto(a:PhotoFingerprint,b:PhotoFingerprint) {
+  return a.detail>=16&&b.detail>=16&&Math.abs(a.aspect-b.aspect)/Math.max(a.aspect,b.aspect)<=0.08&&a.mean.every((v,i)=>Math.abs(v-b.mean[i])<=14)&&hamming(a.dhash,b.dhash)<=6&&hamming(a.ahash,b.ahash)<=8;
+}
+function normalized(v:string|number) { return typeof v==="string"?v.normalize("NFKC").toLocaleLowerCase("pl").replace(/\s+/gu," ").trim():v; }
+/** A visual fingerprint alone is never property identity: require corroborating property facts. */
+export function visualFactsAgree(a:FacebookWatcherListing,b:FacebookWatcherListing) {
+  if(a.source!=="facebook"||b.source!=="facebook"||a.status!==b.status||a.lifecycleStatus!==b.lifecycleStatus||a.workflowStatus!==b.workflowStatus)return false;
+  for(const key of ["price","area","rooms","floor","city","district","neighborhood","street"] as const)if(a[key]!=null&&b[key]!=null&&normalized(a[key])!==normalized(b[key]))return false;
+  if(a.description?.trim()&&b.description?.trim()&&normalized(a.description)!==normalized(b.description))return false;
+  const area=a.area!=null&&a.area>0&&a.area===b.area, rooms=a.rooms!=null&&a.rooms>0&&a.rooms===b.rooms;
+  const location=(["street","district","neighborhood"] as const).some(k=>a[k]&&b[k]&&normalized(a[k])===normalized(b[k]));
+  return area&&rooms&&(location||(a.price!=null&&a.price>0&&a.price===b.price));
+}
+export function possibleVisualRepost(a:FacebookWatcherListing,b:FacebookWatcherListing) {
+  if(!visualFactsAgree(a,b))return false;
+  const allowed=(r:FacebookWatcherListing)=>new Set(r.images.flatMap(u=>{const a=mobileImageAsset(u);return a?[a.hash]:[]}));
+  const leftAllowed=allowed(a),rightAllowed=allowed(b);
+  const left=readFingerprints(a.photoFingerprints).filter(f=>leftAllowed.has(f.assetHash)),right=readFingerprints(b.photoFingerprints).filter(f=>rightAllowed.has(f.assetHash));
+  return left.some(l=>right.some(r=>similarPhoto(l,r)));
+}
+export function visualCandidates(records:FacebookWatcherListing[]) {
+  const buckets=new Map<string,FacebookWatcherListing[]>();
+  for(const r of records){if(r.source!=="facebook"||r.workflowStatus==="rejected"||!r.area||!r.rooms||!r.images.some(mobileImageAsset))continue;const k=`${r.area}:${r.rooms}`;if(!buckets.has(k))buckets.set(k,[]);buckets.get(k)!.push(r);}
+  return [...buckets.values()].flatMap(group=>group.filter(r=>group.some(other=>other.listingId!==r.listingId&&visualFactsAgree(r,other)))).slice(0,500);
+}
