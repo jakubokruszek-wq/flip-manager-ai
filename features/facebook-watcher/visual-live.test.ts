@@ -17,3 +17,9 @@ test("reported bathroom photographs match despite different uploaded JPEG hashes
  const results=[];for(let i=0;i<fingerprints.length;i++)for(let j=i+1;j<fingerprints.length;j++){console.log(JSON.stringify({pair:[i,j],dhash:hamming(fingerprints[i].dhash,fingerprints[j].dhash),ahash:hamming(fingerprints[i].ahash,fingerprints[j].ahash),means:[fingerprints[i].mean,fingerprints[j].mean],aspect:[fingerprints[i].aspect,fingerprints[j].aspect]}));results.push({pair:[i,j],match:similarPhoto(fingerprints[i],fingerprints[j])});}
  fs.writeFileSync("test-artifacts/visual-photos/results.json",JSON.stringify({fingerprints,results},null,2));assert.ok(results.every(r=>r.match),JSON.stringify(results));
 });
+
+test("reported stairs pair with 38.4m² and no asking price/location matches visually",{skip:process.env.WATCHER_VISUAL_LIVE_FIXTURES!=="1",timeout:30000},async()=>{
+ const sources=[["1604404324242335","16e60697453e1285f99fc09b7cc9894581c2e145b9e4056d20e73f8adc127af9"],["3764029387092090","cb4e7a4f157580c21de4d0a317422a7d5f2bf222a5cd177d017460b49c3ff635"]];const fingerprints=[];fs.mkdirSync("test-artifacts/visual-photos",{recursive:true});
+ for(const [post,hash] of sources){const response=await fetch(`https://zmuisdirvfcxrvtbvrle.supabase.co/storage/v1/object/public/facebook-watcher-images/android/17b58632-1d58-48f5-8d0e-04d74dc5e96e/${post}/${hash}.jpg`,{signal:AbortSignal.timeout(10000)});assert.equal(response.status,200);const bytes=new Uint8Array(await response.arrayBuffer());assert.equal(createHash("sha256").update(bytes).digest("hex"),hash);fs.writeFileSync(`test-artifacts/visual-photos/stairs-${fingerprints.length}.jpg`,bytes);fingerprints.push(await fingerprintImage(bytes,hash));}
+ fs.writeFileSync("test-artifacts/visual-photos/stairs-fingerprints.json",JSON.stringify(fingerprints));assert.equal(similarPhoto(fingerprints[0],fingerprints[1]),true);
+});
