@@ -135,3 +135,27 @@ test("a photo chain cannot override conflicting city, district, neighborhood or 
     assert.equal(groupFacebookReposts([a, b, c]).length, 2, JSON.stringify(conflict));
   }
 });
+
+test("photo-only Android bathroom pair stays one possible group without inventing price or area", () => {
+ const first=item("2341358629602565",{price:null,area:null,rooms:2,city:null,floor:null,description:null,images:[image("2341358629602565","0".repeat(64))]});
+ const second=item("2246154092973037",{...first,listingId:"second",images:[image("2246154092973037","7".repeat(64)),image("2246154092973037","0".repeat(64))]});
+ const before=structuredClone([first,second]); const grouped=groupFacebookReposts([first,second]);
+ assert.equal(grouped.length,1); assert.equal(grouped[0].relatedPostMatch,"possible");
+ assert.equal(grouped[0].relatedPosts?.length,2);assert.equal(grouped[0].price,null);assert.equal(grouped[0].area,null);
+ assert.deepEqual(grouped[0].images,first.images);assert.deepEqual([first,second],before);
+});
+test("photo-only candidates reject missing corroboration, contradictions, generic CDN images and independent decisions", () => {
+ const first=item("111111",{price:null,area:null,rooms:2,city:null,floor:null,description:null});
+ for(const patch of [{rooms:null},{rooms:3},{workflowStatus:"crm" as const},{status:"removed"},{lifecycleStatus:"ARCHIVED"},{description:"Inne mieszkanie"},{images:["https://cdn.example/same.jpg"]}]) {
+  const other=item("222222",{...first,listingId:"second",images:[image("222222")],...patch});
+  assert.equal(groupFacebookReposts([first,other]).length,2,JSON.stringify(patch));
+ }
+ assert.equal(groupFacebookReposts([{...first,street:"Rojna"},item("222222",{...first,listingId:"other",street:"Inna"})]).length,2);
+ const noRooms={...first,rooms:null};assert.equal(groupFacebookReposts([noRooms,{...noRooms,listingId:"other"}]).length,2);
+});
+test("sparse photo chains cannot hide an offer that shares no photograph with the first member", () => {
+ const first=item("111111",{price:null,area:null,rooms:2,city:null,description:null,images:[image("111111","a".repeat(64))]});
+ const bridge=item("222222",{...first,listingId:"bridge",images:[image("222222","a".repeat(64)),image("222222","b".repeat(64))]});
+ const last=item("333333",{...first,listingId:"last",images:[image("333333","b".repeat(64))]});
+ assert.equal(groupFacebookReposts([first,bridge,last]).length,2);
+});
