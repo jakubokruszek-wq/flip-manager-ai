@@ -24,7 +24,11 @@ export function visualFactsAgree(a:FacebookWatcherListing,b:FacebookWatcherListi
   if(a.description?.trim()&&b.description?.trim()&&normalized(a.description)!==normalized(b.description))return false;
   const area=a.area!=null&&a.area>0&&a.area===b.area, rooms=a.rooms!=null&&a.rooms>0&&a.rooms===b.rooms;
   const location=(["street","district","neighborhood"] as const).some(k=>a[k]&&b[k]&&normalized(a[k])===normalized(b[k]));
-  return area&&rooms&&(location||(a.price!=null&&a.price>0&&a.price===b.price));
+  // Reader-only snapshots can miss the whole location and asking price. A
+  // precise fractional area + known matching rooms can corroborate a visual
+  // match, but never merge records by those parameters alone.
+  const preciseUnpricedSnapshot=area&&!Number.isInteger(a.area)&&a.price==null&&b.price==null&&!a.description?.trim()&&!b.description?.trim();
+  return area&&rooms&&(location||(a.price!=null&&a.price>0&&a.price===b.price)||preciseUnpricedSnapshot);
 }
 export function possibleVisualRepost(a:FacebookWatcherListing,b:FacebookWatcherListing) {
   if(!visualFactsAgree(a,b))return false;

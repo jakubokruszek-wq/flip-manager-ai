@@ -18,3 +18,9 @@ test("reported differently cropped bathroom variants render as one card (offline
  const fingerprints=JSON.parse(fs.readFileSync(new URL("./fixtures/reported-bathroom-fingerprints.json",import.meta.url),"utf8")) as PhotoFingerprint[];
  const records=fingerprints.map((f,i)=>item(String(123456+i),f.assetHash,{photoFingerprints:[f]}));assert.equal(records.length,4);const grouped=groupFacebookReposts(records);assert.equal(grouped.length,1);assert.equal(grouped[0].relatedPosts?.length,4);assert.equal(grouped[0].relatedPostMatch,"possible");
 });
+
+test("reported 38.4m² one-room snapshots without price or location enter visual analysis",()=>{
+ const a=item("123456","a".repeat(64),{area:38.4,rooms:1,street:null,photoFingerprints:[proof("a".repeat(64))]}),b=item("234567","b".repeat(64),{area:38.4,rooms:1,street:null,photoFingerprints:[proof("b".repeat(64))]});
+ assert.equal(visualCandidates([a,b]).length,2);assert.equal(possibleVisualRepost(a,b),true);assert.equal(groupFacebookReposts([a,b]).length,1);
+ assert.equal(possibleVisualRepost(a,{...b,photoFingerprints:[]}),false);assert.equal(possibleVisualRepost(a,{...b,area:37.4}),false);assert.equal(possibleVisualRepost(a,{...b,rooms:2}),false);assert.equal(possibleVisualRepost(a,{...b,workflowStatus:"crm"}),false);
+});
