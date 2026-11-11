@@ -1,0 +1,20 @@
+name: Public Android download verification
+on:
+  push:
+    branches: [main]
+    paths: ['features/android-download/**', 'app/api/android/**', 'lib/supabase/auth-proxy.ts', '.github/workflows/android-public-download.yml']
+permissions:
+  contents: read
+jobs:
+  public-download:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify production completion and interrupted resume
+        env:
+          ANDROID_APK_PUBLIC_CHECK: '1'
+        run: node --experimental-strip-types --test features/android-download/public-download.test.mjs
