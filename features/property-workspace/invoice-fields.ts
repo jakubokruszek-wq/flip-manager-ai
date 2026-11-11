@@ -51,11 +51,18 @@ export function invoiceDraft(text:string) {
   const candidates=(strong.length?strong:weak).map(i=>totalAt(lines,i,strong.length?gross:payable));
   const known=[...new Set([...candidates.filter((v):v is number=>v!==null),...tableTotals(lines)])];if(known.length===1)amount=known[0];
   const number=normalized.match(/(?:faktura(?:\s+vat)?(?:\s+(?:nr|numer))?|(?:nr|numer)\s*faktury)\s*[:.#-]?\s*(?!VAT\b)([\p{L}\d][\p{L}\d/_.-]*\d[\p{L}\d/_.-]*|\d)/iu)?.[1]??"";
-  const dateMatch=normalized.match(/(?:data\s*(?:wystawienia|faktury)|wystawiono(?:\s*dnia)?)\s*[:.-]?\s*([^\n]{0,30})/i)?.[1]??"";
+  const dateLabel=/(?:data\s*(?:wystawien[il]a|faktury)|wystawiono(?:\s*dnia)?)/i.exec(normalized);
+  const statutoryDate=normalized.match(/data\s*wystawien[il]a,\s*z\s*zastrze[żz]eniem[\s\S]{0,200}?ustawy\s*:\s*(\d{4}[./-]\d{2}[./-]\d{2})/i)?.[1];
+  const dateMatch=statutoryDate??(dateLabel?normalized.slice(dateLabel.index+dateLabel[0].length,dateLabel.index+dateLabel[0].length+180).split(/data\s*(?:dokonania|sprzeda[żz]y|zap[łl]aty)|termin\s*(?:p[łl]atno[śs]ci|zap[łl]aty)|nabywca|pozycje/i)[0]:"");
   const sellerStart=lines.findIndex(line=>/sprzedawc[ay]|wystawca|dostawca/i.test(line));
-  const seller=sellerStart>=0?lines.slice(sellerStart,Math.min(lines.length,sellerStart+8)).join("\n").split(/nabywca|kupuj[ąa]cy|odbiorca|data\s|faktura\s|razem\s/i)[0]:normalized.split(/nabywca|kupuj[ąa]cy/i)[0];
+  const sellerLines=sellerStart>=0?lines.slice(sellerStart,Math.min(lines.length,sellerStart+8)):[];
+  if(sellerLines[0]&&/nabywca/i.test(sellerLines[0])) {
+    sellerLines[0]=sellerLines[0].split(/nabywca/i)[0];
+    for(let i=1;i<sellerLines.length;i++)sellerLines[i]=sellerLines[i].split(/\s+(?=(?:NIP|Nazwa|Adres)\s*:)/i)[0];
+  }
+  const seller=sellerStart>=0?sellerLines.join("\n").split(/nabywca|kupuj[ąa]cy|odbiorca|data\s|faktura\s|razem\s/i)[0]:normalized.split(/nabywca|kupuj[ąa]cy/i)[0];
   const nip=seller.match(/\bNIP\s*[:\s]*([\d][\d -]{8,15}[\d])/i)?.[1]?.trim()??"";
-  const name=sellerStart<0?"":seller.split("\n").map(v=>v.replace(/^.*?(?:sprzedawc[ay]|wystawca|dostawca)\s*:?\s*/i,"").trim()).find(v=>v&&!/^(?:NIP|REGON|KRS|tel|www|https?|ul\.|\d)/i.test(v))??"";
+  const name=sellerStart<0?"":seller.split("\n").map(v=>v.replace(/^.*?(?:sprzedawc[ay]|wystawca|dostawca)\s*:?\s*/i,"").replace(/^Nazwa\s*:\s*/i,"").trim()).find(v=>v&&!/^(?:NIP|REGON|KRS|tel|www|https?|ul\.|Adres\b|Podmiot\b|\d)/i.test(v))??"";
   const supplier=[name,validNip(nip)?`NIP ${nip.replace(/\D/g,"")}`:""].filter(Boolean).join(" · ").slice(0,300);
   return {invoiceNumber:/^\d{4}[-./]\d{2}[-./]\d{2}$/.test(number)?"":number.slice(0,150),date:invoiceDate(dateMatch),amount,supplier};
 }

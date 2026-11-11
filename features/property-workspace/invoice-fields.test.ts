@@ -22,3 +22,16 @@ test("OCR totals follow explicit net VAT gross columns and reject inconsistent r
  assert.equal(invoiceDraft("Brutto VAT Netto\nRazem 1230,00 230,00 1000,00 PLN").amount,null);
  assert.equal(invoiceDraft("Netto VAT Brutto\nRazem 1000,00 230,00 1230,00 EUR").amount,null);
 });
+
+test("KSeF issue-date legal caption and seller name label fill the invoice form",()=>{
+ const r=invoiceDraft("Krajowy System e-Faktur\nNumer KSeF: 7740001454-20261003-EXAMPLE\nSprzedawca\nNIP: 7740001454\nNazwa: ORLEN S.A.\nAdres\nNabywca\nNazwa: Testowy klient\nSzczegóły\nData wystawienia, z zastrzeżeniem artykułu 106na ust. 1\nustawy: 2026-10-03\nKwota należności ogółem: 284,89 PLN\nData zapłaty: 2026-10-03\nDokument wydania: 123 (PV 44530K1/0009/26)");
+ assert.equal(r.date,"2026-10-03");assert.equal(r.amount,28489);assert.equal(r.supplier,"ORLEN S.A. · NIP 7740001454");assert.equal(r.invoiceNumber,"");
+});
+test("missing issue date must not be replaced with sale or payment date",()=>{
+ for(const label of ["Data dokonania dostawy", "Data sprzedaży", "Data zapłaty", "Termin płatności"])assert.equal(invoiceDraft(`Data wystawienia: nieczytelna\n${label}: 2026-10-03`).date,"");
+});
+
+test("side-by-side KSeF seller and buyer and OCR issue caption preserve the left fields",()=>{
+ const r=invoiceDraft("Sprzedawca Nabywca\nNIP: 7740001454 NIP: 1234563218\nNazwa: ORLEN S.A. Nazwa: Testowy nabywca\nAdres Adres\nData wystawienla, z zastrzezeniem artykulu 106na ust. 1 Data dokonania dostawy\nustawy: 2026-10-03 wykonania usługi: 2026-10-04\nKwota naleznosci ogolem: 284,89 PLN");
+ assert.equal(r.supplier,"ORLEN S.A. · NIP 7740001454");assert.equal(r.date,"2026-10-03");assert.equal(r.amount,28489);
+});
