@@ -16,3 +16,19 @@ test("failed or malformed AI does not invent an amount",async c=>{
  c.mock.method(globalThis,"fetch",async()=>new Response("unavailable",{status:503}));await assert.rejects(()=>readInvoiceAi(new TextEncoder().encode('%PDF-fixture'),"fixture-key"));
  c.mock.method(globalThis,"fetch",async()=>Response.json({output_text:'{"text":""}'}));await assert.rejects(()=>readInvoiceAi(new TextEncoder().encode('%PDF-fixture'),"fixture-key"));
 });
+
+test("structured AI fields fill a table invoice only when backed by visible text",async c=>{
+ const text="SPRZEDAWCA Sklep ABC\nDokument FV/99/2026\n11.11.2026\nNetto VAT Brutto\nRazem 1000,00 230,00 1230,00 PLN";
+ c.mock.method(globalThis,"fetch",async()=>Response.json({output_text:JSON.stringify({text,supplier:"Sklep ABC",invoiceNumber:"FV/99/2026",issueDate:"2026-11-11",totalGrossText:"1230,00",totalEvidence:"Netto VAT Brutto\nRazem 1000,00 230,00 1230,00 PLN"})}));
+ const r=await readInvoiceAi(new TextEncoder().encode('%PDF-fixture'),"fixture-key");assert.equal(r.supplier,"Sklep ABC");assert.equal(r.invoiceNumber,"FV/99/2026");assert.equal(r.date,"2026-11-11");assert.equal(r.amount,123000);
+});
+test("AI cannot fill invented fields or match a smaller number inside a gross total",async c=>{
+ c.mock.method(globalThis,"fetch",async()=>Response.json({output_text:JSON.stringify({text:"Brutto\nRazem 100,00 23,00 123,00 PLN",supplier:"Invented",invoiceNumber:"INV/999",issueDate:"2026-01-01",totalGrossText:"3,00",totalEvidence:"Brutto\nRazem 100,00 23,00 123,00 PLN"})}));
+ const r=await readInvoiceAi(new TextEncoder().encode('%PDF-fixture'),"fixture-key");assert.equal(r.supplier,"");assert.equal(r.invoiceNumber,"");assert.equal(r.date,"");assert.equal(r.amount,null);
+});
+
+test("AI cannot label the net column as gross using a grounded table snippet",async c=>{
+ const text="Netto VAT Brutto\nRazem 1000,00 230,00 1230,00 PLN\nRazem brutto: 9999,00 PLN";
+ c.mock.method(globalThis,"fetch",async()=>Response.json({output_text:JSON.stringify({text,supplier:null,invoiceNumber:null,issueDate:null,totalGrossText:"1000,00",totalEvidence:"Netto VAT Brutto\nRazem 1000,00 230,00 1230,00 PLN"})}));
+ assert.equal((await readInvoiceAi(new TextEncoder().encode('%PDF-fixture'),"fixture-key")).amount,null);
+});
