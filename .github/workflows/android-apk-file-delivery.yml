@@ -1,0 +1,75 @@
+name: Deliver verified Android APK file
+on:
+  push:
+    branches: [codex/android-apk-file-delivery]
+permissions:
+  contents: read
+jobs:
+  delivery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download the already tested release and verify exact bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir verified
+          gh release download gecko-poc-0.5.87 --repo jakubokruszek-wq/flip-manager-ai --pattern flip-watcher-0.5.87-arm64.apk --dir verified
+          echo 'c2c4b24e64ecbaec1104cda1e644849538023efb3826d8c180f0926d50e1ed10  verified/flip-watcher-0.5.87-arm64.apk' | sha256sum --check --strict
+          test "$(stat -c%s verified/flip-watcher-0.5.87-arm64.apk)" = 213802477
+          split -b 25M -d verified/flip-watcher-0.5.87-arm64.apk verified/apk-part-
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-android-apk-part-00
+          path: verified/apk-part-00
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-android-apk-part-01
+          path: verified/apk-part-01
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-android-apk-part-02
+          path: verified/apk-part-02
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-android-apk-part-03
+          path: verified/apk-part-03
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-android-apk-part-04
+          path: verified/apk-part-04
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-android-apk-part-05
+          path: verified/apk-part-05
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-android-apk-part-06
+          path: verified/apk-part-06
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-android-apk-part-07
+          path: verified/apk-part-07
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-android-apk-part-08
+          path: verified/apk-part-08
+          if-no-files-found: error
+          retention-days: 3
