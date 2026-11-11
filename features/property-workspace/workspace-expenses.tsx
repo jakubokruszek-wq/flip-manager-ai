@@ -29,7 +29,7 @@ export function ExpenseForm({ propertyId, files, editing, onCancel, upload, onAd
         const body=await response.json();if(!response.ok)throw new Error(body.message??"Nie udało się odczytać dokumentu.");result=body;
       }
       if(active.signal.aborted||controller.current!==active)return;
-      setDraft(previous=>({...previous,description:previous.description||`Faktura ${result.invoiceNumber||selectedFile.name}`.slice(0,500),supplier:result.supplier||previous.supplier,invoiceNumber:result.invoiceNumber||previous.invoiceNumber,date:result.date||previous.date,amount:result.amount===null?"":(result.amount/100).toFixed(2)}));
+      setDraft(previous=>({...previous,description:previous.description||`Faktura ${result.invoiceNumber||selectedFile.name}`.slice(0,500),supplier:result.supplier||"",invoiceNumber:result.invoiceNumber||"",date:result.date||"",amount:result.amount===null?"":(result.amount/100).toFixed(2)}));
       setOcrText(result.text);
       const filled=[result.supplier?"sprzedawca":null,result.invoiceNumber?"numer faktury":null,result.date?"data":null,result.amount!==null?"kwota brutto":null].filter(Boolean);
       setNotice(filled.length?`Uzupełniono pola: ${filled.join(", ")}. ${result.amount===null?"Kwota brutto nie została potwierdzona — wpisz ją ręcznie. ":""}Sprawdź dane i zatwierdź koszt — nie został jeszcze doliczony.`:"Odczytano tekst, ale nie rozpoznano pól faktury. Rozwiń tekst poniżej; spróbuj AI lub uzupełnij dane ręcznie.");
