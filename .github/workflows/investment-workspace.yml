@@ -1,7 +1,7 @@
 name: Investment workspace lifecycle
 on:
   push:
-    branches: [codex/investment-workspace, codex/property-assessment, codex/mobile-attachments-and-reposts]
+    branches: [codex/investment-workspace, codex/property-assessment, codex/mobile-attachments-and-reposts, codex/automatic-flip-costs]
   pull_request:
     paths: ['features/property-workspace/**', 'app/api/properties/**', 'app/(app)/investments/**', 'supabase/migrations/*property_workspaces.sql', '.github/workflows/investment-workspace.yml']
 permissions:
@@ -30,7 +30,14 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: npx playwright install --with-deps chromium
+      - name: Use installed Chrome or install Chromium
+        run: |
+          browser_path="$(command -v google-chrome || command -v chromium || true)"
+          if [ -n "$browser_path" ]; then
+            echo "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$browser_path" >> "$GITHUB_ENV"
+          else
+            npx playwright install --with-deps chromium
+          fi
       - run: node --test features/property-workspace/workspace.browser.test.cjs
       - uses: actions/upload-artifact@v4
         if: always()

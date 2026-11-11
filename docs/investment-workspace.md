@@ -25,3 +25,19 @@ OK liczy 0. Pozostałe stany wymagają stawki i ilości albo własnej kwoty; nie
 Po potwierdzeniu faktycznej ceny i daty zakupu ten sam rekord przechodzi do Inwestycji. Kompletny kosztorys uzupełnia wyłącznie brakujące budżety wykonawcze; wcześniejsze plany i zarejestrowane wydatki pozostają. Faktury, wykonawcy, remont i rozliczenie sprzedaży są dostępne w Inwestycjach. Przed zakupem nowe dokumenty należą do oglądania, dokumentów lub wizualizacji/rzutów; istniejące załączniki pozostają dostępne niezależnie od dawnej kategorii.
 
 Usuwanie jest dostępne na karcie i listach przy każdym etapie. API sprawdza właściciela workspace. Po usunięciu rekordu i metadanych usuwa obiekty z prywatnego prefiksu właściciel/nieruchomość; awaria magazynu zwraca 503 i pozwala ponowić ten sam przycisk bez dostępu do cudzych plików. Zdjęcia są ładowane leniwie, partiami po 12; OCR i edytor załączników mają osobne, warunkowo ładowane moduły.
+
+### Automatyczne koszty flipa (11.11.2026)
+
+Oceny prawne, układu i budynku mają własne, sensowne nazwy stanów. Pomoc prawna oraz dodatkowe wpłaty na części wspólne są kosztami jednorazowymi w „Innych”, poza remontem lokalu i rezerwą. Fundusz remontowy zawarty w czynszu nie jest doliczany ponownie.
+
+Utrzymanie = (czynsz administracyjny + prąd + ogrzewanie poza czynszem + inne miesięczne rachunki) × pełne miesiące od zakupu do sprzedaży. Początkowy plan czasu6miesięcy jest edytowalny. Stare łączne kwoty pozostają w trybie własnego kosztu; po przełączeniu na miesiące nie są doliczane drugi raz. Finansowanie: własne środki0; opcjonalnie proste odsetki od stałego kapitału według okresu flipa plus jednorazowe opłaty, albo własna łączna kwota z harmonogramu. Pożyczony kapitał nie jest dodatkowym kosztem obok zakupu.
+
+PCC standardowo2% na rynku wtórnym; wariantVAT0%, potwierdzone zwolnienie0%, szczególny hurtowy zakup6%, zachowana własna stawka. Podstawę rynkową można nadpisać. Podstawa i PCC zaokrąglane do pełnych złotych. W starych kosztorysach brak wariantu przy stawce0/2 przechodzi na standardowePCC2% (wyraźny wybór wUI), inne stawki są zachowane jako własne. Własna stawka pozostaje w danych; nie sumujemy jej ponownie zPCC.
+
+Opcjonalny automatyczny szacunek notariusza dla sprzedaży lokalu mieszkalnego = połowa maksymalnej taksy według progów +23%VAT +edytowalny plan dodatkowych formalności (domyślnie1000zł, jawne założenie, nie stawka urzędowa). Uwzględniono zmianę progów powyżej2/5mln od5.11.2026. Obejmuje pojedynczy akt sprzedaży mieszkania; przy innych czynnościach użytkownik wpisuje brutto ofertę kancelarii bezPCC. Stare kwoty kancelarii zachowane w trybie manualnym. Limit zakupu wyszukuje się w groszach, przeliczając również zależne od cenyPCC, notariusza i prowizję zakupu.
+
+Źródła reguł sprawdzone11.11.2026:
+- https://podatki.gov.pl/podatki-osobiste/pcc/stawki-i-limity
+- https://www.gov.pl/web/gov/zaplac-podatek-od-czynnosci-cywilnoprawnych
+- https://eli.gov.pl/api/acts/DU/2024/1566/text.html (§3 i§6), ze zmianąDz.U.2026poz1370
+- https://www.gov.pl/web/sprawiedliwosc/od-dzis-nowe-stawki-taksy-notarialnej-pierwsza-tak-szeroka-zmiana-od-ponad-20-lat
