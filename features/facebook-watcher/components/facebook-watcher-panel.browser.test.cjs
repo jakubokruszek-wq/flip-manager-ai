@@ -286,6 +286,7 @@ async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode 
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
   });
 
+  await page.route("https://project.supabase.co/**", route => route.fulfill({ status:200, contentType:"image/png", body:Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=","base64") }));
   await page.goto(`${baseUrl}/facebook-watcher`, { waitUntil: "domcontentloaded" });
   // Regression guard for the exact race this rearchitecture fixes: the
   // listings fetch for THIS page's own navigation must be explicitly
