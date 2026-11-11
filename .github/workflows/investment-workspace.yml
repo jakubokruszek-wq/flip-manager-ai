@@ -1,7 +1,7 @@
 name: Investment workspace lifecycle
 on:
   push:
-    branches: [codex/investment-workspace, codex/property-assessment, codex/mobile-attachments-and-reposts]
+    branches: [codex/investment-workspace, codex/property-assessment, codex/mobile-attachments-and-reposts, codex/automatic-flip-costs]
   pull_request:
     paths: ['features/property-workspace/**', 'app/api/properties/**', 'app/(app)/investments/**', 'supabase/migrations/*property_workspaces.sql', '.github/workflows/investment-workspace.yml']
 permissions:
