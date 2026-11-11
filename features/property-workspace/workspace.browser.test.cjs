@@ -54,6 +54,20 @@ test('manual property, viewing, direct private documents, acquisition, costs, co
   await page.getByRole('tab',{name:'Oglądanie',exact:true}).click();await page.getByLabel('Notatki z oglądania, ustalenia i negocjacje').fill('Instalacja do wymiany');for(const name of ['Instalacja elektryczna','Piony i instalacja wodna','Wilgoć i wentylacja','Okna','Ogrzewanie','Budynek i części wspólne','Stan prawny i opłaty','Układ pomieszczeń'])await page.getByRole('group',{name,exact:true}).getByRole('button',{name:['Budynek i części wspólne','Stan prawny i opłaty'].includes(name)?'Bez zastrzeżeń':name==='Układ pomieszczeń'?'Układ zostaje':'OK',exact:true}).click();await save();await page.reload();await page.getByRole('tab',{name:'Oglądanie',exact:true}).click();assert.equal(await page.getByLabel('Notatki z oglądania, ustalenia i negocjacje').inputValue(),'Instalacja do wymiany');
   assert.equal(await page.getByRole('group',{name:'Stan prawny i opłaty',exact:true}).getByRole('button',{name:'Do wymiany / naprawy',exact:true}).count(),0);
   await page.getByRole('tab',{name:'Kosztorys i opłacalność',exact:true}).click();
+  // Short prices persist as full amounts; switching units never mutates the value.
+  await page.getByLabel('Rozważana cena zakupu, tys. zł',{exact:true}).fill('360,12345');
+  const priceBox=page.getByLabel('Rozważana cena zakupu, tys. zł',{exact:true}).locator('xpath=../..');
+  await priceBox.getByRole('button',{name:'Wpisz pełną kwotę w zł',exact:true}).click();
+  assert.equal(await page.getByLabel('Rozważana cena zakupu, zł',{exact:true}).inputValue(),'360123.45');
+  await save();assert.equal(workspace.data.offerPrice,36012345);
+  await page.getByLabel('Rozważana cena zakupu, zł',{exact:true}).fill('');
+  await page.getByRole('group',{name:'Stan: Instalacja elektryczna',exact:true}).getByRole('button',{name:'Do wymiany / naprawy',exact:true}).click();
+  await page.getByLabel('Całkowity koszt: Instalacja elektryczna, zł',{exact:true}).fill('4500');
+  assert.equal(await page.getByLabel('Ilość: Instalacja elektryczna',{exact:true}).count(),0);
+  await save();assert.equal(workspace.data.assessment.repairs.electrical.override,450000);assert.equal(workspace.data.assessment.repairs.electrical.rate,null);
+  await page.reload();await page.getByRole('tab',{name:'Kosztorys i opłacalność',exact:true}).click();
+  assert.equal(await page.getByLabel('Całkowity koszt: Instalacja elektryczna, zł',{exact:true}).inputValue(),'4500.00');
+  await page.getByRole('group',{name:'Stan: Instalacja elektryczna',exact:true}).getByRole('button',{name:'OK',exact:true}).click();
   // Monthly costs, financing and taxes follow the same assumptions used for the purchase limit.
   await page.getByRole('group',{name:'Jak liczyć notariusza i formalności?',exact:true}).getByRole('button',{name:'Mam kwotę z kancelarii',exact:true}).click();
   for(const [name,value] of [['Szacowana cena sprzedaży, tys. zł','400'],['Minimalny zysk do zachowania po wpisanych kosztach, zł','50000'],['Wykończenie za m², zł','1000'],['Meble, AGD i pozostałe wyposażenie — łącznie, zł','10000'],['Czynsz administracyjny / miesiąc, zł','400'],['Prąd / miesiąc, zł','50'],['Ogrzewanie poza czynszem / miesiąc, zł','50'],['Pozostałe opłaty / miesiąc, zł','0'],['Pozostałe wydatki jednorazowe i planowane podatki, zł','0'],['Notariusz, wypisy i opłaty sądowe — bez PCC, zł','5000'],['Zdjęcia, ogłoszenia i dokumenty do sprzedaży — łącznie, zł','2000']])await page.getByLabel(name,{exact:true}).fill(value);
