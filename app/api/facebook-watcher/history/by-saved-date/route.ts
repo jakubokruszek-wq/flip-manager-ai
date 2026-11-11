@@ -4,10 +4,10 @@ import { authorizeFacebookWatcherAction } from "@/features/facebook-watcher/serv
 import { savedCutoff } from "@/features/facebook-watcher/saved-cleanup";
 
 const headers={"Cache-Control":"private, no-store"};
-async function execute(before:unknown,apply:boolean,expected:unknown){
+async function execute(before:unknown,apply:boolean,expected:unknown,db:ReturnType<typeof createFacebookWatcherAdminClient>){
   const cutoff=savedCutoff(before);
   if(apply&&(typeof expected!=="string"||!/^[a-f0-9]{32}$/.test(expected)))return Response.json({code:"CLEANUP_PREVIEW_REQUIRED"},{status:400,headers});
-  const result=await createFacebookWatcherAdminClient().rpc("facebook_watcher_cleanup_saved_before",{p_before:cutoff,p_apply:apply,p_expected:apply?expected:null});
+  const result=await db.rpc("facebook_watcher_cleanup_saved_before",{p_before:cutoff,p_apply:apply,p_expected:apply?expected:null});
   if(result.error)throw new Error(result.error.message);
   return Response.json({ok:true,...result.data},{headers});
 }
@@ -18,10 +18,10 @@ function failure(error:unknown){
 }
 export async function GET(request:Request){
   try{await requireOperator();}catch(error){return operatorAuthorizationResponse(error);}
-  try{return await execute(new URL(request.url).searchParams.get("before"),false,null);}catch(error){return failure(error);}
+  try{return await execute(new URL(request.url).searchParams.get("before"),false,null,createFacebookWatcherAdminClient());}catch(error){return failure(error);}
 }
 export async function DELETE(request:Request){
   try{await requireOperator();}catch(error){return operatorAuthorizationResponse(error);}
   const denied=authorizeFacebookWatcherAction(request,"clear-watcher-history");if(denied)return denied;
-  try{const body=await request.json();return await execute(body?.before,true,body?.token);}catch(error){return failure(error);}
+  try{const body=await request.json();return await execute(body?.before,true,body?.token,createFacebookWatcherAdminClient());}catch(error){return failure(error);}
 }
