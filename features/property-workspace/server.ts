@@ -1,12 +1,12 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireOperator } from "@/features/auth/operator";
+import { requireOperator, type OperatorIdentity } from "@/features/auth/operator";
 import { emptyWorkspace, parseWorkspace, type Workspace, type WorkspaceEvent, type WorkspaceFile } from "./model";
 import { PRIVATE_BUCKET } from "./files";
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export async function workspaceAccess(propertyId: string) {
-  const operator = await requireOperator();
+export async function workspaceAccess(propertyId: string, actor?: OperatorIdentity) {
+  const operator = actor ?? await requireOperator();
   if (!UUID.test(propertyId)) throw new Error("Nieprawidłowy identyfikator nieruchomości.");
   const db = createAdminClient();
   const authDb = await createClient();

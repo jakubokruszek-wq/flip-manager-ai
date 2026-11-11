@@ -23,6 +23,9 @@ function routes(auth: ClassifiedMutationRoute["auth"], definitions: Array<[Mutat
 
 export const CLASSIFIED_MUTATION_ROUTES: readonly ClassifiedMutationRoute[] = [
   ...routes("SIGNED_EXTENSION", [
+    ["POST", "/api/collector/facebook/mobile", /^\/api\/collector\/facebook\/mobile$/],
+    ["POST", "/api/collector/facebook/mobile/scan", /^\/api\/collector\/facebook\/mobile\/scan$/],
+    ["POST", "/api/collector/facebook/mobile/groups/discover", /^\/api\/collector\/facebook\/mobile\/groups\/discover$/],
     ["POST", "/api/collector/devices/register", /^\/api\/collector\/devices\/register$/],
     ["DELETE", "/api/collector/devices/current", /^\/api\/collector\/devices\/current$/],
     ["POST", "/api/collector/heartbeat", /^\/api\/collector\/heartbeat$/],
@@ -66,6 +69,7 @@ export const CLASSIFIED_MUTATION_ROUTES: readonly ClassifiedMutationRoute[] = [
     ["POST", "/api/facebook-watcher/orphans", /^\/api\/facebook-watcher\/orphans$/],
   ]),
   ...routes("HUMAN_OPERATOR", [
+    ["DELETE", "/api/facebook-watcher/history/by-saved-date", /^\/api\/facebook-watcher\/history\/by-saved-date$/],
     ["POST", "/api/flip-finder/listings/[id]/investment/answers", /^\/api\/flip-finder\/listings\/[^/]+\/investment\/answers$/],
     ["PATCH", "/api/alerts/[id]", /^\/api\/alerts\/[^/]+$/],
     ["POST", "/api/facebook-watcher/groups", /^\/api\/facebook-watcher\/groups$/],

@@ -1,4 +1,4 @@
-import { operatorAuthorizationResponse, OperatorAuthorizationError } from "@/features/auth/operator";
+import { operatorAuthorizationResponse, OperatorAuthorizationError, requireOperator } from "@/features/auth/operator";
 import { parseWorkspace } from "@/features/property-workspace/model";
 import { readWorkspace, workspaceAccess } from "@/features/property-workspace/server";
 type Context = { params: Promise<{ id: string }> };
@@ -9,7 +9,7 @@ export async function GET(_request: Request, { params }: Context) {
 export async function PUT(request: Request, { params }: Context) {
   try {
     const { id } = await params;
-    const { db, operator } = await workspaceAccess(id);
+    const { db, operator } = await workspaceAccess(id, await requireOperator());
     const raw = await request.text();
     if (raw.length > 512_000) throw new Error("Za dużo danych. Zapisuj zdjęcia w dokumentach.");
     const body = JSON.parse(raw);

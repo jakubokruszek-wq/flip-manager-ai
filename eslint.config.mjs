@@ -9,6 +9,7 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    "public/ocr/**", // Generated third-party OCR worker and WASM glue, locked by npm.
     "out/**",
     "build/**",
     "next-env.d.ts",

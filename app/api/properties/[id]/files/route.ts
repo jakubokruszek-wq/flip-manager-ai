@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { operatorAuthorizationResponse, OperatorAuthorizationError } from "@/features/auth/operator";
+import { operatorAuthorizationResponse, OperatorAuthorizationError, requireOperator } from "@/features/auth/operator";
 import { workspaceAccess, UUID } from "@/features/property-workspace/server";
 import { fileCategories } from "@/features/property-workspace/model";
 import { MAX_FILE_SIZE, PRIVATE_BUCKET, validateFile } from "@/features/property-workspace/files";
@@ -19,7 +19,7 @@ function responseError(error: unknown) {
 }
 export async function POST(request: Request, { params }: Context) {
   try {
-    const { id } = await params; const { db, operator } = await workspaceAccess(id); const body = await input(request);
+    const { id } = await params; const { db, operator } = await workspaceAccess(id, await requireOperator()); const body = await input(request);
     if (body.action === "prepare") {
       if (typeof body.name !== "string" || !body.name.trim() || body.name.length > 200 || typeof body.category !== "string" || !Object.hasOwn(fileCategories, body.category) || typeof body.mime !== "string" || !["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(body.mime) || !Number.isSafeInteger(body.size) || Number(body.size) <= 0 || Number(body.size) > MAX_FILE_SIZE || typeof body.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(body.sha256)) throw new Error("Wybierz JPG, PNG, WebP lub PDF do 12 MB i kategorię dokumentu.");
       // Best-effort reclamation of abandoned uploads belonging to this operator.
@@ -73,7 +73,7 @@ export async function POST(request: Request, { params }: Context) {
 }
 export async function PATCH(request: Request, { params }: Context) {
   try {
-    const { id } = await params; const { db, operator } = await workspaceAccess(id); const body = await input(request);
+    const { id } = await params; const { db, operator } = await workspaceAccess(id, await requireOperator()); const body = await input(request);
     if (typeof body.id !== "string" || !UUID.test(body.id) || typeof body.name !== "string" || !body.name.trim() || body.name.length > 200 || typeof body.category !== "string" || !Object.hasOwn(fileCategories, body.category)) throw new Error("Wpisz nazwę i kategorię dokumentu.");
     const current = await db.from("property_workspace_files").select("mime").eq("id", body.id).eq("property_id", id).eq("owner_id", operator.id).maybeSingle();
     if (current.error || !current.data) throw new Error("Nie znaleziono dokumentu.");
