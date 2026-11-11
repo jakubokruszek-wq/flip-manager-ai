@@ -64,20 +64,21 @@ function compatibleUnpicturedMember(a: FacebookWatcherListing,b: FacebookWatcher
     a.rooms===b.rooms && a.status===b.status && a.lifecycleStatus===b.lifecycleStatus;
 }
 
-/** Incomplete Android snapshots may show exactly the same uploaded photograph.
- * Group these only as reversible candidates, never as a confirmed identity or
- * a source of missing facts. Matching known rooms corroborate the photo;
- * every known location/status must agree and every member must share evidence. */
+/** Incomplete snapshots with exact uploaded image bytes form reversible candidates.
+ * Known facts and workflow must not conflict; one independently matching property
+ * fact corroborates the photo. Missing price/rooms and integer areas are allowed.
+ * Every member still needs pairwise evidence, so sparse snapshots cannot bridge units. */
 function possiblePhotoRepost(a: FacebookWatcherListing, b: FacebookWatcherListing): boolean {
   if (a.source !== "facebook" || b.source !== "facebook" ||
-      a.price != null || b.price != null || a.area != null || b.area != null ||
-      a.rooms == null || !Number.isFinite(a.rooms) || a.rooms <= 0 || a.rooms !== b.rooms ||
       a.description?.trim() || b.description?.trim() ||
       a.status !== b.status || a.lifecycleStatus !== b.lifecycleStatus ||
       a.workflowStatus !== b.workflowStatus) return false;
-  for (const key of ["floor", "city", "district", "neighborhood", "street"] as const) {
+  for (const key of ["price", "area", "rooms", "floor", "city", "district", "neighborhood", "street"] as const) {
     if (a[key] != null && b[key] != null && fact(a[key], key) !== fact(b[key], key)) return false;
   }
+  const corroborated = (["price", "area", "rooms"] as const).some(key => a[key] != null && Number.isFinite(a[key]) && a[key]! > 0 && a[key] === b[key]) ||
+    Boolean(a.street && b.street && fact(a.street,"street") === fact(b.street,"street") && fact(a.street,"street").toString().length >= 6);
+  if (!corroborated) return false;
   const hashes = mobilePhotoHashes(a.images);
   return mobilePhotoHashes(b.images).some(hash => hashes.includes(hash));
 }

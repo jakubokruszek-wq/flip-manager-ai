@@ -1,32 +1,40 @@
 "use client";
+import { AttachmentPicker } from "./attachment-picker";
 import { useEffect, useRef, useState } from "react";
 import { categories, parseMoney, type Category, type Expense, type FileCategory, type WorkspaceFile } from "./model";
 import { recognizeInvoice } from "./invoice-ocr";
 import { MAX_FILE_SIZE } from "./files";
 import { Field, Section, inputClass } from "./ui";
-type Props = { files: WorkspaceFile[]; editing: Expense | null; onCancel: () => void; upload: (file: File, category: FileCategory) => Promise<string>; onAdd: (expense: Expense) => Promise<boolean> };
-export function ExpenseForm({ files, editing, onCancel, upload, onAdd }: Props) {
+type Props = { propertyId: string; files: WorkspaceFile[]; editing: Expense | null; onCancel: () => void; upload: (file: File, category: FileCategory) => Promise<string>; onAdd: (expense: Expense) => Promise<boolean> };
+export function ExpenseForm({ propertyId, files, editing, onCancel, upload, onAdd }: Props) {
   const [draft, setDraft] = useState(() => ({ description: editing?.description ?? "", supplier: editing?.supplier ?? "", invoiceNumber: editing?.invoiceNumber ?? "", date: editing?.date ?? "", amount: editing ? (editing.amount / 100).toFixed(2) : "", category: editing?.category ?? "renovation" as Category, paid: editing?.paid ?? true, refund: editing?.refund ?? false, fileId: editing?.fileId ?? "" }));
   const [busy, setBusy] = useState(false), [notice, setNotice] = useState(""), [ocrText, setOcrText] = useState("");
+  const [invoicePhoto, setInvoicePhoto] = useState(false);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
   return <div id="expense-editor" className="scroll-mt-24"><Section title={editing ? "Edytuj koszt" : "Dodaj koszt / odczytaj fakturę"}>
-    <p className="text-sm leading-6 text-muted-foreground">OCR odczytuje zdjęcie w przeglądarce, bez płatnego AI. Przy pierwszym użyciu pobiera język OCR. Sprawdź kwotę brutto i dane dokumentu przed doliczeniem do kosztów.</p>
-    <Field label="Zdjęcie faktury — odczytaj OCR"><input type="file" accept="image/jpeg,image/png,image/webp" className={inputClass} disabled={busy} onChange={async e => {
-      const file = e.currentTarget.files?.[0]; e.currentTarget.value = ""; if (!file) return;
+    <p className="text-sm leading-6 text-muted-foreground">Zrób zdjęcie aparatem albo wybierz z telefonu. Najpierw zapisujemy oryginał faktury. Odczyt OCR uruchomisz osobno — zapis zdjęcia nie uruchamia ciężkiego silnika ani nie dolicza kosztu.</p>
+    <AttachmentPicker label="Zdjęcie faktury — odczytaj OCR" cameraLabel="Zrób zdjęcie faktury" disabled={busy} onFiles={async batch => {
+      const file = batch[0]; if (!file) return;
       if (file.size > MAX_FILE_SIZE) { setNotice("Plik jest za duży (maksymalnie 12 MB)."); return; }
-      const active = new AbortController(); controller.current = active;
-      setBusy(true); setNotice("Zapisywanie zdjęcia faktury…");
+      setBusy(true); setNotice("Zapisywanie zdjęcia faktury…"); setOcrText("");
+      try { const fileId = await upload(file, "invoice"); setDraft(previous => ({ ...previous, fileId, description: previous.description || `Faktura ${file.name}`.slice(0,500) })); setInvoicePhoto(true); setNotice("Zdjęcie zapisane. Możesz wpisać dane ręcznie albo uruchomić OCR."); }
+      catch (error) { setNotice(error instanceof Error ? error.message : "Nie udało się zapisać zdjęcia."); }
+      finally { setBusy(false); }
+    }} />
+    {invoicePhoto ? <button type="button" disabled={busy} className="min-h-12 rounded-xl border px-4 py-3 font-semibold disabled:opacity-50" onClick={async () => {
+      const active = new AbortController(); controller.current = active; setBusy(true);
       try {
-        const fileId = await upload(file, "invoice"); if (active.signal.aborted) return;
-        setDraft(previous => ({ ...previous, fileId }));
-        const result = await recognizeInvoice(file, setNotice, active.signal);
-        if (active.signal.aborted) return;
-        setDraft(previous => ({ ...previous, description: previous.description || `Faktura ${result.invoiceNumber || file.name}`.slice(0, 500), supplier: result.supplier || previous.supplier, invoiceNumber: result.invoiceNumber || previous.invoiceNumber, date: result.date || previous.date, amount: result.amount === null ? previous.amount : (result.amount / 100).toFixed(2) }));
+        setNotice("Przygotowanie mniejszej kopii do OCR…");
+        const response = await fetch(`/api/properties/${propertyId}/files/${draft.fileId}/preview?mode=ocr`, { signal: active.signal });
+        if (!response.ok) throw new Error("Nie udało się przygotować kopii do OCR. Oryginał jest zapisany; możesz wpisać dane ręcznie.");
+        const image = new File([await response.blob()], "invoice-ocr.jpg", { type: "image/jpeg" });
+        const result = await recognizeInvoice(image, setNotice, active.signal); if (active.signal.aborted) return;
+        setDraft(previous => ({ ...previous, supplier: result.supplier || previous.supplier, invoiceNumber: result.invoiceNumber || previous.invoiceNumber, date: result.date || previous.date, amount: result.amount === null ? previous.amount : (result.amount / 100).toFixed(2) }));
         setOcrText(result.text); setNotice("Zdjęcie zapisane, odczyt gotowy. Sprawdź pola — koszt nie został jeszcze doliczony.");
       } catch (error) { if (!active.signal.aborted) setNotice(error instanceof Error ? error.message : "Odczyt nie powiódł się. Wpisz dane ręcznie."); }
       finally { if (!active.signal.aborted) setBusy(false); controller.current = null; }
-    }} /></Field>
+    }}>Odczytaj dane ze zdjęcia (OCR)</button> : null}
     {busy ? <button type="button" className="min-h-11 text-sm underline" onClick={() => { controller.current?.abort(); setBusy(false); setNotice("Anulowano OCR. Zapisany dokument pozostaje w załącznikach."); }}>Anuluj odczyt OCR</button> : null}
     <p role="status" className="text-sm">{notice}</p>
     {ocrText ? <details><summary className="min-h-11 cursor-pointer text-sm">Pokaż odczytany tekst</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">{ocrText}</pre></details> : null}
@@ -35,7 +43,7 @@ export function ExpenseForm({ files, editing, onCancel, upload, onAdd }: Props) 
       try {
         const amount = parseMoney(draft.amount); if (amount === null || amount <= 0) throw new Error("Wpisz kwotę większą od zera.");
         const ok = await onAdd({ ...draft, id: editing?.id ?? crypto.randomUUID(), amount, fileId: draft.fileId || null });
-        if (ok) { setDraft({ description: "", supplier: "", invoiceNumber: "", date: "", amount: "", category: "renovation", paid: true, refund: false, fileId: "" }); setOcrText(""); setNotice("Koszt zapisany i uwzględniony w rozliczeniu."); }
+        if (ok) { setDraft({ description: "", supplier: "", invoiceNumber: "", date: "", amount: "", category: "renovation", paid: true, refund: false, fileId: "" }); setOcrText(""); setInvoicePhoto(false); setNotice("Koszt zapisany i uwzględniony w rozliczeniu."); }
       } catch (error) { setNotice(error instanceof Error ? error.message : "Nie udało się zapisać kosztu."); }
       finally { setBusy(false); }
     }}>

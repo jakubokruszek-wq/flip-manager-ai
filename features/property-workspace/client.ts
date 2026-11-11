@@ -1,10 +1,13 @@
 import { MAX_FILE_SIZE, validateFile } from "./files";
 import type { FileCategory } from "./model";
+async function hashFile(file: File) {
+  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
 export async function uploadWorkspaceFile(propertyId: string, file: File, category: FileCategory): Promise<string> {
   if (file.size > MAX_FILE_SIZE) throw new Error("Plik może mieć maksymalnie 12 MB.");
-  const bytes = await file.arrayBuffer(); const checked = validateFile(new Uint8Array(bytes), category);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  const sha256 = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+  const checked = validateFile(new Uint8Array(await file.slice(0, 64).arrayBuffer()), category);
+  const sha256 = await hashFile(file);
   const endpoint = `/api/properties/${propertyId}/files`;
   const prepared = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "prepare", name: file.name.slice(0, 200), size: file.size, mime: checked.mime, category, sha256 }) });
   const session = await prepared.json(); if (!prepared.ok) throw new Error(session.message || "Nie udało się przygotować dokumentu.");
