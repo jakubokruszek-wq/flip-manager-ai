@@ -1,0 +1,47 @@
+name: Verify public Android delivery
+on:
+  push:
+    branches: [codex/android-public-download-check]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Download from Manager, interrupt, resume and verify full APK
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {createHash} from 'node:crypto';
+          const origin='https://flip-manager-ai.vercel.app';
+          const expectedCommit='c89b9353dd82f59683f19b9d4a15b1efd3c35be9';
+          const size=213802477;
+          const expectedHash='c2c4b24e64ecbaec1104cda1e644849538023efb3826d8c180f0926d50e1ed10';
+          let info;for(let attempt=0;attempt<24;attempt++){info=await fetch(origin+'/api/build-info',{signal:AbortSignal.timeout(15000)}).then(r=>r.json());if(info.commitSha===expectedCommit)break;await new Promise(r=>setTimeout(r,5000));}
+          assert.equal(info.commitSha,expectedCommit);
+          const page=await fetch(origin+'/android',{signal:AbortSignal.timeout(15000)});
+          assert.equal(page.status,200);assert.match(await page.text(),/Pobierz APK/);
+          const url=origin+'/api/android/flip-watcher-0.5.87.apk';
+          const head=await fetch(url,{method:'HEAD',signal:AbortSignal.timeout(15000)});
+          assert.equal(head.status,200);assert.equal(head.headers.get('content-length'),String(size));
+          const started=Date.now();
+          const first=await fetch(url,{signal:AbortSignal.timeout(180000)});
+          assert.equal(first.status,200);assert.match(first.headers.get('content-type'),/android.package-archive/);assert.match(first.headers.get('content-disposition'),/attachment.*\.apk/);
+          const etag=first.headers.get('etag');assert.ok(etag);
+          const hash=createHash('sha256');let bytes=0;
+          const reader=first.body.getReader();
+          while(bytes<8*1024*1024){const {done,value}=await reader.read();assert.equal(done,false);hash.update(value);bytes+=value.byteLength;}
+          await reader.cancel();reader.releaseLock();const resumeOffset=bytes;
+          const resumed=await fetch(url,{headers:{Range:'bytes='+bytes+'-','If-Range':etag},signal:AbortSignal.timeout(180000)});
+          assert.equal(resumed.status,206,await (resumed.status>=400?resumed.text():Promise.resolve('Expected 206')));
+          assert.equal(resumed.headers.get('content-range'),'bytes '+bytes+'-'+(size-1)+'/'+size);
+          const remaining=resumed.body.getReader();
+          while(true){const {done,value}=await remaining.read();if(done)break;hash.update(value);bytes+=value.byteLength;}
+          remaining.releaseLock();
+          assert.equal(bytes,size);const sha256=hash.digest('hex');assert.equal(sha256,expectedHash);
+          console.log(JSON.stringify({productionCommit:info.commitSha,bytes,resumeOffset,resumed:true,sha256,elapsedMs:Date.now()-started}));
+          NODE
