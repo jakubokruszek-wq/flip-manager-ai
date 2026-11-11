@@ -21,8 +21,8 @@ test("different property facts remain separate even with a reused photograph",()
     assert.equal(groupFacebookReposts([first,second]).length,2,JSON.stringify(patch));
   }
 });
-test("arbitrary image filenames, shared placeholders and missing parameters cannot group offers",()=>{
-  for(const patch of [{images:["https://cdn.test/same.jpg"]},{images:[]},{price:null},{area:null,images:[]}]) assert.equal(groupFacebookReposts([item("123456",patch),item("234567",patch)]).length,2);
+test("arbitrary image filenames, shared placeholders and wholly missing facts cannot group offers",()=>{
+  for(const patch of [{images:["https://cdn.test/same.jpg"]},{images:[]},{price:null,area:null,rooms:null,street:null},{area:null,images:[]}]) assert.equal(groupFacebookReposts([item("123456",patch),item("234567",patch)]).length,2);
 });
 
 test("three groups with recompressed photos and identical detailed own text render once with all source links",()=>{
@@ -158,4 +158,16 @@ test("sparse photo chains cannot hide an offer that shares no photograph with th
  const bridge=item("222222",{...first,listingId:"bridge",images:[image("222222","a".repeat(64)),image("222222","b".repeat(64))]});
  const last=item("333333",{...first,listingId:"last",images:[image("333333","b".repeat(64))]});
  assert.equal(groupFacebookReposts([first,bridge,last]).length,2);
+});
+
+test("real incomplete reposts with integer area or missing room count share a single candidate card", () => {
+ for(const patch of [{price:null,area:64,rooms:3,street:"Polesie, Maczka 6A"},{price:null,area:31.56,rooms:null,street:null},{price:null,area:30,rooms:null,street:null}]){
+  const a=item("123456",{...patch,description:null}), b=item("234567",{...patch,description:null});
+  const before=structuredClone([a,b]), grouped=groupFacebookReposts([a,b]); assert.equal(grouped.length,1);assert.equal(grouped[0].relatedPostMatch,"possible");assert.deepEqual([a,b],before);
+ }
+});
+test("incomplete photo grouping rejects contradictory facts, workflow and unsupported photos",()=>{
+ const a=item("123456",{price:null,area:64,rooms:3,street:"Polesie, Maczka 6A",description:null});
+ for(const patch of [{area:65},{rooms:2},{floor:1},{street:"Maczka 9"},{workflowStatus:"crm" as const},{images:[image("234567","b".repeat(64))]},{lifecycleStatus:"ARCHIVED"}])assert.equal(groupFacebookReposts([a,item("234567",{...a,listingId:"234567",...patch})]).length,2,JSON.stringify(patch));
+ const sparse={price:null,area:null,rooms:null,street:null,description:null};assert.equal(groupFacebookReposts([item("123456",sparse),item("234567",sparse)]).length,2);
 });

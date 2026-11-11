@@ -84,6 +84,10 @@ export function VersionUpdatesSettings() {
     setUpdating(true);
     setMessage("Przygotowuję bezpieczne odświeżenie aplikacji…");
     try {
+      // A stalled browser/Android worker must not leave the update button spinning forever.
+      // This worker handles notifications only; current application assets load on navigation.
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      const refreshWorker = async () => {
       if ("serviceWorker" in navigator) {
         const registration = await navigator.serviceWorker.getRegistration("/");
         if (registration) {
@@ -96,6 +100,13 @@ export function VersionUpdatesSettings() {
           }
         }
       }
+      };
+      try {
+        await Promise.race([
+          refreshWorker().catch(() => undefined),
+          new Promise<void>(resolve => { deadline = setTimeout(resolve, 5000); }),
+        ]);
+      } finally { clearTimeout(deadline); }
 
       const nextUrl = new URL(window.location.href);
       nextUrl.searchParams.set("_app_update", shortSha(productionSha) ?? "latest");
