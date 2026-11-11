@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState, Children, isValidElement, cloneElement, type ReactElement, type ReactNode } from "react";
-import { parseMoney } from "./model";
+import { money, parseMoney } from "./model";
+import { formatPriceEntry, parsePriceEntry } from "./price-entry";
 export const inputClass = "w-full min-w-0 rounded-xl border border-border bg-background px-3 py-3 text-base outline-none focus:border-primary";
 export function TaskForm({ onAdd }: { onAdd: (title: string, contractor: string, dueDate: string) => Promise<boolean> }) {
   const [title, setTitle] = useState(""); const [contractor, setContractor] = useState(""); const [due, setDue] = useState(""); const [busy, setBusy] = useState(false);
@@ -17,4 +18,14 @@ export function MoneyField({ label, value, onChange }: { label: string; value: n
   const editing = useRef(false);
   useEffect(() => { if (!editing.current) setText(value === null ? "" : (value / 100).toFixed(2)); }, [value]);
   return <Field label={`${label}, zł`}><input className={inputClass} inputMode="decimal" onFocus={() => { editing.current = true; }} onBlur={() => { editing.current = false; }} value={text} aria-invalid={!!error} onChange={e => { setText(e.target.value); try { onChange(parseMoney(e.target.value)); setError(""); } catch { setError("Wpisz poprawną kwotę, np. 1250,50."); } }} />{error ? <span role="alert" className="text-xs text-red-400">{error}</span> : null}</Field>;
+}
+
+/** Values remain in grosz; only the price entry unit changes. */
+export function PriceField({ label, value, onChange }: { label: string; value: number | null; onChange: (cents: number | null) => void }) {
+  const [thousands, setThousands] = useState(true);
+  const [text, setText] = useState(formatPriceEntry(value, true));
+  const [error, setError] = useState("");
+  const editing = useRef(false);
+  useEffect(() => { if (!editing.current) setText(formatPriceEntry(value, thousands)); }, [value, thousands]);
+  return <div className="space-y-2"><Field label={`${label}, ${thousands ? "tys. zł" : "zł"}`}><input className={inputClass} inputMode="decimal" value={text} aria-invalid={!!error} onFocus={() => { editing.current = true; }} onBlur={() => { editing.current = false; }} onChange={e => { setText(e.target.value); try { onChange(parsePriceEntry(e.target.value, thousands)); setError(""); } catch { setError("Wpisz poprawną kwotę."); } }} />{error ? <span role="alert" className="text-xs text-red-400">{error}</span> : null}</Field><div className="flex flex-wrap items-center justify-between gap-2"><span className="text-sm font-semibold text-primary">{money(value)}</span><button type="button" className="min-h-11 text-xs text-primary underline" onClick={() => { setThousands(v => !v); setText(formatPriceEntry(value, !thousands)); setError(""); }}>{thousands ? "Wpisz pełną kwotę w zł" : "Wpisuj w tys. zł"}</button></div><p className="text-xs text-muted-foreground">{thousands ? "360 = 360 000 zł · 360,5 = 360 500 zł" : "Wpisz pełną kwotę, np. 360000."}</p></div>;
 }
