@@ -209,6 +209,18 @@ class WatcherAutomationInstrumentedTest {
             assertTrue(saved.photos.all{p->saved.rows.any{it.postId==p.postId}&&p.jpeg.isNotEmpty()})
         }finally{server.close()}
     }
+    @Test fun backgroundReadsOwnAriaDescriptionAndActualPhotoWithoutBorrowingComments()=runBlocking {
+        val path="/groups/$FIXTURE_GROUP_ID/"
+        val server=LoopbackFixtureServer(pages=mapOf(path to "desktop-own-aria-message")){name->runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}
+        try {
+            val saved=BackgroundWatcherScan(context).runFixture("http://127.0.0.1:${server.port}$path"){true}
+            val id="1655103482946827";val row=checkNotNull(saved.rows.find{it.postId==id})
+            assertEquals("SELL_PROPERTY",row.intent);assertEquals(339000.0,row.price);assertEquals(42.42,row.area);assertEquals(2,row.rooms)
+            val text=checkNotNull(saved.postTexts[id]);assertTrue(text.contains("339000"));assertFalse(text.contains("FOREIGN COMMENT"));assertFalse(text.contains("999999"))
+            assertTrue("A background ARIA message must keep its exact actual photo",saved.photos.any{it.postId==id&&it.jpeg.isNotEmpty()})
+            assertTrue((saved.captureStats["groupCaptureCommitted"]?:0)>0)
+        }finally{server.close()}
+    }
     @Test fun lateLargeInitialFeedDataSuppliesFieldsAndKeepsActualBoundPhoto()=runBlocking {
         val path="/groups/$FIXTURE_GROUP_ID/"
         val server=LoopbackFixtureServer(pages=mapOf(path to "desktop-late-feed-data")){name->runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}
@@ -250,7 +262,7 @@ class WatcherAutomationInstrumentedTest {
             WatcherOutbox(context).use{q->
                 assertNull("Schema-only upgrade must preserve sent state",q.next(device,Long.MAX_VALUE))
                 q.readableDatabase.rawQuery("SELECT id,receipt FROM outbox",null).use{assertTrue(it.moveToFirst());assertEquals(frozen.id,it.getString(0));assertEquals("keep-receipt",it.getString(1))}
-                q.report(device,slot,group.id,report);q.completeScan("capture-2/2026-11-04/20",group.id);assertFalse("The updated reader must not reuse 0.5.77 completion receipts",q.scanned(slot,group.id))
+                q.report(device,slot,group.id,report);q.completeScan("capture-2/reader4/2026-11-04/20",group.id);assertFalse("The updated reader must not reuse 0.5.77 completion receipts",q.scanned(slot,group.id))
                 assertFalse(report.toString().contains("SPRZEDAM"));assertFalse(report.toString().contains("jpeg"))
                 q.readableDatabase.rawQuery("SELECT body FROM capture_reports",null).use{assertTrue(it.moveToFirst());assertFalse(String(it.getBlob(0)).contains(group.id))}
             }

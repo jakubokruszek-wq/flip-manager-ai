@@ -469,7 +469,7 @@
     if(message.type==='desktopPreview'){
       if(desktopRunning){port.postMessage({type:'desktopPreviewResult',nonce:message.nonce,status:'STOP',reason:'BUSY',rows:[],stats:scope.FlipDesktopPreview.zero()});return;}
       desktopRunning=true;
-      try{const result=await scope.FlipDesktopPreview.run(scope,message,core,scope.FlipDesktopFields,responsePageSafe,m=>browser.runtime.sendMessage(m),f=>{activeDesktopAbort=f;},m=>m.type==='desktopViewportRequest'?viewportTransport.request(m):(()=>{try{port.postMessage(m);}catch{}})(),desktopIdentity.id);
+      try{const result=await scope.FlipDesktopPreview.run(scope,message,core,scope.FlipDesktopFields,responsePageSafe,m=>browser.runtime.sendMessage(m),f=>{activeDesktopAbort=f;},m=>m.type==='desktopViewportRequest'?viewportTransport.request(m,message.includePostText===true?8000:3500):(()=>{try{port.postMessage(m);}catch{}})(),desktopIdentity.id);
         port.postMessage({type:'desktopPreviewResult',nonce:message.nonce,...result});
       }finally{viewportTransport.clear();desktopRunning=false;activeDesktopAbort=null;}return;
     }

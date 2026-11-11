@@ -419,7 +419,15 @@ const textForbidden='[role="dialog"],[role="alertdialog"],[role="comment"],[data
 function messageText(value){return typeof value==='string'?value.replace(/\r\n?/g,'\n').replace(/[^\S\n]+/gu,' ').replace(/ *\n */g,'\n').trim():'';}
 function ownMessageNodes(card){
  const nodes=card.querySelectorAll(messageSelector);if(nodes.length>30)return[];
- return Array.from(nodes).filter(n=>containers.owner(n)===card&&!n.closest(textForbidden));
+ const marked=Array.from(nodes).filter(n=>containers.owner(n)===card&&!n.closest(textForbidden));
+ if(marked.length)return marked;
+ // An article's explicit accessibility description is an own-message binding,
+ // not permission to scan arbitrary dir=auto nodes or the surrounding feed.
+ const raw=card.getAttribute?.('aria-describedby');
+ if(typeof raw!=='string'||raw.length>1100)return[];
+ const ids=raw.trim().split(/\s+/u);if(!ids.length||ids.length>10||ids.some(id=>!/[A-Za-z0-9_:.-]/u.test(id)||!/^[A-Za-z0-9_:.-]{1,100}$/u.test(id)))return[];
+ const doc=card.ownerDocument;if(!doc?.getElementById)return[];
+ return [...new Set(ids.map(id=>doc.getElementById(id)))].filter(n=>n&&n!==card&&n.ownerDocument===doc&&n.isConnected!==false&&card.contains?.(n)===true&&containers.owner(n)===card&&!n.closest(textForbidden+',header,nav,footer,h1,h2,h3,a,button,[role="button"],[hidden],[aria-hidden="true"]'));
 }
 function ownMessageNodeText(n,card){
  const doc=n.ownerDocument,w=doc?.defaultView;
@@ -602,7 +610,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
 
     // A cold or still-changing first frame must not be lost by scrolling away.
     // One bounded retry, still inside the original capture/time budgets.
-    for(let attempt=0;attempt<2&&model.stats.photoPreviewFrames<(automatic?50:20)&&w.performance.now()<scrollEnd-5000;attempt++){
+    for(let attempt=0;attempt<2&&model.stats.photoPreviewFrames<(automatic?50:20)&&w.performance.now()<scrollEnd-(automatic?8500:5000);attempt++){
      const shot=viewport.photos(w,core,m.groupId,photoNodes,photoSlots,new Set(model.rows().map(r=>r.postId)),mediaBindings,model.stats,{imageURL,photoLinkId,photoAnchorHref,opaquePhotoLink},new Set(model.rows().filter(r=>!r.usable||r.price===null||r.area===null).map(r=>r.postId)),false,automatic);if(!shot)break;
      model.stats.photoPreviewFrames++;const ack=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:'photos',width:shot.width,height:shot.height,tiles:shot.tiles});
      if(invalid||!safe(m))return empty('CONTEXT');

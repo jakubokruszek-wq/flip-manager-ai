@@ -86,7 +86,10 @@ class BackgroundWatcherScan(private val context:Context) {
                     now={android.os.SystemClock.elapsedRealtime()},progress=progress)
                 check(live()){stopReason?:"CANCELLED"}
                 val photos=rows.flatMap{row->images.rows(row.postId).mapIndexed{slot,b->ResultArchive.photo(row.postId,slot,false,b)}}
-                SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,checkNotNull(result.reply).postTexts,checkNotNull(result.reply).stats)
+                val counts=checkNotNull(channel.viewportBridge).captureCounts
+                val keys=listOf("groupCaptureAttempts","groupCaptureInactive","groupCaptureAspect","groupCaptureFrame","groupCaptureLate","groupCaptureError","groupCapturePending","groupCaptureCommitted")
+                SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,checkNotNull(result.reply).postTexts,
+                    checkNotNull(result.reply).stats+keys.mapIndexed{i,key->key to counts[i]}.toMap()+mapOf("groupRenderedFrames" to checkNotNull(surface).renderedFrames))
             }finally {
                 observer?.cancel()
                 runCatching{channel.close()};runCatching{surface?.close()};images.clear()
