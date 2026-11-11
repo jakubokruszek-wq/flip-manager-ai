@@ -104,7 +104,7 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
     data class Item(val id:String,val body:String,val attempt:Int) {override fun toString()="PendingWatcherUpload(redacted)"}
     fun hasDue(device:String,now:Long)=readableDatabase.rawQuery("SELECT 1 FROM outbox WHERE device=? AND state='pending' AND next_at<=? LIMIT 1",arrayOf(device,now.toString())).use{it.moveToFirst()}
     /** First persisted source/post identity, not frozen body variants or retry count. */
-    fun newSourceOffers(source:String,since:Long):Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM (SELECT post,MIN(saved_at) AS first_saved FROM outbox WHERE source=? GROUP BY post HAVING first_saved>=? AND MAX(CASE WHEN state IN ('pending','sent','blocked') THEN 1 ELSE 0 END)=1)",arrayOf(source,since.toString())).use{it.moveToFirst();it.getInt(0)}
+    fun newSourceOffers(source:String,since:Long):Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM (SELECT post,MIN(saved_at) AS first_saved FROM outbox WHERE source=? GROUP BY post HAVING first_saved>=CAST(? AS INTEGER) AND MAX(CASE WHEN state IN ('pending','sent','blocked') THEN 1 ELSE 0 END)=1)",arrayOf(source,since.toString())).use{it.moveToFirst();it.getInt(0)}
     fun transferCounts():Map<String,Int>{
         val names=mapOf("pending" to "queuePending","blocked" to "queueBlocked","quality_hold" to "queueQualityHeld","sent" to "queueSent")
         val counts=names.values.associateWith{0}.toMutableMap()
