@@ -17,6 +17,7 @@ import { resolveListingStatusPresentation } from "../listing-status-presentation
 import { createHistoryClearRunner, runAddToCrm, runGalleryRepairAndRefresh, runUpdateWorkflow, type UpdateWorkflowResult } from "../watcher-action-flows";
 import { resolveListingUrl } from "@/features/listing-url";
 import { WATCHER_FILTER_STORAGE_KEY, readSavedInboxFilters, inboxRangeError, subscribeInboxFilters, inboxFilterStorageSnapshot, inboxFilterServerSnapshot } from "../saved-inbox-filters";
+import { useVisualReposts } from "../use-visual-reposts";
 import { groupFacebookReposts } from "../group-facebook-reposts";
 const priceSuspect = (item: FacebookWatcherListing) => isFacebookPriceSuspect(item.priceQuality?.status ?? "LIKELY");
 
@@ -50,7 +51,8 @@ export function FacebookWatcherPanel() {
   const handledDeepLink=useRef(false);
   const analysisButtonsRef=useRef(new Map<string,HTMLButtonElement>());
   const registerAnalysisButton=useCallback((id:string,button:HTMLButtonElement|null)=>{if(button)analysisButtonsRef.current.set(id,button);else analysisButtonsRef.current.delete(id);},[]);
-  const [listings,setListings]=useState<FacebookWatcherListing[]>([]); const [loading,setLoading]=useState(true); const [error,setError]=useState<string|null>(null);
+  const [rawListings,setListings]=useState<FacebookWatcherListing[]>([]);
+  const {listings,progress:photoComparisonProgress}=useVisualReposts(rawListings); const [loading,setLoading]=useState(true); const [error,setError]=useState<string|null>(null);
   const [tab,setTab]=useState<InboxTab>("all"); const [sort,setSort]=useState<FacebookInboxSort>("newest"); const [draftFilters,setDraftFilters]=useState<FacebookInboxFilters|null>(null); const [busyId,setBusyId]=useState<string|null>(null); const [historyClearing,setHistoryClearing]=useState(false); const [toast,setToast]=useState<Toast|null>(null);
   const savedFilterValue=useSyncExternalStore(subscribeInboxFilters,inboxFilterStorageSnapshot,inboxFilterServerSnapshot);
   const savedFilters=useMemo(()=>readSavedInboxFilters(savedFilterValue),[savedFilterValue]);
@@ -182,7 +184,7 @@ export function FacebookWatcherPanel() {
       {visible.some(item=>(item.relatedPosts?.length??0)>1)?<p className="text-xs text-muted-foreground">Po zgrupowaniu: {visible.length} kart · {visible.reduce((total,item)=>total+(item.relatedPosts?.length??1),0)} publikacji. „Możliwe duplikaty” oznaczają zgodne parametry bez potwierdzenia zdjęciem lub pełnym opisem. Każdy post pozostaje dostępny w „Powiązane publikacje”.</p>:null}
       {error?<p className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</p>:null}{loading?<p className="py-12 text-center text-sm text-muted-foreground">Ładowanie Inboxu…</p>:null}
       {!loading&&visible.length===0?<div className="rounded-2xl border border-dashed p-10 text-center text-muted-foreground">Brak ofert spełniających wybrane kryteria.</div>:null}
-      <div className="grid gap-5 xl:grid-cols-2">{visible.map(item=><InboxItem addToCrm={addToCrm} registerAnalysisButton={registerAnalysisButton} busy={busyId===item.listingId} item={item} key={item.listingId} onAnalyze={openAnalysis} onRepairGallery={repairGallery} onRestoreToFinder={restoreToFinder} updateWorkflow={guardedUpdateWorkflow}/>)}</div>
+      {photoComparisonProgress?<p role="status" className="text-xs text-muted-foreground">{photoComparisonProgress}</p>:null}<div className="grid gap-5 xl:grid-cols-2">{visible.map(item=><InboxItem addToCrm={addToCrm} registerAnalysisButton={registerAnalysisButton} busy={busyId===item.listingId} item={item} key={item.listingId} onAnalyze={openAnalysis} onRepairGallery={repairGallery} onRestoreToFinder={restoreToFinder} updateWorkflow={guardedUpdateWorkflow}/>)}</div>
     </section>
     {toast?<div aria-live="polite" className={`fixed inset-x-0 bottom-5 z-50 mx-auto w-fit max-w-[calc(100%-2rem)] rounded-xl border px-4 py-3 text-sm font-medium shadow-xl ${toast.tone==="success"?"border-emerald-500/30 bg-emerald-500/10 text-emerald-600":"border-destructive/30 bg-destructive/10 text-destructive"}`}>{toast.text}</div>:null}
   </main>;
