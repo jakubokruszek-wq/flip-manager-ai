@@ -26,3 +26,9 @@ test("AI cannot fill invented fields or match a smaller number inside a gross to
  c.mock.method(globalThis,"fetch",async()=>Response.json({output_text:JSON.stringify({text:"Brutto\nRazem 100,00 23,00 123,00 PLN",supplier:"Invented",invoiceNumber:"INV/999",issueDate:"2026-01-01",totalGrossText:"3,00",totalEvidence:"Brutto\nRazem 100,00 23,00 123,00 PLN"})}));
  const r=await readInvoiceAi(new TextEncoder().encode('%PDF-fixture'),"fixture-key");assert.equal(r.supplier,"");assert.equal(r.invoiceNumber,"");assert.equal(r.date,"");assert.equal(r.amount,null);
 });
+
+test("AI cannot label the net column as gross using a grounded table snippet",async c=>{
+ const text="Netto VAT Brutto\nRazem 1000,00 230,00 1230,00 PLN\nRazem brutto: 9999,00 PLN";
+ c.mock.method(globalThis,"fetch",async()=>Response.json({output_text:JSON.stringify({text,supplier:null,invoiceNumber:null,issueDate:null,totalGrossText:"1000,00",totalEvidence:"Netto VAT Brutto\nRazem 1000,00 230,00 1230,00 PLN"})}));
+ assert.equal((await readInvoiceAi(new TextEncoder().encode('%PDF-fixture'),"fixture-key")).amount,null);
+});

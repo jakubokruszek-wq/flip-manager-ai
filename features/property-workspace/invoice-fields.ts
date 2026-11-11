@@ -31,13 +31,25 @@ function totalAt(lines:string[],index:number,label:RegExp):number|null {
   }
   return null;
 }
+function tableTotals(lines:string[]):number[] {
+  const totals:number[]=[];
+  for(let i=0;i<lines.length;i++) {
+    if(!/^(?:warto[śs][ćc]\s+)?netto\s+(?:kwota\s+)?VAT\s+(?:warto[śs][ćc]\s+)?brutto\s*$/i.test(lines[i]))continue;
+    for(const row of lines.slice(i+1,i+4)) {
+      if(!/^(?:razem|suma|og[oó][łl]em)\b/i.test(row)||/[€$£]|\b(?:EUR|USD|GBP|CHF)\b/i.test(row))continue;
+      const values=invoiceAmountTokens(row);
+      if(values.length===3&&Math.abs(values[0]+values[1]-values[2])<=2)totals.push(values[2]);
+    }
+  }
+  return totals;
+}
 export function invoiceDraft(text:string) {
   const normalized=text.replace(/[\u00a0\u202f]/g," ").replace(/[–−]/g,"-");const lines=normalized.split(/\r?\n/).map(v=>v.trim()).filter(Boolean);
   let amount:number|null=null;
   const strong=lines.map((line,i)=>gross.test(line)?i:-1).filter(i=>i>=0);
   const weak=lines.map((line,i)=>payable.test(line)&&!/pozosta[łl]/i.test(line)?i:-1).filter(i=>i>=0);
   const candidates=(strong.length?strong:weak).map(i=>totalAt(lines,i,strong.length?gross:payable));
-  const known=[...new Set(candidates.filter((v):v is number=>v!==null))];if(known.length===1)amount=known[0];
+  const known=[...new Set([...candidates.filter((v):v is number=>v!==null),...tableTotals(lines)])];if(known.length===1)amount=known[0];
   const number=normalized.match(/(?:faktura(?:\s+vat)?(?:\s+(?:nr|numer))?|(?:nr|numer)\s*faktury)\s*[:.#-]?\s*(?!VAT\b)([\p{L}\d][\p{L}\d/_.-]*\d[\p{L}\d/_.-]*|\d)/iu)?.[1]??"";
   const dateMatch=normalized.match(/(?:data\s*(?:wystawienia|faktury)|wystawiono(?:\s*dnia)?)\s*[:.-]?\s*([^\n]{0,30})/i)?.[1]??"";
   const sellerStart=lines.findIndex(line=>/sprzedawc[ay]|wystawca|dostawca/i.test(line));

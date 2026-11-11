@@ -15,3 +15,10 @@ test("payable and sum labels, integer PLN and decimal grouping stay exact",()=>{
 test("seller selection does not take the buyer and dates must exist",()=>{
  const r=invoiceDraft("Nabywca: Kupujący\nNIP: 1234563218\nSprzedawca:\nSklep XYZ\nData faktury: 11/11/2026\nDo zapłaty: 24,60 PLN");assert.equal(r.supplier,"Sklep XYZ");assert.equal(r.date,"2026-11-11");assert.equal(invoiceDate("31.02.2026"),"");
 });
+
+test("OCR totals follow explicit net VAT gross columns and reject inconsistent rows",()=>{
+ assert.equal(invoiceDraft("Netto VAT Brutto\nRazem 1000,00 230,00 1230,00 PLN").amount,123000);
+ assert.equal(invoiceDraft("Netto VAT Brutto\nRazem 1000,00 230,00 9999,00 PLN").amount,null);
+ assert.equal(invoiceDraft("Brutto VAT Netto\nRazem 1230,00 230,00 1000,00 PLN").amount,null);
+ assert.equal(invoiceDraft("Netto VAT Brutto\nRazem 1000,00 230,00 1230,00 EUR").amount,null);
+});

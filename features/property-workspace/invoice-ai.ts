@@ -1,5 +1,5 @@
 import sharp from "sharp";
-import { invoiceDraft, invoiceAmount, invoiceDate, invoiceAmountTokens } from "./invoice-fields";
+import { invoiceDraft, invoiceAmount, invoiceDate } from "./invoice-fields";
 import { validateFile, MAX_FILE_SIZE } from "./files";
 /** Same Responses transport as the existing image analyzer; invoked only by the AI button. */
 export async function readInvoiceAi(bytes: Uint8Array, key: string, signal?: AbortSignal) {
@@ -25,6 +25,6 @@ export async function readInvoiceAi(bytes: Uint8Array, key: string, signal?: Abo
     const date=invoiceDate(parsed.issueDate),polish=date?date.split("-").reverse().join("."):"";
     if(date&&(normalize(parsed.text).includes(normalize(date))||normalize(parsed.text).includes(normalize(polish))||normalize(parsed.text).includes(normalize(polish.replaceAll(".","/")))))draft.date=date;
   }
-  if(draft.amount===null&&grounded(parsed.totalEvidence,1500)&&typeof parsed.totalGrossText==="string"&&parsed.totalGrossText.length<=80&&invoiceAmount(parsed.totalGrossText)!==null&&invoiceAmountTokens(parsed.totalEvidence).includes(invoiceAmount(parsed.totalGrossText)!)&&/(?:brutto|do\s*zap[łl]aty)/i.test(parsed.totalEvidence)&&!/[€$£]|\b(?:EUR|USD|GBP|CHF)\b/i.test(parsed.totalEvidence))draft.amount=invoiceAmount(parsed.totalGrossText);
+  if(draft.amount===null&&grounded(parsed.totalEvidence,1500)&&typeof parsed.totalGrossText==="string"&&parsed.totalGrossText.length<=80&&invoiceAmount(parsed.totalGrossText)!==null&&invoiceDraft(parsed.totalEvidence).amount===invoiceAmount(parsed.totalGrossText)&&/(?:brutto|do\s*zap[łl]aty)/i.test(parsed.totalEvidence)&&!/[€$£]|\b(?:EUR|USD|GBP|CHF)\b/i.test(parsed.totalEvidence))draft.amount=invoiceAmount(parsed.totalGrossText);
   return {text:parsed.text,...draft};
 }
