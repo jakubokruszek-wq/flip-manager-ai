@@ -1,16 +1,21 @@
 import type { FacebookWatcherListing } from "./types";
-export type PhotoFingerprint = { assetHash: string; dhash: string; ahash: string; mean: [number,number,number]; detail: number; aspect: number };
+export type VisualSignature = { dhash: string; ahash: string; mean: [number,number,number]; detail: number; aspect: number };
+export type PhotoFingerprint = VisualSignature & { assetHash: string; variants?: VisualSignature[] };
 export function mobileImageAsset(value: string): { hash: string; url: string } | null {
   try { const u=new URL(value);const match=/^\/storage\/v1\/object\/public\/facebook-watcher-images\/android\/[0-9a-f-]{36}\/\d{5,30}\/([a-f0-9]{64})\.jpg$/u.exec(u.pathname);return u.protocol==="https:"&&match?{hash:match[1],url:u.href}:null; }catch{return null;}
 }
 export function readFingerprints(value: unknown): PhotoFingerprint[] {
   if(!Array.isArray(value))return [];
-  return value.slice(0,3).flatMap(v=>{if(!v||typeof v!=="object")return [];const f=v as PhotoFingerprint;return /^[a-f0-9]{64}$/.test(f.assetHash)&&/^[a-f0-9]{16}$/.test(f.dhash)&&/^[a-f0-9]{16}$/.test(f.ahash)&&Array.isArray(f.mean)&&f.mean.length===3&&f.mean.every(n=>Number.isFinite(n)&&n>=0&&n<=255)&&Number.isFinite(f.detail)&&f.detail>=0&&f.detail<=255&&Number.isFinite(f.aspect)&&f.aspect>0&&f.aspect<=20?[f]:[];});
+  return value.slice(0,3).flatMap(v=>{if(!v||typeof v!=="object")return [];const f=v as PhotoFingerprint;return /^[a-f0-9]{64}$/.test(f.assetHash)&&/^[a-f0-9]{16}$/.test(f.dhash)&&/^[a-f0-9]{16}$/.test(f.ahash)&&Array.isArray(f.mean)&&f.mean.length===3&&f.mean.every(n=>Number.isFinite(n)&&n>=0&&n<=255)&&Number.isFinite(f.detail)&&f.detail>=0&&f.detail<=255&&Number.isFinite(f.aspect)&&f.aspect>0&&f.aspect<=20?[{...f,variants:Array.isArray(f.variants)?f.variants.slice(0,30).filter(v=>v&&/^[a-f0-9]{16}$/.test(v.dhash)&&/^[a-f0-9]{16}$/.test(v.ahash)&&Array.isArray(v.mean)&&v.mean.length===3&&v.mean.every(n=>Number.isFinite(n)&&n>=0&&n<=255)&&Number.isFinite(v.detail)&&v.detail>=0&&v.detail<=255&&Number.isFinite(v.aspect)&&v.aspect>0&&v.aspect<=20):[]}]:[];});
 }
 export function hamming(a:string,b:string) { const counts=[0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4];let count=0;for(let i=0;i<a.length;i++)count+=counts[parseInt(a[i],16)^parseInt(b[i],16)];return count; }
-export function similarPhoto(a:PhotoFingerprint,b:PhotoFingerprint) {
+function signaturesMatch(a:VisualSignature,b:VisualSignature) {
   return a.detail>=16&&b.detail>=16&&Math.abs(a.aspect-b.aspect)/Math.max(a.aspect,b.aspect)<=0.08&&a.mean.every((v,i)=>Math.abs(v-b.mean[i])<=14)&&hamming(a.dhash,b.dhash)<=6&&hamming(a.ahash,b.ahash)<=8;
 }
+export function similarPhoto(a:PhotoFingerprint,b:PhotoFingerprint) {
+  return signaturesMatch(a,b)||(a.variants??[]).some(v=>signaturesMatch(v,b))||(b.variants??[]).some(v=>signaturesMatch(a,v));
+}
+
 function normalized(v:string|number) { return typeof v==="string"?v.normalize("NFKC").toLocaleLowerCase("pl").replace(/\s+/gu," ").trim():v; }
 /** A visual fingerprint alone is never property identity: require corroborating property facts. */
 export function visualFactsAgree(a:FacebookWatcherListing,b:FacebookWatcherListing) {

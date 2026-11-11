@@ -10,7 +10,7 @@ const cachedFingerprint=unstable_cache(async(url:string,hash:string)=>{
   const reader=response.body?.getReader();if(!reader)throw Error("No image");const parts:Uint8Array[]=[];let size=0;
   try{for(;;){const r=await reader.read();if(r.done)break;size+=r.value.length;if(size>2*1024*1024)throw Error("Image too large");parts.push(r.value);}}finally{await reader.cancel();}
   const bytes=Buffer.concat(parts);if(createHash("sha256").update(bytes).digest("hex")!==hash)throw Error("Image checksum mismatch");return fingerprintImage(bytes,hash);
-},["watcher-photo-fingerprint-v1"],{revalidate:604800});
+},["watcher-photo-fingerprint-v2-crops"],{revalidate:604800});
 export async function POST(request:Request) {
   try {
     await requireOperator();if(Number(request.headers.get("content-length")??0)>2048)return Response.json({message:"Za dużo danych."},{status:400});

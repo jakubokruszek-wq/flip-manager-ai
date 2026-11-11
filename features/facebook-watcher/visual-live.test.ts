@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
 import sharp from "sharp";
 import { createHash } from "node:crypto";
 import { fingerprintImage } from "./server/image-fingerprint.ts";
@@ -12,6 +13,7 @@ const samples=[
  ["3762792143882481","cc509eaca5c115a16e5d2840e97dda6a6fffb4c05fcda738fb3294ac64a7cae1"]
 ];
 test("reported bathroom photographs match despite different uploaded JPEG hashes",{skip:process.env.WATCHER_VISUAL_LIVE_FIXTURES!=="1",timeout:60000},async()=>{
- const fingerprints=[];for(const [post,hash] of samples){const r=await fetch(`https://zmuisdirvfcxrvtbvrle.supabase.co/storage/v1/object/public/facebook-watcher-images/android/17b58632-1d58-48f5-8d0e-04d74dc5e96e/${post}/${hash}.jpg`,{signal:AbortSignal.timeout(10000)});assert.equal(r.status,200);const b=new Uint8Array(await r.arrayBuffer());assert.equal(createHash("sha256").update(b).digest("hex"),hash);const m=await sharp(b).metadata();console.log(JSON.stringify({sample:fingerprints.length,width:m.width,height:m.height}));fingerprints.push(await fingerprintImage(b,hash));}
- for(let i=0;i<fingerprints.length;i++)for(let j=i+1;j<fingerprints.length;j++){console.log(JSON.stringify({pair:[i,j],dhash:hamming(fingerprints[i].dhash,fingerprints[j].dhash),ahash:hamming(fingerprints[i].ahash,fingerprints[j].ahash),means:[fingerprints[i].mean,fingerprints[j].mean],aspect:[fingerprints[i].aspect,fingerprints[j].aspect]}));assert.equal(similarPhoto(fingerprints[i],fingerprints[j]),true);}
+ fs.mkdirSync("test-artifacts/visual-photos",{recursive:true});const fingerprints=[];for(const [post,hash] of samples){const r=await fetch(`https://zmuisdirvfcxrvtbvrle.supabase.co/storage/v1/object/public/facebook-watcher-images/android/17b58632-1d58-48f5-8d0e-04d74dc5e96e/${post}/${hash}.jpg`,{signal:AbortSignal.timeout(10000)});assert.equal(r.status,200);const b=new Uint8Array(await r.arrayBuffer());assert.equal(createHash("sha256").update(b).digest("hex"),hash);fs.writeFileSync(`test-artifacts/visual-photos/sample-${fingerprints.length}.jpg`,b);const m=await sharp(b).metadata();console.log(JSON.stringify({sample:fingerprints.length,width:m.width,height:m.height}));fingerprints.push(await fingerprintImage(b,hash));}
+ const results=[];for(let i=0;i<fingerprints.length;i++)for(let j=i+1;j<fingerprints.length;j++){console.log(JSON.stringify({pair:[i,j],dhash:hamming(fingerprints[i].dhash,fingerprints[j].dhash),ahash:hamming(fingerprints[i].ahash,fingerprints[j].ahash),means:[fingerprints[i].mean,fingerprints[j].mean],aspect:[fingerprints[i].aspect,fingerprints[j].aspect]}));results.push({pair:[i,j],match:similarPhoto(fingerprints[i],fingerprints[j])});}
+ fs.writeFileSync("test-artifacts/visual-photos/results.json",JSON.stringify({fingerprints,results},null,2));assert.ok(results.every(r=>r.match),JSON.stringify(results));
 });
