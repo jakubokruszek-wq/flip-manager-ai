@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-gecko-poc-${{ github.ref }}
+  group: android-gecko-poc-${{ github.ref }}${{ github.ref == 'refs/heads/codex/android-scan-summary-088' && '-release-088' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -116,6 +116,8 @@ jobs:
 
       - name: Upload unit test reports
         if: always()
+        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-scan-summary-088' }}
+        timeout-minutes: 3
         uses: actions/upload-artifact@v4
         with:
           name: gecko-poc-unit-reports-${{ github.run_number }}
@@ -252,6 +254,8 @@ jobs:
 
       - name: Upload instrumented test reports
         if: always()
+        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-scan-summary-088' }}
+        timeout-minutes: 3
         uses: actions/upload-artifact@v4
         with:
           name: gecko-poc-instrumented-reports-${{ github.run_number }}
