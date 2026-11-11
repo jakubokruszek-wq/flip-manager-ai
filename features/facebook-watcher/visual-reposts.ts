@@ -28,7 +28,8 @@ export function visualFactsAgree(a:FacebookWatcherListing,b:FacebookWatcherListi
   // precise fractional area + known matching rooms can corroborate a visual
   // match, but never merge records by those parameters alone.
   const preciseUnpricedSnapshot=area&&!Number.isInteger(a.area)&&a.price==null&&b.price==null&&!a.description?.trim()&&!b.description?.trim();
-  return area&&rooms&&(location||(a.price!=null&&a.price>0&&a.price===b.price)||preciseUnpricedSnapshot);
+  const samePrice=a.price!=null&&a.price>0&&a.price===b.price;
+  return area&&(samePrice||(rooms&&(location||preciseUnpricedSnapshot)));
 }
 export function possibleVisualRepost(a:FacebookWatcherListing,b:FacebookWatcherListing) {
   if(!visualFactsAgree(a,b))return false;
@@ -39,6 +40,6 @@ export function possibleVisualRepost(a:FacebookWatcherListing,b:FacebookWatcherL
 }
 export function visualCandidates(records:FacebookWatcherListing[]) {
   const buckets=new Map<string,FacebookWatcherListing[]>();
-  for(const r of records){if(r.source!=="facebook"||r.workflowStatus==="rejected"||!r.area||!r.rooms||!r.images.some(mobileImageAsset))continue;const k=`${r.area}:${r.rooms}`;if(!buckets.has(k))buckets.set(k,[]);buckets.get(k)!.push(r);}
+  for(const r of records){if(r.source!=="facebook"||r.workflowStatus==="rejected"||!r.area||!r.images.some(mobileImageAsset))continue;const k=`${r.area}`;if(!buckets.has(k))buckets.set(k,[]);buckets.get(k)!.push(r);}
   return [...buckets.values()].flatMap(group=>group.filter(r=>group.some(other=>other.listingId!==r.listingId&&visualFactsAgree(r,other)))).slice(0,500);
 }
