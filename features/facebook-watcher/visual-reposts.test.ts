@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
 import sharp from "sharp";
 import { fingerprintImage } from "./server/image-fingerprint.ts";
 import { mobileImageAsset,possibleVisualRepost,similarPhoto,visualCandidates,type PhotoFingerprint } from "./visual-reposts.ts";
@@ -12,3 +13,8 @@ test("recompressed bytes with matching visual evidence render once with every pu
 test("visual matches require matching known facts and image-bound fingerprints",()=>{const a=item("123456","a".repeat(64),{photoFingerprints:[proof("a".repeat(64))]});const b=item("234567","b".repeat(64),{photoFingerprints:[proof("b".repeat(64))]});for(const patch of [{area:39},{rooms:3},{street:"Widzew"},{workflowStatus:"crm" as const},{lifecycleStatus:"ARCHIVED"},{photoFingerprints:[proof("c".repeat(64))]},{photoFingerprints:[{...proof("b".repeat(64)),dhash:"0000000000000000"}]}])assert.equal(possibleVisualRepost(a,{...b,...patch}),false,JSON.stringify(patch));assert.equal(possibleVisualRepost({...a,street:null},{...b,street:null}),false);});
 test("visually flat images, strong color differences and sparse bridge cards never collapse homes",()=>{const f=proof("a".repeat(64));assert.equal(similarPhoto(f,{...f,detail:0}),false);assert.equal(similarPhoto(f,{...f,mean:[230,220,210]}),false);const a=item("123456","a".repeat(64),{photoFingerprints:[f]});const b=item("234567","b".repeat(64),{photoFingerprints:[proof("b".repeat(64))]});const c=item("345678","c".repeat(64),{area:39,photoFingerprints:[proof("c".repeat(64))]});assert.equal(groupFacebookReposts([a,b,c]).length,2);assert.equal(mobileImageAsset("https://evil.test/placeholder.jpg"),null);});
 test("actual JPEG resizing and recompression are tolerated; different scenes are rejected",async()=>{const w=640,h=480,raw=Buffer.alloc(w*h*3);for(let y=0;y<h;y++)for(let x=0;x<w;x++){const p=(y*w+x)*3;raw[p]=Math.round(120+60*Math.sin(x/35)+25*Math.cos(y/47));raw[p+1]=Math.round(130+55*Math.sin(y/41)+20*Math.cos(x/57));raw[p+2]=Math.round(140+50*Math.sin((x+y)/51));}const first=await sharp(raw,{raw:{width:w,height:h,channels:3}}).jpeg({quality:95}).toBuffer();const second=await sharp(first).resize(96,72).jpeg({quality:40}).toBuffer();const a=await fingerprintImage(first,"a".repeat(64)),b=await fingerprintImage(second,"b".repeat(64));assert.equal(similarPhoto(a,b),true);const other=await sharp(first).flop().jpeg().toBuffer();assert.equal(similarPhoto(a,await fingerprintImage(other,"c".repeat(64))),false);});
+
+test("reported differently cropped bathroom variants render as one card (offline regression)",()=>{
+ const fingerprints=JSON.parse(fs.readFileSync(new URL("./fixtures/reported-bathroom-fingerprints.json",import.meta.url),"utf8")) as PhotoFingerprint[];
+ const records=fingerprints.map((f,i)=>item(String(123456+i),f.assetHash,{photoFingerprints:[f]}));assert.equal(records.length,4);const grouped=groupFacebookReposts(records);assert.equal(grouped.length,1);assert.equal(grouped[0].relatedPosts?.length,4);assert.equal(grouped[0].relatedPostMatch,"possible");
+});

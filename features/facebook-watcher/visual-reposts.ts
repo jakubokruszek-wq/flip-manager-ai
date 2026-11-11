@@ -13,7 +13,7 @@ function signaturesMatch(a:VisualSignature,b:VisualSignature) {
   return a.detail>=16&&b.detail>=16&&Math.abs(a.aspect-b.aspect)/Math.max(a.aspect,b.aspect)<=0.08&&a.mean.every((v,i)=>Math.abs(v-b.mean[i])<=14)&&hamming(a.dhash,b.dhash)<=6&&hamming(a.ahash,b.ahash)<=8;
 }
 export function similarPhoto(a:PhotoFingerprint,b:PhotoFingerprint) {
-  return signaturesMatch(a,b)||(a.variants??[]).some(v=>signaturesMatch(v,b))||(b.variants??[]).some(v=>signaturesMatch(a,v));
+  return signaturesMatch(a,b)||(a.variants??[]).some(v=>signaturesMatch(v,b))||(b.variants??[]).some(v=>signaturesMatch(a,v))||(a.variants??[]).some(l=>(b.variants??[]).some(r=>signaturesMatch(l,r)));
 }
 
 function normalized(v:string|number) { return typeof v==="string"?v.normalize("NFKC").toLocaleLowerCase("pl").replace(/\s+/gu," ").trim():v; }

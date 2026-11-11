@@ -21,7 +21,7 @@ jobs:
         run: node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/collector/facebook-groups-feed.test.ts features/collector/facebook-mobile.test.ts features/collector/mobile-jpeg.test.ts features/collector/facebook-import.test.ts features/facebook-watcher/offer-quality.test.ts features/facebook-watcher/saved-cleanup.test.ts features/facebook-watcher/saved-cleanup-route.test.ts features/facebook-watcher/saved-cleanup.rpc.test.ts features/facebook-watcher/history-clear.test.ts features/facebook-watcher/history-summary.integration.test.ts features/facebook-watcher/search-quality.test.ts features/facebook-watcher/facebook-inbox.test.ts features/facebook-watcher/saved-inbox-filters.test.ts features/facebook-watcher/group-facebook-reposts.test.ts features/facebook-watcher/list-facebook-watcher.test.ts
       - name: Visual matching and reported live image regression
         env:
-          WATCHER_VISUAL_LIVE_FIXTURES: "1"
+          WATCHER_VISUAL_LIVE_FIXTURES: ${{ (github.head_ref == 'codex/visual-reposts' || github.ref_name == 'codex/visual-reposts') && '1' || '0' }}
         run: node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/facebook-watcher/visual-reposts.test.ts features/facebook-watcher/visual-live.test.ts features/facebook-watcher/visual-photo-route.test.ts
       - uses: actions/upload-artifact@v4
         if: always()
