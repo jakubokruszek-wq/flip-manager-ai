@@ -4,7 +4,7 @@ function hex(bits:boolean[]) { return Array.from({length:16},(_,i)=>parseInt(bit
 /** Tiny, lossy-compression-tolerant signatures; all image decoding stays on the server. */
 export async function fingerprintImage(bytes:Uint8Array,assetHash:string):Promise<PhotoFingerprint> {
   const image=sharp(bytes,{limitInputPixels:12_000_000,sequentialRead:true}).rotate().removeAlpha();
-  const metadata=await image.metadata();if(!metadata.width||!metadata.height||metadata.width<120||metadata.height<120)throw Error("Image too small");
+  const metadata=await image.metadata();if(!metadata.width||!metadata.height||metadata.width<48||metadata.height<48)throw Error("Image too small");
   const d=await image.clone().resize(9,8,{fit:"fill"}).greyscale().raw().toBuffer();
   const a=await image.clone().resize(8,8,{fit:"fill"}).greyscale().raw().toBuffer();
   const color=await image.clone().resize(16,16,{fit:"fill"}).toColourspace("srgb").raw().toBuffer();
