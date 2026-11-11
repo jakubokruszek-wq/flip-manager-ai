@@ -65,8 +65,9 @@ export async function PATCH(request: Request, { params }: Context) {
 }
 
 export async function DELETE(_request: Request, { params }: Context) {
+  let actor;
   try {
-    await requireOperator();
+    actor = await requireOperator();
   } catch (error) {
     return operatorAuthorizationResponse(error);
   }
@@ -99,9 +100,15 @@ export async function DELETE(_request: Request, { params }: Context) {
         { status: 409 },
       );
     }
+    const cleanup = await cleanupPrivateFiles(supabase, actor.id, id);
+    if (cleanup.error) return Response.json({ message: "Nie udało się dokończyć usuwania dokumentów. Spróbuj ponownie." }, { status: 503 });
+    if (cleanup.removed) return new Response(null, { status: 204 });
     return Response.json({ message: "Nie znaleziono nieruchomości." }, { status: 404 });
   }
 
+  const workspace = await supabase.from("property_workspaces").select("owner_id").eq("property_id", id).maybeSingle();
+  if (workspace.error) return Response.json({ message: "Nie udało się sprawdzić właściciela karty." }, { status: 500 });
+  if (workspace.data && workspace.data.owner_id !== actor.id) return Response.json({ message: "Brak dostępu do karty." }, { status: 403 });
   const { error: deleteError } = await supabase.from("properties").delete().eq("id", id);
 
   if (deleteError) {
@@ -109,5 +116,24 @@ export async function DELETE(_request: Request, { params }: Context) {
     return Response.json({ message: "Nie udało się usunąć nieruchomości." }, { status: 500 });
   }
 
+  const cleanup = await cleanupPrivateFiles(supabase, actor.id, id);
+  if (cleanup.error) return Response.json({ message: "Kartę usunięto, ale dokumenty wymagają dokończenia usuwania. Naciśnij Usuń ponownie.", code: "PRIVATE_FILE_CLEANUP_PENDING" }, { status: 503 });
   return new Response(null, { status: 204 });
+}
+
+async function cleanupPrivateFiles(db: ReturnType<typeof createAdminClient>, ownerId: string, propertyId: string) {
+  const bucket = db.storage.from("property-workspace-private");
+  let removed = 0;
+  // Scope includes the authenticated owner. A retry can clean files even after cascading metadata deletion.
+  const prefix = `${ownerId}/${propertyId}`;
+  for (let batch = 0; batch < 20; batch++) {
+    const list = await bucket.list(prefix, { limit: 1000 });
+    if (list.error) return { removed, error: true };
+    const paths = (list.data ?? []).filter(item => item.id).map(item => `${prefix}/${item.name}`);
+    if (!paths.length) return { removed, error: false };
+    const result = await bucket.remove(paths);
+    if (result.error) return { removed, error: true };
+    removed += paths.length;
+  }
+  return { removed, error: true };
 }

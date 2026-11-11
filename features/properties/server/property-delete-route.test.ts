@@ -38,11 +38,16 @@ mock.module("@/features/auth/operator", {
 // nonexistent id is, since that generic message is exactly what would mask
 // a real wrong-table bug from whoever debugs it next.
 const propertiesTable = new Map<string, { id: string }>();
+const workspaceOwners = new Map<string, string>();
+let cleanupFails = false;
+const privateObjects = new Set<string>();
 const listingsTable = new Map<string, { id: string }>();
 
 function fakeAdminClient() {
   return {
+    storage: { from: () => ({ list: async (prefix: string) => cleanupFails ? { error: { message: "offline" } } : { data: [...privateObjects].filter(p => p.startsWith(prefix + "/")).map(p => ({ id: p, name: p.slice(prefix.length + 1) })), error: null }, remove: async (paths: string[]) => { paths.forEach(p => privateObjects.delete(p)); return { error: null }; } }) },
     from: (table: string) => {
+      if (table === "property_workspaces") return { select: () => ({ eq: (_column: string, id: string) => ({ maybeSingle: async () => ({ data: workspaceOwners.has(id) ? { owner_id: workspaceOwners.get(id) } : null, error: null }) }) }) };
       if (table === "properties") {
         return {
           select: () => ({
@@ -107,4 +112,17 @@ test("an id that belongs to public.listings, not public.properties, is never del
   assert.notEqual(body.message, "Nie znaleziono nieruchomości.");
   // The listing itself must never be touched by this endpoint.
   assert.equal(listingsTable.has("listing-1"), true);
+});
+
+test("another operator cannot delete an owned workspace", async () => {
+ propertiesTable.set("owned", { id: "owned" }); workspaceOwners.set("owned", "other-operator");
+ const response = await route.DELETE(new Request("https://x", { method: "DELETE" }), deleteRequest("owned"));
+ assert.equal(response.status, 403); assert.equal(propertiesTable.has("owned"), true);
+ workspaceOwners.clear();
+});
+test("private cleanup failure remains retryable after the property is removed", async () => {
+ propertiesTable.set("cleanup", { id: "cleanup" }); privateObjects.add("operator-1/cleanup/file.pdf"); privateObjects.add("other-operator/cleanup/private.pdf"); cleanupFails = true;
+ const first = await route.DELETE(new Request("https://x", { method: "DELETE" }), deleteRequest("cleanup")); assert.equal(first.status, 503); assert.equal(propertiesTable.has("cleanup"), false);
+ cleanupFails = false;
+ const retry = await route.DELETE(new Request("https://x", { method: "DELETE" }), deleteRequest("cleanup")); assert.equal(retry.status, 204); assert.equal(privateObjects.has("operator-1/cleanup/file.pdf"), false); assert.equal(privateObjects.has("other-operator/cleanup/private.pdf"), true);
 });
