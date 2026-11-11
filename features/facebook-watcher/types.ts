@@ -72,6 +72,7 @@ export type FacebookProperty = {
 };
 
 export type FacebookWatcherListing = FacebookProperty & {
+  photoFingerprints?: import("./visual-reposts").PhotoFingerprint[];
   listingId: string;
   confirmedDuplicateGroupId?: string | null;
   relatedPostMatch?: "confirmed" | "possible";

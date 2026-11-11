@@ -1,3 +1,4 @@
+import { possibleVisualRepost } from "./visual-reposts";
 import type { FacebookWatcherListing } from "./types";
 
 /** Group the view only. Different post IDs and every source record remain intact. */
@@ -12,7 +13,7 @@ export function groupFacebookReposts(records: FacebookWatcherListing[]): Faceboo
     const candidates = [...new Set([...(buckets.get(bucketKey) ?? []), ...mobilePhotoHashes(item.images).flatMap(hash => imageBuckets.get(hash) ?? [])])];
     const target = candidates.find(candidate => {
       const previous = members.get(candidate)!;
-      return previous.every(member => compatible(member,item) || compatibleUnpicturedMember(member,item) || possiblePhotoRepost(member,item)) && previous.some(member => ((compatible(member,item) && (sameEvidence(member,item) || possibleRepost(member,item))) || possiblePhotoRepost(member,item)));
+      return previous.every(member => possibleVisualRepost(member,item)) || previous.every(member => compatible(member,item) || compatibleUnpicturedMember(member,item) || possiblePhotoRepost(member,item)) && previous.some(member => ((compatible(member,item) && (sameEvidence(member,item) || possibleRepost(member,item))) || possiblePhotoRepost(member,item)));
     });
     if (!target) { const copy={ ...item }; groups.push(copy); members.set(copy,[item]); if (!buckets.has(bucketKey)) buckets.set(bucketKey,[]); buckets.get(bucketKey)!.push(copy); for (const hash of mobilePhotoHashes(item.images)) { if (!imageBuckets.has(hash)) imageBuckets.set(hash,[]); imageBuckets.get(hash)!.push(copy); } continue; }
     const publications = [...(target.relatedPosts ?? [publication(target)]), publication(item)];

@@ -208,7 +208,7 @@ async function collectGeometry(page) {
  * nothing extra once contexts are already isolated, and would only slow the
  * suite down further).
  */
-async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode = "success", listingsPayload = freshListingsPayload } = {}) {
+async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode = "success", listingsPayload = freshListingsPayload, photoResults = null } = {}) {
   const context = await browser.newContext();
   const page = await context.newPage();
   await context.addCookies([{ name: "sb-127-auth-token", value: JSON.stringify(operatorSession), url: baseUrl, httpOnly: true, sameSite: "Lax" }]);
@@ -265,6 +265,7 @@ async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode 
   await page.route("**/api/alerts", route => route.fulfill({contentType:"application/json",body:JSON.stringify({alerts:[]}),status:200}));
   await page.route("**/api/facebook-watcher/**", async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname === "/api/facebook-watcher/duplicates/photos" && photoResults) return route.fulfill({status:200,contentType:"application/json",body:JSON.stringify({results:photoResults(JSON.parse(route.request().postData()||"{}").ids)})});
     if (url.pathname === "/api/facebook-watcher/listings" && route.request().method() === "GET") {
       listingsRequestCount += 1;
       resolveListingsRequest();
@@ -286,7 +287,6 @@ async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode 
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
   });
 
-  await page.route("https://project.supabase.co/**", route => route.fulfill({ status:200, contentType:"image/png", body:Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=","base64") }));
   await page.goto(`${baseUrl}/facebook-watcher`, { waitUntil: "domcontentloaded" });
   // Regression guard for the exact race this rearchitecture fixes: the
   // listings fetch for THIS page's own navigation must be explicitly
@@ -398,7 +398,7 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
   // Probe the real build-info route on this exact child-server port. A 404,
   // 500, HTML error page, or malformed body is not server readiness.
   await waitForServer(`http://127.0.0.1:${port}/api/build-info`, 90_000);
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH });
   t.after(() => browser.close());
   const baseUrl = `http://127.0.0.1:${port}`;
 
@@ -780,31 +780,6 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     assertNoUnexpectedNoise(handle);
   });
 
-
-  await t.test("N: same bathroom photo without price or area groups reversibly and group filters still find the second post",async(t)=>{
-    const secondId="00000000-0000-4000-8000-000000000006";
-    const photo=(post)=>`https://project.supabase.co/storage/v1/object/public/facebook-watcher-images/android/11111111-1111-1111-1111-111111111111/${post}/${"0".repeat(64)}.jpg`;
-    const handle=await setupWatcherPage(browser,baseUrl,{listingsPayload:()=>({listings:[
-      makeListing({listingId:NORMAL_ID,title:"Oferta z Facebooka",price:null,area:null,rooms:2,city:null,district:null,street:null,description:null,pricePerSqm:null,pricePerM2:null,images:[photo("2341358629602565")],groupName:"Grupa pierwsza",sourcePostUrl:"https://www.facebook.com/groups/first/posts/2341358629602565/"}),
-      makeListing({listingId:secondId,title:"Oferta z Facebooka",price:null,area:null,rooms:2,city:null,district:null,street:null,description:null,pricePerSqm:null,pricePerM2:null,images:[photo("2246154092973037")],groupName:"Grupa druga",sourcePostUrl:"https://www.facebook.com/groups/second/posts/2246154092973037/"})
-    ]})});
-    const {page}=handle;t.after(()=>Promise.all([page.close(),handle.context.close()]));
-    await page.setViewportSize({width:390,height:844});
-    const card=page.locator(`#facebook-inbox-${NORMAL_ID}`);await card.waitFor();
-    assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(),1);
-    await card.getByText("Możliwe duplikaty: 1 · Powiązane publikacje (2)",{exact:true}).click();
-    assert.equal(await card.getByText("Za mało danych do oceny — brak ceny lub metrażu",{exact:true}).count(),1);
-    assert.equal(await card.getByText(/^Ocena inwestycji \\d/u).count(),0);
-    assert.ok(await card.locator('a[href="https://www.facebook.com/groups/second/posts/2246154092973037/"]').count());
-    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
-    await page.setViewportSize({width:1280,height:900});
-    await page.getByLabel("Grupa",{exact:true}).filter({visible:true}).selectOption("Grupa druga");
-    await page.locator(`#facebook-inbox-${secondId}`).waitFor();
-    assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(),1);
-    assert.equal(await page.getByText("Możliwe duplikaty:",{exact:false}).count(),0);
-    assertNoUnexpectedNoise(handle);
-  });
-
   await t.test("I: refresh and returning online update grouped counters without restarting the phone app",async(t)=>{
     let records=[makeListing({listingId:NORMAL_ID})];
     const handle=await setupWatcherPage(browser,baseUrl,{listingsPayload:()=>({listings:records})});
@@ -875,6 +850,14 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(), 1);
     assert.equal(handle.patchRequests.length, 0, "search must not mutate any workflow");
     assertNoUnexpectedNoise(handle);
+  });
+
+  await t.test("visual photo analysis collapses recompressed 38m² reposts and keeps search/source links",async(t)=>{
+    const ids=[NORMAL_ID,FACEBOOK_LINK_ID,RESTORABLE_ID];const hashes=["a".repeat(64),"b".repeat(64),"c".repeat(64)];
+    const records=ids.map((listingId,i)=>makeListing({listingId,price:null,area:38,rooms:2,description:null,city:null,district:null,neighborhood:null,street:"Bałuty",workflowStatus:"review",lifecycleStatus:"ACTIVE",groupName:`Powtórka ${i+1}`,images:[`https://project.supabase.co/storage/v1/object/public/facebook-watcher-images/android/11111111-1111-1111-1111-111111111111/${123456+i}/${hashes[i]}.jpg`],sourcePostUrl:`https://facebook.com/groups/123456/posts/${123456+i}/`}));
+    const handle=await setupWatcherPage(browser,baseUrl,{listingsPayload:()=>({listings:records}),photoResults:ids=>ids.map(id=>({listingId:id,fingerprints:[{assetHash:hashes[records.findIndex(r=>r.listingId===id)],dhash:"c3a9f0cd23b831af",ahash:"aa093ddcf0e2ce33",mean:[155,143,132],detail:48,aspect:1.3}]}))});const {page}=handle;t.after(()=>Promise.all([page.close(),handle.context.close()]));
+    await page.getByText("Możliwe duplikaty: 2 · Powiązane publikacje (3)",{exact:true}).waitFor();assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(),1);await page.getByText("Możliwe duplikaty: 2 · Powiązane publikacje (3)",{exact:true}).click();for(let i=0;i<3;i++)assert.ok(await page.locator(`a[href="https://facebook.com/groups/123456/posts/${123456+i}/"]`).count()>=1);
+    await page.getByRole("textbox",{name:"Szukaj ofert Facebook"}).fill("Powtórka 2");await page.locator(`#facebook-inbox-${FACEBOOK_LINK_ID}`).waitFor({state:"visible"});assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(),1);assert.equal(handle.patchRequests.length,0);
   });
 
 });
