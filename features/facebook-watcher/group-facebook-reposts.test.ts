@@ -146,7 +146,7 @@ test("photo-only Android bathroom pair stays one possible group without inventin
 });
 test("photo-only candidates reject missing corroboration, contradictions, generic CDN images and independent decisions", () => {
  const first=item("111111",{price:null,area:null,rooms:2,city:null,floor:null,description:null});
- for(const patch of [{rooms:null},{rooms:3},{workflowStatus:"crm"},{status:"removed"},{lifecycleStatus:"ARCHIVED"},{description:"Inne mieszkanie"},{images:["https://cdn.example/same.jpg"]}]) {
+ for(const patch of [{rooms:null},{rooms:3},{workflowStatus:"crm" as const},{status:"removed"},{lifecycleStatus:"ARCHIVED"},{description:"Inne mieszkanie"},{images:["https://cdn.example/same.jpg"]}]) {
   const other=item("222222",{...first,listingId:"second",images:[image("222222")],...patch});
   assert.equal(groupFacebookReposts([first,other]).length,2,JSON.stringify(patch));
  }
