@@ -14,5 +14,5 @@ export const settingsMetadata: Metadata = {
 };
 
 export function SettingsPage() {
-  return <div className="space-y-6"><ModulePageShell title={FEATURE_TITLE} /><VersionUpdatesSettings /><WatcherScanIntervalSettings /><InvestmentOsSettings /><PushSettings /><AlertSettings /></div>;
+  return <div className="space-y-6"><ModulePageShell title={FEATURE_TITLE} /><VersionUpdatesSettings /><section className="ui-card space-y-3 p-5"><h2 className="text-lg font-semibold">Android — Flip Watcher</h2><p className="text-sm text-muted-foreground">Pobierz sprawdzoną aplikację do zbierania ofert z Facebooka.</p><a href="/android" className="inline-block min-h-11 text-primary underline">Pobierz aplikację Android</a></section><WatcherScanIntervalSettings /><InvestmentOsSettings /><PushSettings /><AlertSettings /></div>;
 }
