@@ -1,4 +1,5 @@
 import "server-only";
+import { plainText } from "./plain-text";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { requireOperator, type OperatorIdentity } from "@/features/auth/operator";
@@ -24,10 +25,11 @@ export async function readWorkspace(propertyId: string) {
   const access = await workspaceAccess(propertyId);
   const data: Workspace = access.workspace ? parseWorkspace(access.workspace.data) : emptyWorkspace(access.property.status);
   if (!access.workspace) {
-    data.notes = access.property.notes ?? "";
+    data.notes = "";
     if (typeof access.property.expected_sale_price === "number") data.expectedSalePrice = Math.round(access.property.expected_sale_price * 100);
     if (typeof access.property.renovation_cost === "number") data.budgets.renovation = Math.round(access.property.renovation_cost * 100);
   }
+  data.notes = plainText(data.notes);
   const [fileResult, eventResult] = await Promise.all([
     access.db.from("property_workspace_files").select("id,name,category,mime,size,path,created_at").eq("property_id", propertyId).eq("owner_id", access.operator.id).order("created_at", { ascending: false }).limit(500),
     access.db.from("property_workspace_events").select("version,stage,expense_count,task_count,created_at").eq("property_id", propertyId).eq("owner_id", access.operator.id).order("version", { ascending: false }).limit(50),

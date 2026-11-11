@@ -1,3 +1,4 @@
+import { emptyAssessment, parseAssessment, type Assessment } from "./assessment";
 export const stages = { contact: "Do kontaktu", viewing: "Oglądanie", analysis: "Analiza", negotiation: "Negocjacje", acquired: "Kupiona", renovation: "Remont", listed: "Sprzedaż", sold: "Sprzedana", rejected: "Odrzucona" } as const;
 export type Stage = keyof typeof stages;
 export const investmentStages: Stage[] = ["acquired", "renovation", "listed", "sold"];
@@ -7,12 +8,12 @@ export const fileCategories = { viewing: "Oglądanie", deed: "Akt i umowy", docu
 export type FileCategory = keyof typeof fileCategories;
 export type Expense = { id: string; description: string; supplier: string; invoiceNumber: string; date: string; amount: number; category: Category; paid: boolean; refund: boolean; fileId: string | null };
 export type Task = { id: string; title: string; dueDate: string; contractor: string; done: boolean };
-export type Workspace = { schema: 1; stage: Stage; contact: string; viewingAt: string; notes: string; checklist: string[]; offerPrice: number | null; purchasePrice: number | null; purchaseDate: string; salePrice: number | null; saleDate: string; expectedSalePrice: number | null; targetDate: string; budgets: Record<Category, number | null>; expenses: Expense[]; tasks: Task[] };
+export type Workspace = { schema: 1; assessment: Assessment; stage: Stage; contact: string; viewingAt: string; notes: string; checklist: string[]; offerPrice: number | null; purchasePrice: number | null; purchaseDate: string; salePrice: number | null; saleDate: string; expectedSalePrice: number | null; targetDate: string; budgets: Record<Category, number | null>; expenses: Expense[]; tasks: Task[] };
 export type WorkspaceFile = { id: string; name: string; category: FileCategory; mime: string; size: number; url: string; created_at: string };
 export const viewingChecks = ["Stan instalacji elektrycznej", "Piony i instalacja wodna", "Wilgoć i wentylacja", "Okna i ogrzewanie", "Stan budynku i plan remontów", "Stan prawny i opłaty", "Wymiary i układ pomieszczeń"];
 export function emptyWorkspace(status = "draft"): Workspace {
   const stage: Stage = Object.hasOwn(stages, status) ? status as Stage : "contact";
-  return { schema: 1, stage, contact: "", viewingAt: "", notes: "", checklist: [], offerPrice: null, purchasePrice: null, purchaseDate: "", salePrice: null, saleDate: "", expectedSalePrice: null, targetDate: "", budgets: { transaction: null, renovation: null, furnishing: null, holding: null, finance: null, sale: null, other: null }, expenses: [], tasks: [] };
+  return { schema: 1, assessment: emptyAssessment(), stage, contact: "", viewingAt: "", notes: "", checklist: [], offerPrice: null, purchasePrice: null, purchaseDate: "", salePrice: null, saleDate: "", expectedSalePrice: null, targetDate: "", budgets: { transaction: null, renovation: null, furnishing: null, holding: null, finance: null, sale: null, other: null }, expenses: [], tasks: [] };
 }
 export function isInvestment(stage: Stage) { return investmentStages.includes(stage); }
 export function statusForStage(stage: Stage) { return isInvestment(stage) ? stage : stage === "contact" || stage === "rejected" ? "draft" : "analysis"; }
@@ -76,7 +77,7 @@ export function parseWorkspace(value: unknown): Workspace {
   const tasks = array(v.tasks, 500).map(item => { const t = record(item); return { id: id(t.id), title: str(t.title, 500), dueDate: date(t.dueDate), contractor: str(t.contractor, 300), done: bool(t.done) }; });
   if (new Set(tasks.map(t => t.id)).size !== tasks.length || tasks.some(t => !t.title)) throw new Error("Nieprawidłowe zadania.");
   const viewingAt = str(v.viewingAt, 16); if (viewingAt && (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(viewingAt) || !Number.isFinite(Date.parse(viewingAt)))) throw new Error("Nieprawidłowy termin oglądania.");
-  const result: Workspace = { schema: 1, stage: choice(v.stage, stages), contact: str(v.contact, 1000), viewingAt, notes: str(v.notes, 30000), checklist: array(v.checklist, viewingChecks.length).map(x => choice(x, Object.fromEntries(viewingChecks.map(s => [s, s])))), offerPrice: amount(v.offerPrice), purchasePrice: amount(v.purchasePrice), purchaseDate: date(v.purchaseDate), salePrice: amount(v.salePrice), saleDate: date(v.saleDate), expectedSalePrice: amount(v.expectedSalePrice), targetDate: date(v.targetDate), budgets: Object.fromEntries(Object.keys(categories).map(k => [k, amount(budgets[k])])) as Workspace["budgets"], expenses, tasks };
+  const result: Workspace = { schema: 1, assessment: parseAssessment(v.assessment), stage: choice(v.stage, stages), contact: str(v.contact, 1000), viewingAt, notes: str(v.notes, 30000), checklist: array(v.checklist, viewingChecks.length).map(x => choice(x, Object.fromEntries(viewingChecks.map(s => [s, s])))), offerPrice: amount(v.offerPrice), purchasePrice: amount(v.purchasePrice), purchaseDate: date(v.purchaseDate), salePrice: amount(v.salePrice), saleDate: date(v.saleDate), expectedSalePrice: amount(v.expectedSalePrice), targetDate: date(v.targetDate), budgets: Object.fromEntries(Object.keys(categories).map(k => [k, amount(budgets[k])])) as Workspace["budgets"], expenses, tasks };
   if (isInvestment(result.stage) && (result.purchasePrice === null || !result.purchaseDate)) throw new Error("Przed utworzeniem inwestycji wpisz cenę i datę zakupu.");
   if (result.stage === "sold" && (result.salePrice === null || !result.saleDate)) throw new Error("Wpisz cenę i datę sprzedaży.");
   return result;
