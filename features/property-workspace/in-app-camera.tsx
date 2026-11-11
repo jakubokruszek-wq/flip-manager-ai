@@ -12,16 +12,17 @@ export default function InAppCamera({ onPhoto, onClose }: { onPhoto: (file: File
   const closeButton = useRef<HTMLButtonElement>(null);
   function stop() { stream.current?.getTracks().forEach(track => track.stop()); stream.current = null; if (video.current) video.current.srcObject = null; }
   useEffect(() => {
+    let disposed = false;
     active.current = true; closeButton.current?.focus();
     const open = async () => { if (!navigator.mediaDevices?.getUserMedia) throw new Error("CAMERA_UNAVAILABLE"); return navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: "environment" }, width: { ideal: 1600, max: 1920 }, height: { ideal: 1200, max: 1440 } } }); };
     void open().then(async camera => {
-      if (!active.current || document.visibilityState === "hidden") { camera.getTracks().forEach(track => track.stop()); return; }
+      if (disposed || !active.current || document.visibilityState === "hidden") { camera.getTracks().forEach(track => track.stop()); return; }
       stream.current = camera;
       if (video.current) { video.current.srcObject = camera; try { await video.current.play(); } catch { stop(); if (active.current) setError("Nie udało się uruchomić podglądu. Zamknij aparat i spróbuj ponownie."); } }
     }).catch(() => { if (active.current) setError("Nie udało się otworzyć aparatu. Zezwól na aparat dla Flip Managera albo wybierz aparat systemowy / zdjęcie z telefonu."); });
     const hidden = () => { if (document.visibilityState === "hidden") { stop(); setReady(false); setError("Aparat zatrzymany po opuszczeniu aplikacji. Zamknij ten podgląd i otwórz go ponownie."); } };
     document.addEventListener("visibilitychange", hidden);
-    return () => { active.current = false; stop(); document.removeEventListener("visibilitychange", hidden); };
+    return () => { disposed = true; active.current = false; stop(); document.removeEventListener("visibilitychange", hidden); };
   }, []);
   async function capture() {
     const source = video.current;
@@ -35,6 +36,7 @@ export default function InAppCamera({ onPhoto, onClose }: { onPhoto: (file: File
       context.drawImage(source, 0, 0, canvas.width, canvas.height);
       const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/jpeg", 0.9));
       if (!blob) throw new Error("Nie udało się zapisać zdjęcia. Spróbuj ponownie.");
+      if (!active.current) return;
       stop(); canvas.width = 0; canvas.height = 0;
       await onPhoto(new File([blob], `zdjecie-${Date.now()}.jpg`, { type: "image/jpeg" }));
       onClose();

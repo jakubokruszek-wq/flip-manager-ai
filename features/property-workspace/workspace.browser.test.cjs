@@ -91,6 +91,7 @@ test('manual property, viewing, direct private documents, acquisition, costs, co
   await page.getByRole('button',{name:'Zrób zdjęcie',exact:true}).click();
   await page.getByRole('region',{name:'Aparat w aplikacji',exact:true}).waitFor();
   await page.waitForFunction(()=>{const v=document.querySelector('video');return v?.videoWidth>0&&v?.srcObject?.active});
+  fs.mkdirSync('test-artifacts',{recursive:true});await page.screenshot({path:'test-artifacts/in-app-camera-390.png'});
   await page.evaluate(()=>{window.capturedTracks=[...document.querySelector('video').srcObject.getTracks()]});
   await page.getByRole('button',{name:'Zrób i zapisz zdjęcie',exact:true}).click();
   await page.waitForFunction(()=>!document.querySelector('video'));
@@ -101,6 +102,11 @@ test('manual property, viewing, direct private documents, acquisition, costs, co
   await page.getByRole('button',{name:'Zrób zdjęcie',exact:true}).click();await page.waitForFunction(()=>document.querySelector('video')?.srcObject?.active);
   await page.evaluate(()=>{window.cancelledTracks=[...document.querySelector('video').srcObject.getTracks()]});
   await page.getByRole('button',{name:'Zamknij aparat',exact:true}).click();assert.equal(await page.evaluate(()=>window.cancelledTracks.every(t=>t.readyState==='ended')),true);assert.equal(files.length,3);
+  await page.evaluate(()=>{window.originalGetUserMedia=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);navigator.mediaDevices.getUserMedia=()=>Promise.reject(new DOMException('denied','NotAllowedError'))});
+  await page.getByRole('button',{name:'Zrób zdjęcie',exact:true}).click();await page.getByRole('alert').filter({hasText:'Nie udało się otworzyć aparatu'}).waitFor();await page.getByRole('button',{name:'Zamknij aparat',exact:true}).click();assert.equal(files.length,3);
+  await page.evaluate(()=>{navigator.mediaDevices.getUserMedia=async c=>{const stream=await window.originalGetUserMedia(c);window.lateTracks=stream.getTracks();await new Promise(r=>setTimeout(r,500));return stream}});
+  await page.getByRole('button',{name:'Zrób zdjęcie',exact:true}).click();await page.getByRole('button',{name:'Zamknij aparat',exact:true}).click();await page.waitForFunction(()=>window.lateTracks?.length&&window.lateTracks.every(t=>t.readyState==='ended'));
+  await page.evaluate(()=>{navigator.mediaDevices.getUserMedia=window.originalGetUserMedia});
   const noFile=await page.request.get(`http://127.0.0.1:3189/api/properties/${ID}/files/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/preview`);assert.equal(noFile.status(),404);
   await page.getByRole('tab',{name:'Podsumowanie',exact:true}).click();await page.getByRole('button',{name:'Kupiona — utwórz inwestycję'}).click();await page.getByLabel('Faktyczna cena zakupu, tys. zł',{exact:true}).fill('300');await page.getByLabel('Data zakupu',{exact:true}).fill('2026-11-10');await page.getByRole('button',{name:'Potwierdź zakup i przenieś do Inwestycji'}).click();await page.waitForURL(`**/investments/${ID}`);assert.equal(property.id,ID);assert.equal(workspace.data.notes,'Instalacja do wymiany');assert.equal(files.length,3);
   await page.goto('http://127.0.0.1:3189/properties');assert.equal(await page.getByRole('heading',{name:'Mieszkanie testowe',exact:true}).count(),0);await page.goto('http://127.0.0.1:3189/investments');await page.getByRole('heading',{name:'Mieszkanie testowe',exact:true}).click();
