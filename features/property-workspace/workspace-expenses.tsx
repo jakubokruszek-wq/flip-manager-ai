@@ -13,6 +13,29 @@ export function ExpenseForm({ propertyId, files, editing, onCancel, upload, onAd
   const [reading, setReading] = useState(false);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
+  async function readDocument(mode:"ocr"|"ai") {
+    if(!selectedFile||busy)return;
+    const active=new AbortController();controller.current=active;setBusy(true);setReading(true);setOcrText("");
+    try {
+      let result:Awaited<ReturnType<typeof recognizeInvoice>>;
+      if(mode==="ocr"){
+        setNotice("Przygotowanie mniejszej kopii do OCR…");
+        const response=await fetch(`/api/properties/${propertyId}/files/${selectedFile.id}/preview?mode=ocr`,{signal:active.signal});
+        if(!response.ok)throw new Error("Nie udało się przygotować kopii do OCR. Oryginał jest zapisany; możesz wpisać dane ręcznie.");
+        result=await recognizeInvoice(new File([await response.blob()],"invoice-ocr.jpg",{type:"image/jpeg"}),setNotice,active.signal);
+      }else{
+        setNotice("Odczytywanie dokumentu przez AI…");
+        const response=await fetch(`/api/properties/${propertyId}/files/${selectedFile.id}/read-invoice`,{method:"POST",signal:active.signal});
+        const body=await response.json();if(!response.ok)throw new Error(body.message??"Nie udało się odczytać dokumentu.");result=body;
+      }
+      if(active.signal.aborted||controller.current!==active)return;
+      setDraft(previous=>({...previous,description:previous.description||`Faktura ${result.invoiceNumber||selectedFile.name}`.slice(0,500),supplier:result.supplier||previous.supplier,invoiceNumber:result.invoiceNumber||previous.invoiceNumber,date:result.date||previous.date,amount:result.amount===null?"":(result.amount/100).toFixed(2)}));
+      setOcrText(result.text);
+      const filled=[result.supplier?"sprzedawca":null,result.invoiceNumber?"numer faktury":null,result.date?"data":null,result.amount!==null?"kwota brutto":null].filter(Boolean);
+      setNotice(filled.length?`Uzupełniono pola: ${filled.join(", ")}. ${result.amount===null?"Kwota brutto nie została potwierdzona — wpisz ją ręcznie. ":""}Sprawdź dane i zatwierdź koszt — nie został jeszcze doliczony.`:"Odczytano tekst, ale nie rozpoznano pól faktury. Rozwiń tekst poniżej; spróbuj AI lub uzupełnij dane ręcznie.");
+    }catch(error){if(!active.signal.aborted&&controller.current===active)setNotice(error instanceof Error?error.message:"Odczyt nie powiódł się. Wpisz dane ręcznie.");}
+    finally{if(controller.current===active){controller.current=null;setBusy(false);setReading(false);}}
+  }
   return <div id="expense-editor" className="scroll-mt-24"><Section title={editing ? "Edytuj koszt" : "Dodaj koszt / odczytaj fakturę"}>
     <p className="text-sm leading-6 text-muted-foreground">Zrób zdjęcie aparatem albo wybierz z telefonu. Najpierw zapisujemy oryginał faktury. Możesz też wybrać dokument już zapisany w inwestycji. Odczyt OCR lub AI uruchomisz osobno — zapis zdjęcia nie uruchamia ciężkiego silnika ani nie dolicza kosztu.</p>
     <AttachmentPicker label="Plik faktury — zdjęcie lub PDF" pdf cameraLabel="Zrób zdjęcie faktury" disabled={busy} onFiles={async batch => {
@@ -24,28 +47,9 @@ export function ExpenseForm({ propertyId, files, editing, onCancel, upload, onAd
       finally { setBusy(false); }
     }} />
     <Field label="Wybierz zapisany plik do odczytu"><select disabled={busy} className={inputClass} value={draft.fileId} onChange={e => { setDraft({ ...draft, fileId:e.target.value }); setOcrText(""); setNotice(""); }}><option value="">Bez dokumentu</option>{files.filter(f=>f.mime.startsWith("image/")||f.mime==="application/pdf").map(file=><option key={file.id} value={file.id}>{file.name}</option>)}</select></Field>
-    {selectedFile?.mime.startsWith("image/") ? <button type="button" disabled={busy} className="min-h-12 rounded-xl border px-4 py-3 font-semibold disabled:opacity-50" onClick={async () => {
-      const active = new AbortController(); controller.current = active; setBusy(true); setReading(true);
-      try {
-        setNotice("Przygotowanie mniejszej kopii do OCR…");
-        const response = await fetch(`/api/properties/${propertyId}/files/${draft.fileId}/preview?mode=ocr`, { signal: active.signal });
-        if (!response.ok) throw new Error("Nie udało się przygotować kopii do OCR. Oryginał jest zapisany; możesz wpisać dane ręcznie.");
-        const image = new File([await response.blob()], "invoice-ocr.jpg", { type: "image/jpeg" });
-        const result = await recognizeInvoice(image, setNotice, active.signal); if (active.signal.aborted) return;
-        setDraft(previous => ({ ...previous, supplier: result.supplier || previous.supplier, invoiceNumber: result.invoiceNumber || previous.invoiceNumber, date: result.date || previous.date, amount: result.amount === null ? previous.amount : (result.amount / 100).toFixed(2) }));
-        setOcrText(result.text); setNotice("Zdjęcie zapisane, odczyt gotowy. Sprawdź pola — koszt nie został jeszcze doliczony.");
-      } catch (error) { if (!active.signal.aborted) setNotice(error instanceof Error ? error.message : "Odczyt nie powiódł się. Wpisz dane ręcznie."); }
-      finally { if (!active.signal.aborted) { setBusy(false); setReading(false); } controller.current = null; }
-    }}>Odczytaj dane ze zdjęcia (OCR)</button> : null}
-    {selectedFile ? <><button type="button" disabled={busy} className="min-h-12 rounded-xl border border-primary/40 px-4 py-3 font-semibold text-primary disabled:opacity-50" onClick={async()=>{
-      const active=new AbortController();controller.current=active;setBusy(true);setReading(true);setNotice("Odczytywanie dokumentu przez AI…");
-      try {
-        const response=await fetch(`/api/properties/${propertyId}/files/${draft.fileId}/read-invoice`,{method:"POST",signal:active.signal});const result=await response.json();if(!response.ok)throw new Error(result.message??"Nie udało się odczytać dokumentu.");if(active.signal.aborted)return;
-        setDraft(previous=>({...previous,supplier:result.supplier||previous.supplier,invoiceNumber:result.invoiceNumber||previous.invoiceNumber,date:result.date||previous.date,amount:result.amount===null?previous.amount:(result.amount/100).toFixed(2)}));setOcrText(result.text);setNotice("Odczyt AI gotowy. Sprawdź dane i potwierdź koszt — nie został jeszcze doliczony.");
-      }catch(error){if(!active.signal.aborted)setNotice(error instanceof Error?error.message:"Odczyt nie powiódł się.");}
-      finally{if(!active.signal.aborted){setBusy(false);setReading(false);}controller.current=null;}
-    }}>Odczytaj dokument przez AI</button><p className="text-xs text-muted-foreground">AI obsługuje zdjęcia i PDF. Po kliknięciu wybrany dokument zostanie przesłany do OpenAI do odczytu. OCR zdjęć działa lokalnie w przeglądarce.</p></> : null}
-    {reading ? <button type="button" className="min-h-11 text-sm underline" onClick={() => { controller.current?.abort(); setBusy(false); setReading(false); setNotice("Anulowano OCR. Zapisany dokument pozostaje w załącznikach."); }}>Anuluj odczyt</button> : null}
+    {selectedFile?.mime.startsWith("image/") ? <button type="button" disabled={busy} className="min-h-12 rounded-xl border px-4 py-3 font-semibold disabled:opacity-50" onClick={() => void readDocument("ocr")}>Odczytaj dane ze zdjęcia (OCR)</button> : null}
+    {selectedFile ? <><button type="button" disabled={busy} className="min-h-12 rounded-xl border border-primary/40 px-4 py-3 font-semibold text-primary disabled:opacity-50" onClick={() => void readDocument("ai")}>Odczytaj dokument przez AI</button><p className="text-xs text-muted-foreground">AI obsługuje zdjęcia i PDF. Po kliknięciu wybrany dokument zostanie przesłany do OpenAI do odczytu. OCR zdjęć działa lokalnie w przeglądarce.</p></> : null}
+    {reading ? <button type="button" className="min-h-11 text-sm underline" onClick={() => { controller.current?.abort(); setBusy(false); setReading(false); setNotice("Anulowano odczyt. Zapisany dokument pozostaje w załącznikach."); }}>Anuluj odczyt</button> : null}
     <p role="status" className="text-sm">{notice}</p>
     {ocrText ? <details><summary className="min-h-11 cursor-pointer text-sm">Pokaż odczytany tekst</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">{ocrText}</pre></details> : null}
     <form className="space-y-4" onSubmit={async e => {

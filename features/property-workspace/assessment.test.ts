@@ -1,3 +1,4 @@
+import { parsePriceEntry } from "./price-entry.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { assess, emptyAssessment, parseAssessment, repairCost, acquisitionBudgets, holdingCosts, financeCosts, purchaseTax, conditionOptions, estimatedApartmentNotaryGross } from "./assessment.ts";
@@ -40,3 +41,10 @@ test("automatic notary estimate uses the apartment half rate plus VAT and curren
  const a=complete();a.notaryMode="estimate";a.notaryExtras=100000;assert.equal(assess(a,40000000,30000000).notary,221155);const r=assess(a,40000000,30000000);assert.ok(assess(a,40000000,r.maxPurchase).profit!>=a.minimumProfit!);assert.ok(assess(a,40000000,r.maxPurchase!+1).profit!<a.minimumProfit!);
 });
 test("PCC rounds the market-value base and tax to whole PLN",()=>{const a=complete();a.taxMode="resale";assert.equal(purchaseTax(a,10002449),200000);assert.equal(purchaseTax(a,10002450),200100);});
+
+test("finishing input 2,5 thousand PLN times 45m² is 112500 PLN, without another conversion",()=>{
+ const a=emptyAssessment();a.finishingRate=parsePriceEntry("2,5",true);a.finishingArea=45;
+ const r=assess(a,null,null);assert.equal(r.finishing,11250000);assert.equal(r.renovation,11250000);assert.equal(r.reserve,1125000);
+ a.finishingArea=null;assert.equal(assess(a,null,null).finishing,null);
+ a.finishingArea=45;a.finishingRate=parsePriceEntry("2.5",true);assert.equal(assess(a,null,null).finishing,11250000);
+});

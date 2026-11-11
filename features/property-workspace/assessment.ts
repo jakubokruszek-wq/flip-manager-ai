@@ -87,7 +87,7 @@ export function assess(a: Assessment, sale: number | null, purchase: number | nu
   const profitAt = (p: number) => sale! - fixed - p - buyingVariable(p);
   let maxPurchase: number | null = null;
   if (complete && profitAt(0) >= a.minimumProfit!) { let lo = 0, hi = sale!; while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); if (profitAt(mid) >= a.minimumProfit!) lo = mid; else hi = mid - 1; } maxPurchase = lo; }
-  return { complete, missing, renovation, risks, reserve, holding, finance, saleCosts, fixed, maxPurchase, feasible: complete && maxPurchase !== null, profit: complete && purchase !== null ? profitAt(purchase) : null, notary: purchase === null ? null : notaryCosts(a,purchase), pcc: purchase === null ? null : purchaseTax(a,purchase), purchaseAgency: purchase === null ? null : percentCost(purchase,a.purchaseAgencyPercent), purchaseCosts: purchase === null ? null : buyingVariable(purchase) };
+  return { complete, missing, renovation, finishing: a.finishingRate === null || (a.finishingRate > 0 && a.finishingArea === null) ? null : finishing, repairs, risks, reserve, holding, finance, saleCosts, fixed, maxPurchase, feasible: complete && maxPurchase !== null, profit: complete && purchase !== null ? profitAt(purchase) : null, notary: purchase === null ? null : notaryCosts(a,purchase), pcc: purchase === null ? null : purchaseTax(a,purchase), purchaseAgency: purchase === null ? null : percentCost(purchase,a.purchaseAgencyPercent), purchaseCosts: purchase === null ? null : buyingVariable(purchase) };
 }
 /** Seed execution budgets only where no earlier plan exists; actual expenses remain untouched. */
 export function acquisitionBudgets(a: Assessment, sale: number | null, purchase: number | null, previous: Record<string, number | null>) {
