@@ -1,0 +1,20 @@
+name: Release stale Android CI queue
+on:
+  push:
+    branches: [codex/release-stale-android-ci]
+permissions:
+  contents: read
+  actions: write
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Stop superseded run so the current source counter fix can run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          status="$(gh api repos/jakubokruszek-wq/flip-manager-ai/actions/runs/43094574022 --jq .status)"
+          if [ "$status" != "completed" ]; then
+            gh api --method POST repos/jakubokruszek-wq/flip-manager-ai/actions/runs/43094574022/force-cancel
+          fi
