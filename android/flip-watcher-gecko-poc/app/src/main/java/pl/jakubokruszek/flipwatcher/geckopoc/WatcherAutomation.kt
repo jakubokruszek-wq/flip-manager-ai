@@ -179,6 +179,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                         if(WatcherAutomation.uiVisible){queue.log("WAITING_FOR_BACKGROUND");WatcherScanStatus.finish(context,run,"WAITING_UI","WAITING_FOR_BACKGROUND");return@withTimeout}
                         val groups=groups(credentials)
                         WatcherSources.setActive(groups)
+                        WatcherScanSummary.start(context,slot,groups)
                         val groupCache=org.json.JSONObject().put("version",1).put("groups",org.json.JSONArray(groups.filter{it.type=="GROUP"}.map{org.json.JSONObject().put("groupId",it.id).put("url",it.url).put("name",it.name)})).toString()
                         check(context.getSharedPreferences("gecko_poc",Context.MODE_PRIVATE).edit().putString("watcher_active_groups",groupCache).commit())
                         // Resume after the last attempted source if a slow group exhausted the worker budget.
@@ -209,6 +210,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                 queue.enqueue(credentials.deviceId,group,result)
                             }
                             val issue=WatcherCaptureReport.issue(scanned)
+                            WatcherScanSummary.source(context,slot,group,result.rows.size,issue)
                             val prior=queue.cycleReports(slot).any{it.getString("groupId")==group.key}
                             val evidence=WatcherCaptureReport.create(context,slot,run,group,scanned,issue,android.os.SystemClock.elapsedRealtime()-groupClock,queue.transferCounts())
                             queue.report(credentials.deviceId,slot,group.key,evidence)
@@ -230,6 +232,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                 if(e is WatcherUpload.HttpFailure&&e.status in setOf(401,403))throw e
                                 lastIssue=if(WatcherAutomation.uiVisible)"WAITING_FOR_BACKGROUND"else WatcherAutomation.errorCode(e)
                                 queue.log(lastIssue)
+                                WatcherScanSummary.source(context,slot,group,null,lastIssue)
                                 val hadAttempt=queue.cycleReports(slot).any{it.optString("groupId")==group.key}
                                 val evidence=WatcherCaptureReport.create(context,slot,run,group,null,lastIssue,android.os.SystemClock.elapsedRealtime()-groupClock,queue.transferCounts())
                                 runCatching{queue.report(credentials.deviceId,slot,group.key,evidence)}

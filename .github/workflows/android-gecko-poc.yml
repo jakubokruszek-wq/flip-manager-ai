@@ -152,7 +152,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Offline OCR and consent on API 36 (dedicated device)
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-scan-summary-088'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -191,10 +191,10 @@ jobs:
           retention-days: 14
 
       - name: Release the offline emulator disk before creating the fresh device
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-scan-summary-088'
         run: avdmanager delete avd --name gecko-ocr-offline
       - name: Complete worker, own-message and image-binding regressions on API 36
-        if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087'
+        if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-scan-summary-088'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -210,7 +210,7 @@ jobs:
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.FeedMessageInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.DesktopPreviewInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.PhotoBindingInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SinglePhotoInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherLinkInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.GroupArchiveInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ProfileWatcherInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SavedResultInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
       - name: Online Gecko flow and full regression on API 36 (fresh device)
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-scan-summary-088'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -598,3 +598,34 @@ jobs:
           Instaluj jako aktualizację bez odinstalowywania i kasowania danych. Testy używają lokalnych stron, nie prywatnego konta Facebooka; wyniki na telefonie potwierdza kolejny raport skanu.
           NOTES
           gh release create gecko-poc-0.5.87 flip-watcher-0.5.87-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.87 — opisy i zdjęcia w automacie' --prerelease --notes-file release-notes.md
+
+  publish-tested-0588:
+    name: Publish tested Android 0.5.88
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-scan-summary-088'
+    needs: [guard, build, instrumented, verified-apk]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: flip-watcher-gecko-poc-arm64-${{ github.run_number }}
+          path: tested-apk
+      - name: Publish the verified APK without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-scan-summary-088 --jq .object.sha)" = '${{ github.sha }}'
+          apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
+          test -n "$apk_path" && test -f "$apk_path"
+          cp "$apk_path" flip-watcher-0.5.88-arm64.apk
+          unzip -p flip-watcher-0.5.88-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.88")process.exit(1)})'
+          unzip -p flip-watcher-0.5.88-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
+          sha256sum flip-watcher-0.5.88-arm64.apk > SHA256SUMS
+          cat > release-notes.md <<'NOTES'
+          Android 0.5.88 — początek i koniec cyklu skanu oraz nowe posty ofert według grup i profili.
+          Liczniki obejmują pierwsze lokalne zapisy postów sprzedaży ze zdjęciem; ponowienia i zmienione kopie tego samego posta nie zwiększają wyniku. Brak potwierdzonego odczytu pozostaje jawny, bez udawanego zera.
+          Dane, kolejka, klucze szyfrowania i sesja Facebooka pozostają zachowane. Instaluj jako aktualizację.
+          NOTES
+          gh release create gecko-poc-0.5.88 flip-watcher-0.5.88-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.88 — czas skanu i nowe oferty według źródeł' --prerelease --notes-file release-notes.md

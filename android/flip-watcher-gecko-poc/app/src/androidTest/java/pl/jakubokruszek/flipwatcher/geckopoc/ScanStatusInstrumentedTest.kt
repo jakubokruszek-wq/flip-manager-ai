@@ -34,6 +34,20 @@ class ScanStatusInstrumentedTest {
         context.getSharedPreferences("watcher-scan-status-v1",Context.MODE_PRIVATE).edit().clear().commit()
         context.deleteDatabase("watcher-outbox-v1.db")
     }
+    @Test fun sourceSummaryPersistsContinuationAndSeparatesUnknownFromZero(){
+        val groups=listOf(WatcherGroup("123456","Grupa testowa"),WatcherGroup("654321","Profil testowy","PROFILE"))
+        context.getSharedPreferences("watcher-source-summary-v1",Context.MODE_PRIVATE).edit().clear().commit()
+        WatcherScanSummary.start(context,"test-cycle",groups)
+        val start=WatcherScanSummary.text(context)
+        assertTrue(start.contains("rozpoczęcie:"));assertTrue(start.contains("niepotwierdzone"));assertTrue(start.contains("jeszcze nie odczytano"))
+        WatcherScanSummary.source(context,"test-cycle",groups[0],0,"")
+        WatcherScanSummary.source(context,"test-cycle",groups[1],null,"PROFILE_NOT_READY")
+        WatcherScanSummary.start(context,"test-cycle",groups)
+        val resumed=WatcherScanSummary.text(context)
+        assertTrue(resumed.contains("Grupa: Grupa testowa — nowe: 0"));assertTrue(resumed.contains("Profil: Profil testowy — brak potwierdzonego odczytu"))
+        WatcherScanSummary.finish(context);assertFalse(WatcherScanSummary.text(context).contains("Zakończenie: niepotwierdzone"))
+        context.getSharedPreferences("watcher-source-summary-v1",Context.MODE_PRIVATE).edit().clear().commit()
+    }
     private fun worker(missingCredentials:Boolean=false,groups:List<WatcherGroup> = WatcherGroups.configured.take(2),scan:suspend (WatcherGroup,(String)->Unit)->SavedResult)=
         androidx.work.testing.TestListenableWorkerBuilder<WatcherAutomationWorker>(context).setWorkerFactory(object:androidx.work.WorkerFactory(){
             override fun createWorker(appContext:Context,name:String,parameters:androidx.work.WorkerParameters):androidx.work.ListenableWorker=

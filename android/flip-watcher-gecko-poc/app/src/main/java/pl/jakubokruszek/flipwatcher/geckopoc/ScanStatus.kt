@@ -123,7 +123,7 @@ object WatcherScanStatus {
     fun begin(context:Context,id:String)=change(context){s->val now=System.currentTimeMillis();ScanState(run=id,phase="PREPARING",started=now,changed=now,heartbeat=now,lastSuccess=s.lastSuccess,checked=now)}
     fun update(context:Context,id:String,f:(ScanState)->ScanState)=change(context){s->if(s.run!=id||s.ended>0)s else f(s).copy(changed=System.currentTimeMillis(),heartbeat=System.currentTimeMillis())}
     fun beat(context:Context,id:String)=change(context,false){s->if(s.run==id&&s.active)s.copy(heartbeat=System.currentTimeMillis())else s}
-    fun finish(context:Context,id:String,phase:String,reason:String="")=change(context){s->if(s.run!=id)s else {val now=System.currentTimeMillis();s.copy(phase=phase,reason=reason,ended=now,changed=now,heartbeat=now,lastSuccess=if(phase=="DONE")now else s.lastSuccess)}}
+    fun finish(context:Context,id:String,phase:String,reason:String=""):ScanState { return change(context){s->if(s.run!=id)s else {if(phase in setOf("DONE","PARTIAL"))WatcherScanSummary.finish(context);val now=System.currentTimeMillis();s.copy(phase=phase,reason=reason,ended=now,changed=now,heartbeat=now,lastSuccess=if(phase=="DONE")now else s.lastSuccess)}} }
     fun checked(context:Context,reason:String)=change(context,false){it.copy(checked=System.currentTimeMillis(),skipped=reason)}
     fun quiet(context:Context){runCatching{context.getSystemService(NotificationManager::class.java).cancel(NOTICE)}}
     private fun notify(context:Context,s:ScanState){runCatching{
@@ -157,6 +157,6 @@ object WatcherScanStatus {
         val evidence=if(cycle==null)"" else WatcherOutbox(context).use{WatcherCaptureReport.summary(it.cycleReports(cycle))}
         val state=read(context);val continuation=prefs.getLong("continuation_at",0)
         val plan=if(enabled&&!state.active&&continuation>0)"\nPlan wznowienia tej samej próby: "+ScanStatusText.time(continuation,ZoneId.systemDefault())+". Android może opóźnić start; możesz użyć przycisku wznowienia."else ""
-        return (if(evidence.isEmpty())""else evidence+"\n\n")+ScanStatusText.details(state,enabled,now,next,network,notifications,work,running,pendingWindow=if(due)window.at.toEpochMilli()else 0)+plan
+        return WatcherScanSummary.text(context)+"\n\n"+(if(evidence.isEmpty())""else evidence+"\n\n")+ScanStatusText.details(state,enabled,now,next,network,notifications,work,running,pendingWindow=if(due)window.at.toEpochMilli()else 0)+plan
     }
 }

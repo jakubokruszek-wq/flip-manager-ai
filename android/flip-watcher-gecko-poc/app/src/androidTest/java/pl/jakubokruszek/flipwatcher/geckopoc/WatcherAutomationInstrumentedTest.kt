@@ -24,6 +24,17 @@ class WatcherAutomationInstrumentedTest {
     private fun result(price:Double=430000.0)=SavedResult(System.currentTimeMillis(),listOf(
         DesktopRow("550000000000091",group.url+"posts/550000000000091/","DOM",price,"EXPLICIT_TOTAL",42.0,2,"Bałuty",null,null,"SELL_PROPERTY",true,0)
     ),emptyList(),listOf(photo()))
+    @Test fun newSourceCountsIgnoreBodyVariantsRetriesAndHeldRows(){
+        context.deleteDatabase("watcher-outbox-v1.db")
+        WatcherOutbox(context).use{q->
+            val since=System.currentTimeMillis()-1000
+            q.enqueue(device,group,result().copy(photos=emptyList()));assertEquals(0,q.newSourceOffers(group.key,since))
+            q.enqueue(device,group,result());assertEquals(1,q.newSourceOffers(group.key,since))
+            q.enqueue(device,group,result(431000.0));assertEquals(1,q.newSourceOffers(group.key,since))
+            q.retry();assertEquals(1,q.newSourceOffers(group.key,since));assertEquals(0,q.newSourceOffers(group.key,Long.MAX_VALUE))
+        }
+        context.deleteDatabase("watcher-outbox-v1.db")
+    }
     @Test fun boundedPostTextRequiresOptInAndExactRowIdentityAndSurvivesFrozenQueue(){
         val row=result().rows.single();val nonce=java.util.UUID.randomUUID().toString()
         val stats=DesktopProtocol.emptyStats().toMutableMap().apply{put("candidates",1);put("verified",1)}
