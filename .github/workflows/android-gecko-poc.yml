@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-gecko-poc-${{ github.ref }}${{ github.ref == 'refs/heads/codex/android-progress-counts-094' && '-release-094' || '' }}
+  group: android-gecko-poc-${{ github.ref }}${{ github.ref == 'refs/heads/codex/android-source-retry-budget' && '-release-094' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -117,7 +117,7 @@ jobs:
 
       - name: Upload unit test reports
         if: always()
-        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-progress-counts-094' }}
+        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-source-retry-budget' }}
         timeout-minutes: 3
         uses: actions/upload-artifact@v4
         with:
@@ -155,7 +155,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Offline OCR and consent on API 36 (dedicated device)
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-progress-counts-094'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-source-retry-budget'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -194,10 +194,10 @@ jobs:
           retention-days: 14
 
       - name: Release the offline emulator disk before creating the fresh device
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-progress-counts-094'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-source-retry-budget'
         run: avdmanager delete avd --name gecko-ocr-offline
       - name: Complete worker, own-message and image-binding regressions on API 36
-        if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-progress-counts-094'
+        if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-source-retry-budget'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -210,10 +210,10 @@ jobs:
           force-avd-creation: true
           script: |
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true '-Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#sourceTimeoutDoesNotStopLaterGroupsAndFailedGroupGetsOnlyOneRetry,pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#interruptionResumesSameCycleWithoutRescanningCompletedSource,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest#interruptionRecoveryIsUniqueDelayedNetworkConstrainedAndRespectsDisable' || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
-            if [ '${{ github.ref }}' = 'refs/heads/codex/android-progress-counts-094' ]; then ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#newSourceCountsIgnoreBodyVariantsRetriesAndHeldRows || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1); fi
+            if [ '${{ github.ref }}' = 'refs/heads/codex/android-source-retry-budget' ]; then ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#newSourceCountsIgnoreBodyVariantsRetriesAndHeldRows || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1); fi
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#calendarIgnoresOldRevisionAndManualCycleRechecksWhileDegradedReadGetsExactlyOneRetry,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
       - name: Online Gecko flow and full regression on API 36 (fresh device)
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-progress-counts-094'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-source-retry-budget'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -252,7 +252,7 @@ jobs:
 
       - name: Upload instrumented test reports
         if: always()
-        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-progress-counts-094' }}
+        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-source-retry-budget' }}
         timeout-minutes: 3
         uses: actions/upload-artifact@v4
         with:
@@ -604,9 +604,9 @@ jobs:
           NOTES
           gh release create gecko-poc-0.5.87 flip-watcher-0.5.87-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.87 — opisy i zdjęcia w automacie' --prerelease --notes-file release-notes.md
 
-  publish-tested-0594:
-    name: Publish tested Android 0.5.94
-    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-progress-counts-094'
+  publish-tested-0595:
+    name: Publish tested Android 0.5.95
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-source-retry-budget'
     needs: [guard, build, instrumented, verified-apk]
     runs-on: ubuntu-24.04
     permissions:
@@ -621,16 +621,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-progress-counts-094 --jq .object.sha)" = '${{ github.sha }}'
+          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-source-retry-budget --jq .object.sha)" = '${{ github.sha }}'
           apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
           test -n "$apk_path" && test -f "$apk_path"
-          cp "$apk_path" flip-watcher-0.5.94-arm64.apk
-          unzip -p flip-watcher-0.5.94-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.94")process.exit(1)})'
-          unzip -p flip-watcher-0.5.94-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
-          sha256sum flip-watcher-0.5.94-arm64.apk > SHA256SUMS
+          cp "$apk_path" flip-watcher-0.5.95-arm64.apk
+          unzip -p flip-watcher-0.5.95-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.95")process.exit(1)})'
+          unzip -p flip-watcher-0.5.95-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
+          sha256sum flip-watcher-0.5.95-arm64.apk > SHA256SUMS
           cat > release-notes.md <<'NOTES'
-          Android 0.5.94 — jednoznaczny postęp odczytu źródeł.
-          Główny licznik pokazuje każdą grupę lub profil z podjętą próbą odczytu, również gdy czeka na ponowienie. Osobno widać źródła zamknięte i oczekujące na ponowienie. Numer na liście jest wyraźnie oddzielony od postępu. Liczniki są odtwarzane z zapisanej próby, bez resetowania skanu ani zmiany odczytu z wersji 0.5.93.
+          Android 0.5.95 — ograniczone powtarzanie odczytu źródeł.
+          Brak zdjęć części ofert nie uruchamia ponownego skanu całej grupy. Wyczerpane dwie próby otwarcia strony nie uruchamiają kolejnej pary sesji. Pozostałe braki potwierdzenia odczytu mają najwyżej jedno ponowienie w cyklu. Ostrzeżenia i niepełny wynik są zachowane; zamknięcie źródła nie oznacza kompletnego odczytu.
           Dane, kolejka, klucze szyfrowania i sesja Facebooka pozostają zachowane. Instaluj jako aktualizację.
           NOTES
-          gh release create gecko-poc-0.5.94 flip-watcher-0.5.94-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.94 — poprawne liczniki postępu' --prerelease --notes-file release-notes.md
+          gh release create gecko-poc-0.5.95 flip-watcher-0.5.95-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.95 — ograniczone ponawianie źródeł' --prerelease --notes-file release-notes.md
