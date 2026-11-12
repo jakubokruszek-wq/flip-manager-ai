@@ -29,12 +29,12 @@ class WatcherAutomationInstrumentedTest {
         WatcherOutbox(context).use{q->
             val since=System.currentTimeMillis()-1000
             q.enqueue(device,group,result().copy(photos=emptyList()));assertEquals(0,q.newSourceOffers(group.key,since))
-            q.enqueue(device,group,result());assertEquals(1,q.newSourceOffers(group.key,since))
+            q.enqueue(device,group,result());assertEquals(1,q.newSourceOffers(group.key,since));assertEquals(1,q.newSourceOfferCounts(since)[group.key])
             q.enqueue(device,group,result(431000.0));assertEquals(1,q.newSourceOffers(group.key,since))
             q.retry();assertEquals(1,q.newSourceOffers(group.key,since));assertEquals(0,q.newSourceOffers(group.key,Long.MAX_VALUE))
             // Legacy bodies without a known save date must never become new after refresh.
             q.writableDatabase.execSQL("UPDATE outbox SET saved_at=NULL WHERE source=?",arrayOf(group.key))
-            q.enqueue(device,group,result(432000.0));assertEquals(0,q.newSourceOffers(group.key,since))
+            q.enqueue(device,group,result(432000.0));assertEquals(0,q.newSourceOffers(group.key,since));assertFalse(q.newSourceOfferCounts(since).containsKey(group.key))
         }
         context.deleteDatabase("watcher-outbox-v1.db")
     }

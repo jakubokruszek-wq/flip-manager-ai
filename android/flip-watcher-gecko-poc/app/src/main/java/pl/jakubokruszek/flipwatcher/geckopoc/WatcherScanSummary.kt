@@ -7,6 +7,9 @@ import java.time.ZoneId
 /** Local, durable source counts. No post bodies, images, tokens or new database schema. */
 object WatcherScanSummary {
     private val guard=Any()
+    private var countedAt=0L
+    private var countsKey=""
+    private var counts=emptyMap<String,Int>()
     private fun read(c:Context)=runCatching{JSONObject(c.getSharedPreferences("watcher-source-summary-v1",Context.MODE_PRIVATE).getString("current",null)?:"{}")} .getOrElse{JSONObject()}
     private fun save(c:Context,j:JSONObject){check(c.getSharedPreferences("watcher-source-summary-v1",Context.MODE_PRIVATE).edit().putString("current",j.toString()).commit())}
     fun start(c:Context,cycle:String,groups:List<WatcherGroup>)=synchronized(guard){
@@ -17,7 +20,7 @@ object WatcherScanSummary {
         val next=JSONObject().put("cycle",cycle).put("started",System.currentTimeMillis()).put("ended",0).put("sources",sources)
         val last=if(previous.optLong("ended")>0)JSONObject().put("started",previous.optLong("started")).put("ended",previous.optLong("ended"))else previous.optJSONObject("previous")
         if(last!=null)next.put("previous",last)
-        save(c,next)
+        countedAt=0L;save(c,next)
     }
     fun source(c:Context,cycle:String,g:WatcherGroup,readCount:Int?,issue:String)=synchronized(guard){
         val j=read(c);if(j.optString("cycle")!=cycle)return@synchronized
@@ -25,12 +28,20 @@ object WatcherScanSummary {
         val s=sources.optJSONObject(g.key)?:return@synchronized
         s.put("attempted",true).put("confirmed",readCount!=null&&issue !in setOf("NO_POST_EVIDENCE","PAGE_HIDDEN","CAPTURE_NOT_MEASURED")).put("issue",issue)
         if(readCount!=null)s.put("read",readCount)
-        save(c,j)
+        countedAt=0L;save(c,j)
     }
-    fun finish(c:Context)=synchronized(guard){val j=read(c);if(j.has("started")){j.put("ended",System.currentTimeMillis());save(c,j)}}
+    fun finish(c:Context)=synchronized(guard){val j=read(c);if(j.has("started")){j.put("ended",System.currentTimeMillis());countedAt=0L;save(c,j)}}
     fun text(c:Context):String=synchronized(guard){
         val j=read(c);val sources=j.optJSONObject("sources")
-        if(sources!=null)WatcherOutbox(c).use{q->for(key in sources.keys())sources.getJSONObject(key).put("new",q.newSourceOffers(key,j.optLong("started")))}
+        if(sources!=null){
+            val key=j.optString("cycle")+":"+j.optLong("started")
+            val now=android.os.SystemClock.elapsedRealtime()
+            if(countedAt==0L||countsKey!=key||now-countedAt>=10_000L){
+                counts=WatcherOutbox(c).use{it.newSourceOfferCounts(j.optLong("started"))}
+                countsKey=key;countedAt=now
+            }
+            for(source in sources.keys())sources.getJSONObject(source).put("new",counts[source]?:0)
+        }
         format(j)
     }
     internal fun format(j:JSONObject,zone:ZoneId=ZoneId.systemDefault()):String=buildString{
@@ -46,6 +57,6 @@ object WatcherScanSummary {
             val count=when{!s.optBoolean("attempted")->"jeszcze nie odczytano";!s.optBoolean("confirmed")->"brak potwierdzonego odczytu (wcześniej nowe: ${s.optInt("new")})";else->"nowe: ${s.optInt("new")} • odczytane oferty: ${s.optInt("read")}"}
             appendLine("$prefix: ${s.optString("name")} — $count"+(if(s.optString("issue").isNotEmpty())" • odczyt częściowy"else""))
         }
-        append("Nowe = posty sprzedaży ze zdjęciem po raz pierwszy zapisane w kolejce tego źródła. Ponowienia nie zwiększają wyniku; to nie jest liczba różnych mieszkań ani potwierdzenie wysyłki do Managera.")
+        append("Liczniki nowych ofert odświeżamy najwyżej co 10 sekund oraz po zakończeniu odczytu źródła. Nowe = posty sprzedaży ze zdjęciem po raz pierwszy zapisane w kolejce tego źródła. Ponowienia nie zwiększają wyniku; to nie jest liczba różnych mieszkań ani potwierdzenie wysyłki do Managera.")
     }
 }

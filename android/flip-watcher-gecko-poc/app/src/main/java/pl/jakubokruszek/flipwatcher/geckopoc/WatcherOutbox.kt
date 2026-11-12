@@ -105,6 +105,12 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
     fun hasDue(device:String,now:Long)=readableDatabase.rawQuery("SELECT 1 FROM outbox WHERE device=? AND state='pending' AND next_at<=? LIMIT 1",arrayOf(device,now.toString())).use{it.moveToFirst()}
     /** First persisted source/post identity, not frozen body variants or retry count. */
     fun newSourceOffers(source:String,since:Long):Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM (SELECT post,MIN(saved_at) AS first_saved FROM outbox WHERE source=? GROUP BY post HAVING COUNT(saved_at)=COUNT(*) AND first_saved>=CAST(? AS INTEGER) AND MAX(CASE WHEN state IN ('pending','sent','blocked') THEN 1 ELSE 0 END)=1)",arrayOf(source,since.toString())).use{it.moveToFirst();it.getInt(0)}
+    /** One scan of queue metadata for the whole report; frozen bodies are never opened. */
+    fun newSourceOfferCounts(since:Long):Map<String,Int>{
+        val counts=mutableMapOf<String,Int>()
+        readableDatabase.rawQuery("SELECT source,COUNT(*) FROM (SELECT source,post,MIN(saved_at) AS first_saved FROM outbox WHERE source IS NOT NULL GROUP BY source,post HAVING COUNT(saved_at)=COUNT(*) AND first_saved>=CAST(? AS INTEGER) AND MAX(CASE WHEN state IN ('pending','sent','blocked') THEN 1 ELSE 0 END)=1) GROUP BY source",arrayOf(since.toString())).use{c->while(c.moveToNext())counts[c.getString(0)]=c.getInt(1)}
+        return counts
+    }
     fun transferCounts():Map<String,Int>{
         val names=mapOf("pending" to "queuePending","blocked" to "queueBlocked","quality_hold" to "queueQualityHeld","sent" to "queueSent")
         val counts=names.values.associateWith{0}.toMutableMap()
