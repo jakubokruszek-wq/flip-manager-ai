@@ -1,5 +1,6 @@
 import { LoginForm } from "@/app/login/login-form";
 import { Logo } from "@/components/ui/logo";
+import { CompanyBrand } from "@/components/ui/company-brand";
 import { safeReturnTo } from "@/features/auth/return-to";
 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ returnTo?: string }> }) {
@@ -9,6 +10,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
       <section className="w-full max-w-sm rounded-2xl border border-border/80 bg-surface/90 p-7 shadow-2xl">
         <div className="mb-7 space-y-4">
           <Logo />
+          <CompanyBrand className="mx-auto" />
           <div>
             <h1 className="text-xl font-semibold">Logowanie operatora</h1>
             <p className="mt-1 text-sm text-muted-foreground">Zaloguj się do panelu Flip Manager by Jakub Okruszek.</p>

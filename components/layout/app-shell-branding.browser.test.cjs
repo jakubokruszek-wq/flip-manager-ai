@@ -105,6 +105,9 @@ test("Flip Manager by Jakub Okruszek branding is fully visible, unclipped, at ev
       await page.goto(`${baseUrl}/dashboard`, { waitUntil: "domcontentloaded" });
       const brand = page.locator('[data-testid="desktop-sidebar"] [data-testid="product-brand"]');
       await brand.waitFor({ state: "visible", timeout: 20_000 });
+      const company = page.getByRole("img", { name: "MetrON — Nieruchomości i Inwestycje", exact: true });
+      await company.waitFor({ state: "visible" });
+      assert.equal(await company.evaluate(async (image) => { await image.decode();return image.naturalWidth > 0; }), true);
 
       const brandText = await brand.innerText();
       assert.match(brandText, /Flip Manager/);

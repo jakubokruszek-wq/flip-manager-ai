@@ -67,6 +67,7 @@ export function TopNav({ title = "Inwestycje" }: TopNavProps) {
           >
             Flip Manager
           </p>
+          <p className="text-[10px] font-semibold tracking-wider text-gold lg:hidden">MetrON</p>
           <h2 className="hidden truncate text-sm font-semibold tracking-tight text-foreground lg:block">
             {title}
           </h2>

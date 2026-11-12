@@ -1,6 +1,7 @@
 import { navigationSections } from "@/config/navigation";
 
 import { Logo } from "@/components/ui/logo";
+import { CompanyBrand } from "@/components/ui/company-brand";
 import { SidebarNavItem } from "@/components/layout/sidebar-nav-item";
 import { logoutOperator } from "@/features/auth/actions";
 
@@ -37,6 +38,7 @@ export function Sidebar({ onNavigate }: SidebarProps) {
       </nav>
 
       <div className="border-t border-border/80 px-5 py-4">
+        <CompanyBrand className="mb-3" />
         <p className="text-xs font-medium tracking-wide text-muted-foreground">
           Flip Manager by Jakub Okruszek
         </p>
