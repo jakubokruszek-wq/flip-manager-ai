@@ -1,0 +1,30 @@
+name: Performance package audit
+on:
+  push:
+    branches: [codex/performance-audit]
+permissions:
+  contents: read
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Measure the exact released APK contents
+        run: |
+          python3 - <<'PY'
+          import urllib.request,hashlib,zipfile,zlib,json,os
+          url='https://github.com/jakubokruszek-wq/flip-manager-ai/releases/download/gecko-poc-0.5.89/flip-watcher-0.5.89-arm64.apk'
+          sha=hashlib.sha256()
+          with urllib.request.urlopen(url,timeout=60) as r,open('/tmp/watcher.apk','wb') as f:
+            while chunk:=r.read(1024*1024):sha.update(chunk);f.write(chunk)
+          assert sha.hexdigest()=='21c1b63f036d4396c29b811d8b93c0a414466299e5f71c0b7541cd2b28bf6620'
+          with zipfile.ZipFile('/tmp/watcher.apk') as z:
+            native=[x for x in z.infolist() if x.filename.startswith('lib/') and x.filename.endswith('.so')]
+            estimate=0
+            for entry in native:
+              c=zlib.compressobj(6,zlib.DEFLATED,-15)
+              with z.open(entry) as f:
+                while b:=f.read(1024*1024):estimate+=len(c.compress(b))
+              estimate+=len(c.flush())
+            print(json.dumps({'apk_bytes':os.path.getsize('/tmp/watcher.apk'),'native_bytes':sum(e.file_size for e in native),'native_zip_bytes':sum(e.compress_size for e in native),'native_deflate_estimate_bytes':estimate,'largest':[{'name':e.filename,'raw':e.file_size,'stored':e.compress_size,'method':e.compress_type} for e in sorted(z.infolist(),key=lambda e:e.file_size,reverse=True)[:12]]},indent=2))
+          PY
