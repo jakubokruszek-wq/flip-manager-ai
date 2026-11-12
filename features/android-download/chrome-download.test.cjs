@@ -10,7 +10,7 @@ test('Chrome finishes saving the public APK and the saved file has the exact rel
  try{
   const context=await browser.newContext({acceptDownloads:true});const page=await context.newPage();
   await page.goto('https://flip-manager-ai.vercel.app/android',{waitUntil:'domcontentloaded'});
-  const pending=page.waitForEvent('download',{timeout:30000});await page.getByRole('link',{name:'Pobierz APK · 214 MB',exact:true}).click();
+  const pending=page.waitForEvent('download',{timeout:30000});await page.getByRole('link',{name:/^Pobierz APK · \d+ MB$/,exact:true}).click();
   const download=await pending;assert.equal(download.suggestedFilename(),apk.filename);
   const path=await download.path();assert.equal(await download.failure(),null);assert.ok(path);
   const hash=createHash('sha256');let bytes=0;for await(const chunk of createReadStream(path)){bytes+=chunk.byteLength;hash.update(chunk);}

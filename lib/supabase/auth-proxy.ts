@@ -4,7 +4,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { safeReturnTo } from "@/features/auth/return-to";
 import { hardenedAuthCookieOptions } from "@/lib/supabase/auth-server";
 
-const PUBLIC_PATHS = new Set(["/login", "/auth/callback", "/api/build-info", "/android", "/api/android/flip-watcher-0.5.87.apk", "/api/android/flip-watcher-0.5.88.apk", "/api/android/flip-watcher-0.5.89.apk"]);
+const PUBLIC_PATHS = new Set(["/login", "/auth/callback", "/api/build-info", "/android", "/api/android/flip-watcher-0.5.87.apk", "/api/android/flip-watcher-0.5.88.apk", "/api/android/flip-watcher-0.5.89.apk", "/api/android/flip-watcher-0.5.90.apk"]);
 const MACHINE_API_PREFIXES = ["/api/collector/", "/api/facebook-worker/", "/api/olx-worker/", "/api/jobs/"];
 
 function isMachinePath(pathname: string): boolean {
