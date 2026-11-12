@@ -1,0 +1,26 @@
+name: Android download diagnostics
+on:
+  push:
+    branches: [codex/android-download-diagnostics]
+permissions:
+  contents: read
+jobs:
+  headers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Read public download headers and first ZIP bytes
+        run: |
+          node --input-type=module <<'JS'
+          const url='https://flip-manager-ai-jok6.vercel.app/api/android/flip-watcher-0.5.88.apk';
+          for(const method of ['HEAD','GET']){
+            try{
+              const r=await fetch(url,{method,headers:method==='GET'?{Range:'bytes=0-1023'}:{},signal:AbortSignal.timeout(30000)});
+              console.log(JSON.stringify({method,status:r.status,url:r.url,headers:Object.fromEntries(['content-type','content-length','content-range','etag','accept-ranges','location','cache-control'].map(k=>[k,r.headers.get(k)]))}));
+              if(method==='GET'){const reader=r.body.getReader();const {value}=await reader.read();console.log('first bytes',Buffer.from(value??[]).subarray(0,120).toString('hex'));await reader.cancel();}
+            }catch(e){console.log(method,e.message)}
+          }
+          JS
