@@ -1,3 +1,4 @@
+import { exactStream } from "./exact-stream";
 import { androidRelease, type AndroidRelease } from "./release";
 function headers(apk:AndroidRelease) { return new Headers({ "Content-Type": "application/vnd.android.package-archive", "Content-Disposition": `attachment; filename="${apk.filename}"`, "Accept-Ranges": "bytes", ETag: `"sha256-${apk.sha256}"`, "Cache-Control": "public, max-age=86400, immutable", "X-Content-Type-Options": "nosniff" }); }
 /** Stream opaque APK bytes; never allocate the full 214 MB in phone JS or function memory. */
@@ -25,7 +26,7 @@ export async function downloadApk(request: Request, apk:AndroidRelease=androidRe
     if (!upstream.body || (!validFull && !validPartial)) { await upstream.body?.cancel(); throw new Error(`APK_UPSTREAM_${upstream.status}`); }
     resultHeaders.set("Content-Length", length!);
     if (validPartial) { resultHeaders.set("Content-Range", contentRange!); resultHeaders.set("Cache-Control", "no-store"); }
-    return new Response(upstream.body, { status: upstream.status, headers: resultHeaders });
+    return new Response(exactStream(upstream.body, Number(length)), { status: upstream.status, headers: resultHeaders });
   } catch (error) {
     console.error("android_download_failed", error instanceof Error ? error.message : "unknown");
     return Response.json({ message: "Pobieranie chwilowo niedostępne. Wznów pobieranie za chwilę lub użyj zapasowego linku na stronie Android." }, { status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "30" } });

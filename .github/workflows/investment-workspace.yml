@@ -1,7 +1,7 @@
 name: Investment workspace lifecycle
 on:
   push:
-    branches: [codex/investment-workspace, codex/property-assessment, codex/mobile-attachments-and-reposts, codex/automatic-flip-costs, codex/simple-price-entry, codex/in-app-camera-download, codex/all-assumptions-thousands, codex/saved-invoice-and-sparse-reposts, codex/invoice-fields-estimate-fix, codex/android-088-resumable-download, codex/android-089-download]
+    branches: [codex/investment-workspace, codex/property-assessment, codex/mobile-attachments-and-reposts, codex/automatic-flip-costs, codex/simple-price-entry, codex/in-app-camera-download, codex/all-assumptions-thousands, codex/saved-invoice-and-sparse-reposts, codex/invoice-fields-estimate-fix, codex/android-088-resumable-download, codex/android-089-download, codex/android-download-completion]
   pull_request:
     paths: ['features/android-download/**', 'app/android/**', 'app/api/android/**', 'lib/supabase/auth-proxy.ts', 'features/settings/components/settings-page.tsx', 'features/property-workspace/**', 'app/api/properties/**', 'app/(app)/investments/**', 'supabase/migrations/*property_workspaces.sql', '.github/workflows/investment-workspace.yml']
 permissions:
@@ -17,10 +17,10 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/facebook-watcher/group-facebook-reposts.test.ts features/android-download/download.test.ts features/property-workspace/invoice-fields.test.ts features/property-workspace/invoice-ai.test.ts features/property-workspace/price-entry.test.ts features/property-workspace/assessment.test.ts features/property-workspace/model.test.ts features/property-workspace/database.test.ts config/navigation.test.ts features/properties/property-update.test.ts features/properties/server/property-delete-route.test.ts
+      - run: node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/facebook-watcher/group-facebook-reposts.test.ts features/android-download/download.test.ts features/android-download/exact-stream.test.ts features/property-workspace/invoice-fields.test.ts features/property-workspace/invoice-ai.test.ts features/property-workspace/price-entry.test.ts features/property-workspace/assessment.test.ts features/property-workspace/model.test.ts features/property-workspace/database.test.ts config/navigation.test.ts features/properties/property-update.test.ts features/properties/server/property-delete-route.test.ts
       - name: Verify complete real APK and resumed download
         env:
-          ANDROID_APK_LIVE_CHECK: ${{ (github.head_ref == 'codex/in-app-camera-download' || github.ref_name == 'codex/in-app-camera-download' || github.head_ref == 'codex/android-088-resumable-download' || github.ref_name == 'codex/android-088-resumable-download' || github.head_ref == 'codex/android-089-download' || github.ref_name == 'codex/android-089-download') && '1' || '0' }}
+          ANDROID_APK_LIVE_CHECK: ${{ (github.head_ref == 'codex/in-app-camera-download' || github.ref_name == 'codex/in-app-camera-download' || github.head_ref == 'codex/android-088-resumable-download' || github.ref_name == 'codex/android-088-resumable-download' || github.head_ref == 'codex/android-089-download' || github.ref_name == 'codex/android-089-download' || github.head_ref == 'codex/android-download-completion' || github.ref_name == 'codex/android-download-completion') && '1' || '0' }}
         run: node --import ./scripts/test-alias-loader.mjs --test features/android-download/live-download.test.ts
       - run: npx tsc --noEmit --incremental false
       - run: npx eslint features/android-download app/android app/api/android lib/supabase/auth-proxy.ts features/settings/components/settings-page.tsx features/property-workspace app/api/properties config/navigation.ts components/layout/mobile-bottom-nav.tsx
