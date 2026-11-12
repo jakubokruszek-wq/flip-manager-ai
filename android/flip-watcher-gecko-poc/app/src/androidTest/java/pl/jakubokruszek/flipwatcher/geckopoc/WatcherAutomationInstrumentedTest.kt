@@ -342,6 +342,7 @@ class WatcherAutomationInstrumentedTest {
         val catalog=context.getSharedPreferences("gecko_poc",Context.MODE_PRIVATE);val oldCatalog=catalog.getString("watcher_active_groups",null)
         val selected=WatcherGroups.configured.take(2);assertEquals(2,selected.size)
         val window=AutomationPolicy.current(java.time.Instant.now(),java.time.ZoneId.systemDefault(),WatcherAutomation.schedule(context))
+        val obsolete="capture-2/reader5/"+window.key
         val credentials=WatcherLink.Credentials(device,"fixture-unused-credential")
         var calls=0;var degraded=false;var reports=0
         val factory=object:androidx.work.WorkerFactory(){
@@ -360,8 +361,8 @@ class WatcherAutomationInstrumentedTest {
         }
         fun worker()=androidx.work.testing.TestListenableWorkerBuilder<WatcherAutomationWorker>(context).setWorkerFactory(factory).build()
         try{
-            prefs.edit().putBoolean("enabled",true).putLong("schedule_since",0).putString("completed_slot",window.key).remove("requested_scan").commit();WatcherAutomation.uiVisible=false
-            WatcherOutbox(context).use{q->selected.forEach{q.completeScan(window.key,it.id)}}
+            prefs.edit().putBoolean("enabled",true).putLong("schedule_since",0).putString("completed_slot",obsolete).remove("requested_scan").commit();WatcherAutomation.uiVisible=false
+            WatcherOutbox(context).use{q->selected.forEach{q.completeScan(obsolete,it.id)}}
             assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork());assertEquals(2,calls);assertEquals("DONE",WatcherScanStatus.read(context).phase)
             assertEquals(2,WatcherScanStatus.read(context).done);assertEquals(2,reports)
             worker().doWork();assertEquals("Calendar must reuse only this revision's valid completion",2,calls)

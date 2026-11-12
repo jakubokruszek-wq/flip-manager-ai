@@ -8,7 +8,7 @@ import java.util.UUID
 
 /** Numeric reader evidence and exact IDs only. Business text/images never enter diagnostics. */
 object WatcherCaptureReport {
-    fun cycle(key:String)="capture-2/reader5/"+key
+    fun cycle(key:String)="capture-2/reader6/"+key
     fun issue(value:SavedResult):String {
         val s=value.captureStats
         if(s.isEmpty())return "CAPTURE_NOT_MEASURED"
