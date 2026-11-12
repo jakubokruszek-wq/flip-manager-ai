@@ -6,6 +6,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.After
@@ -101,6 +102,59 @@ class ScanStatusInstrumentedTest {
                 assertFalse("Progress view must not stop the browser",WatcherAutomation.uiVisible)
             }
         }finally{summary.edit().putString("current",backup).commit()}
+    }
+    @Test fun expandingRealNotificationShadeKeepsWorkerAndBackgroundBrowserAlive()=runBlocking {
+        val readStarted=kotlinx.coroutines.CompletableDeferred<Unit>()
+        val release=kotlinx.coroutines.CompletableDeferred<Unit>()
+        val selected=WatcherGroup(FIXTURE_GROUP_ID,"Shade fixture")
+        val path="/groups/$FIXTURE_GROUP_ID/"
+        val server=LoopbackFixtureServer(pages=mapOf(path to "desktop-viewport")){name->runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}
+        val oldGroups=WatcherGroups.active.toList();val oldSources=WatcherSources.active.toList()
+        val factory=object:androidx.work.WorkerFactory(){
+            override fun createWorker(appContext:Context,name:String,parameters:androidx.work.WorkerParameters):androidx.work.ListenableWorker =
+                object:WatcherAutomationWorker(appContext,parameters){
+                    override fun credentials(context:Context)=this@ScanStatusInstrumentedTest.credentials
+                    override fun groups(credentials:WatcherLink.Credentials)=listOf(selected)
+                    override fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)="fixture-receipt"
+                    override fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item){}
+                    override fun recoverInterrupted(context:Context){}
+                    override fun continueScan(context:Context){}
+                    override suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult {
+                        val result=BackgroundWatcherScan(context).runFixture("http://127.0.0.1:${server.port}$path",progress={phase->progress(phase);if(phase=="READING")readStarted.complete(Unit)}){!WatcherAutomation.uiVisible}
+                        release.await()
+                        return result
+                    }
+                }
+        }
+        val worker=androidx.work.testing.TestListenableWorkerBuilder<WatcherAutomationWorker>(context).setWorkerFactory(factory).build()
+        val running=async{worker.doWork()}
+        val ui=InstrumentationRegistry.getInstrumentation().uiAutomation
+        fun shell(command:String){ui.executeShellCommand(command).use{android.os.ParcelFileDescriptor.AutoCloseInputStream(it).use{input->input.readBytes()}}}
+        try{
+            ActivityScenario.launch(ScanStatusActivity::class.java).use{
+                kotlinx.coroutines.withTimeout(90_000){readStarted.await()}
+                repeat(3){
+                    val before=WatcherScanStatus.read(context).heartbeat
+                    shell("cmd statusbar expand-notifications")
+                    val until=android.os.SystemClock.elapsedRealtime()+5000
+                    while(ui.rootInActiveWindow?.packageName?.toString()!="com.android.systemui"&&android.os.SystemClock.elapsedRealtime()<until)kotlinx.coroutines.delay(100)
+                    assertEquals("The real system notification shade must be open","com.android.systemui",ui.rootInActiveWindow?.packageName?.toString())
+                    kotlinx.coroutines.delay(5500)
+                    assertTrue("Worker must stay alive while the shade is expanded: "+WatcherScanStatus.read(context),running.isActive)
+                    assertFalse(WatcherAutomation.uiVisible)
+                    assertTrue("Heartbeat must continue with the Activity paused",WatcherScanStatus.read(context).heartbeat>before)
+                    shell("cmd statusbar collapse");kotlinx.coroutines.delay(300)
+                }
+                release.complete(Unit)
+                assertEquals(androidx.work.ListenableWorker.Result.success(),kotlinx.coroutines.withTimeout(90_000){running.await()})
+                val state=WatcherScanStatus.read(context)
+                assertNotEquals("ERROR",state.phase);assertNotEquals("INTERRUPTED",state.reason);assertEquals(1,state.attempted)
+                assertTrue(state.posts>0);assertTrue(state.photos>0)
+            }
+        }finally{
+            shell("cmd statusbar collapse");release.complete(Unit);running.cancel();running.join();server.close()
+            WatcherSources.setActive(oldSources);WatcherGroups.setActive(oldGroups)
+        }
     }
     private fun worker(missingCredentials:Boolean=false,groups:List<WatcherGroup> = WatcherGroups.configured.take(2),scan:suspend (WatcherGroup,(String)->Unit)->SavedResult)=
         androidx.work.testing.TestListenableWorkerBuilder<WatcherAutomationWorker>(context).setWorkerFactory(object:androidx.work.WorkerFactory(){

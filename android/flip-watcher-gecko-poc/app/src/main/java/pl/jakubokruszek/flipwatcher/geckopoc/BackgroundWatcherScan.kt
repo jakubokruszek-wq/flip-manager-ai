@@ -21,9 +21,9 @@ import java.util.UUID
 /** Phone-only Gecko session using the existing profile, parser, document proofs and photo binding. */
 class BackgroundWatcherScan(private val context:Context) {
     suspend fun run(group:WatcherGroup,alive:()->Boolean,progress:(String)->Unit={}):SavedResult=BackgroundLoadRetry.run("GROUP",alive,progress){runTarget(group,group.url,false,alive,progress)}
-    internal suspend fun runFixture(target:String,forceSurfaceRefresh:Boolean=false,alive:()->Boolean):SavedResult {
+    internal suspend fun runFixture(target:String,forceSurfaceRefresh:Boolean=false,progress:(String)->Unit={},alive:()->Boolean):SavedResult {
         require(java.net.URI(target).host=="127.0.0.1")
-        return runTarget(WatcherGroup(FIXTURE_GROUP_ID,"Fixture"),target,true,alive,forceSurfaceRefresh=forceSurfaceRefresh)
+        return runTarget(WatcherGroup(FIXTURE_GROUP_ID,"Fixture"),target,true,alive,progress,forceSurfaceRefresh=forceSurfaceRefresh)
     }
     private suspend fun runTarget(group:WatcherGroup,target:String,fixture:Boolean,alive:()->Boolean,progress:(String)->Unit={},forceSurfaceRefresh:Boolean=false):SavedResult=withContext(Dispatchers.Main){
         withTimeout(if(fixture)300_000 else 180_000){

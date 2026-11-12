@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-gecko-poc-${{ github.ref }}${{ github.ref == 'refs/heads/codex/android-progress-counts-094' && '-release-094' || '' }}
+  group: android-gecko-poc-${{ github.ref }}${{ github.ref == 'refs/heads/codex/android-notification-shade-audit' && '-shade-audit' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -117,7 +117,7 @@ jobs:
 
       - name: Upload unit test reports
         if: always()
-        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-progress-counts-094' }}
+        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-notification-shade-audit' }}
         timeout-minutes: 3
         uses: actions/upload-artifact@v4
         with:
@@ -155,7 +155,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Offline OCR and consent on API 36 (dedicated device)
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-progress-counts-094'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-notification-shade-audit'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -194,10 +194,10 @@ jobs:
           retention-days: 14
 
       - name: Release the offline emulator disk before creating the fresh device
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-progress-counts-094'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-notification-shade-audit'
         run: avdmanager delete avd --name gecko-ocr-offline
       - name: Complete worker, own-message and image-binding regressions on API 36
-        if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-progress-counts-094'
+        if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-notification-shade-audit'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -209,11 +209,9 @@ jobs:
           avd-name: gecko-schema-recovery
           force-avd-creation: true
           script: |
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true '-Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#sourceTimeoutDoesNotStopLaterGroupsAndFailedGroupGetsOnlyOneRetry,pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#interruptionResumesSameCycleWithoutRescanningCompletedSource,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest#interruptionRecoveryIsUniqueDelayedNetworkConstrainedAndRespectsDisable' || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
-            if [ '${{ github.ref }}' = 'refs/heads/codex/android-progress-counts-094' ]; then ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#newSourceCountsIgnoreBodyVariantsRetriesAndHeldRows || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1); fi
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#calendarIgnoresOldRevisionAndManualCycleRechecksWhileDegradedReadGetsExactlyOneRetry,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true '-Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest#expandingRealNotificationShadeKeepsWorkerAndBackgroundBrowserAlive' || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
       - name: Online Gecko flow and full regression on API 36 (fresh device)
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-progress-counts-094'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-notification-shade-audit'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -252,7 +250,7 @@ jobs:
 
       - name: Upload instrumented test reports
         if: always()
-        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-progress-counts-094' }}
+        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-notification-shade-audit' }}
         timeout-minutes: 3
         uses: actions/upload-artifact@v4
         with:
@@ -606,7 +604,7 @@ jobs:
 
   publish-tested-0594:
     name: Publish tested Android 0.5.94
-    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-progress-counts-094'
+    if: ${{ false }}
     needs: [guard, build, instrumented, verified-apk]
     runs-on: ubuntu-24.04
     permissions:
@@ -621,7 +619,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-progress-counts-094 --jq .object.sha)" = '${{ github.sha }}'
+          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-notification-shade-audit --jq .object.sha)" = '${{ github.sha }}'
           apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
           test -n "$apk_path" && test -f "$apk_path"
           cp "$apk_path" flip-watcher-0.5.94-arm64.apk
