@@ -27,6 +27,18 @@ object WatcherAutomation {
     private const val WINDOW_TAG="watcher-window-v2"
     internal const val CONTINUATION_TAG="watcher-continuation-v1"
     internal const val CONTINUATION_DELAY_MS=30_000L
+    internal const val RECOVERY_WORK="watcher-interruption-recovery-v1"
+    internal fun recoverInterrupted(context:Context,enqueue:(String,ExistingWorkPolicy,OneTimeWorkRequest)->Unit={name,policy,work->WorkManager.getInstance(context).enqueueUniqueWork(name,policy,work);Unit}){
+        if(!enabled(context))return
+        // Independent from the interrupted continuation's dependency chain. KEEP
+        // coalesces repeated stops; WorkManager may also reschedule the original.
+        val work=OneTimeWorkRequestBuilder<WatcherAutomationWorker>()
+            .setInitialDelay(CONTINUATION_DELAY_MS,TimeUnit.MILLISECONDS)
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .addTag(CONTINUATION_TAG).build()
+        enqueue(RECOVERY_WORK,ExistingWorkPolicy.KEEP,work)
+        check(preferences(context).edit().putLong("continuation_at",System.currentTimeMillis()+CONTINUATION_DELAY_MS).commit())
+    }
     internal fun continuation(context:Context,enqueue:(String,ExistingWorkPolicy,OneTimeWorkRequest)->Unit={name,policy,work->WorkManager.getInstance(context).enqueueUniqueWork(name,policy,work);Unit}){
         if(!enabled(context))return
         val work=OneTimeWorkRequestBuilder<WatcherAutomationWorker>()
@@ -78,6 +90,7 @@ object WatcherAutomation {
             manager.cancelUniqueWork("watcher-calendar-v1");manager.cancelUniqueWork("watcher-retry-v1")
             manager.cancelUniqueWork("watcher-background-kick-v2");manager.cancelAllWorkByTag(WINDOW_TAG)
             manager.cancelUniqueWork(CONTINUATION_TAG);manager.cancelAllWorkByTag(CONTINUATION_TAG)
+            manager.cancelUniqueWork(RECOVERY_WORK)
             preferences(context).edit().remove("continuation_at").apply()
         }
     }
@@ -110,6 +123,8 @@ object WatcherAutomation {
 }
 
 open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):CoroutineWorker(context,parameters) {
+    internal open fun interruptionReason()=stopReason
+    internal open fun recoverInterrupted(context:Context)=WatcherAutomation.recoverInterrupted(context)
     internal open fun continueScan(context:Context)=WatcherAutomation.continuation(context)
     internal open fun sourceTimeoutMs(remaining:Long)=minOf(175_000L,(remaining-30_000L).coerceAtLeast(1L))
     internal open fun credentials(context:Context)=WatcherLink.load(context)
@@ -266,7 +281,25 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                     if(begun)WatcherScanStatus.finish(context,run,"RETRY","BATCH_CONTINUE")
                     continueScan(context)
                     Result.success()
-                }catch(e:CancellationException){queue.log("INTERRUPTED");if(begun)WatcherScanStatus.finish(context,run,"ERROR","INTERRUPTED");throw e}
+                }catch(e:CancellationException){
+                    val stopped=interruptionReason()
+                    queue.log("WORK_STOP_"+stopped)
+                    val recover=begun&&WatcherAutomation.enabled(context)&&stopped!=WorkInfo.STOP_REASON_CANCELLED_BY_APP
+                    val reason=when(stopped){
+                        WorkInfo.STOP_REASON_CONSTRAINT_CONNECTIVITY->"INTERRUPTED_NETWORK"
+                        WorkInfo.STOP_REASON_TIMEOUT->"INTERRUPTED_TIMEOUT"
+                        WorkInfo.STOP_REASON_QUOTA->"INTERRUPTED_QUOTA"
+                        WorkInfo.STOP_REASON_CANCELLED_BY_APP->"INTERRUPTED_CANCELLED"
+                        else->"INTERRUPTED"
+                    }
+                    // Cancellation still propagates to WorkManager. A pending retry
+                    // must not be shown as a terminal scan error or lose receipts.
+                    if(recover){
+                        recoverInterrupted(context)
+                        WatcherScanStatus.finish(context,run,"RETRY",reason)
+                    }else if(begun)WatcherScanStatus.finish(context,run,"ERROR",if(!WatcherAutomation.enabled(context))"AUTOMATION_DISABLED"else reason)
+                    throw e
+                }
                 catch(e:Exception){val reason=if(e is WatcherUpload.HttpFailure)"UPLOAD_HTTP_"+e.status else WatcherAutomation.errorCode(e);queue.log(reason);begin();WatcherScanStatus.finish(context,run,"ERROR",reason);Result.retry()}
                 finally{ticker?.cancel();runCatching{WatcherAutomation.scheduleNext(context)}}
             }

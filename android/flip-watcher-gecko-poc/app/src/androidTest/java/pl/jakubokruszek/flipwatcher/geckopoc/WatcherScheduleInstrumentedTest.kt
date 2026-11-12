@@ -11,6 +11,28 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class WatcherScheduleInstrumentedTest {
     private val context:Context=ApplicationProvider.getApplicationContext()
+    @Test fun interruptionRecoveryIsUniqueDelayedNetworkConstrainedAndRespectsDisable() {
+        val prefs=WatcherAutomation.preferences(context)
+        val old=WatcherAutomation.enabled(context);val at=prefs.getLong("continuation_at",0)
+        var calls=0
+        try {
+            prefs.edit().putBoolean("enabled",true).commit()
+            val before=System.currentTimeMillis()
+            WatcherAutomation.recoverInterrupted(context){name,policy,request->
+                calls++
+                assertEquals(WatcherAutomation.RECOVERY_WORK,name)
+                assertEquals(androidx.work.ExistingWorkPolicy.KEEP,policy)
+                assertTrue(request.tags.contains(WatcherAutomation.CONTINUATION_TAG))
+                assertEquals(androidx.work.NetworkType.CONNECTED,request.workSpec.constraints.requiredNetworkType)
+                assertEquals(30_000L,request.workSpec.initialDelay)
+            }
+            assertEquals(1,calls)
+            assertTrue(prefs.getLong("continuation_at",0)>=before+30_000L)
+            prefs.edit().putBoolean("enabled",false).commit()
+            WatcherAutomation.recoverInterrupted(context){_,_,_->calls++}
+            assertEquals("Disabled automation must never restart itself",1,calls)
+        }finally{prefs.edit().putBoolean("enabled",old).putLong("continuation_at",at).commit()}
+    }
     @Test fun actualTimePickerSavesAndRecreationKeepsMinutes() {
         val prefs=WatcherAutomation.preferences(context)
         val old=prefs.getString("scan_minutes",null);val since=prefs.getLong("schedule_since",0)

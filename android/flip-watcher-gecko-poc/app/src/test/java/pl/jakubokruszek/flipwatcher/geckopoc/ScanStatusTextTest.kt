@@ -6,6 +6,13 @@ import java.time.ZoneId
 
 class ScanStatusTextTest {
     private val now=1_800_000_000_000L
+    @Test fun interruptedRecoveryIsPendingAndOnlyKnownStopReasonsAreExplained(){
+        assertEquals("Skan częściowy — oczekuje na ponowienie",ScanStatusText.title(ScanState(phase="RETRY",reason="INTERRUPTED"),true,now,false))
+        assertTrue(ScanStatusText.reason("INTERRUPTED_NETWORK").contains("połączenia"))
+        assertTrue(ScanStatusText.reason("INTERRUPTED_TIMEOUT").contains("limitu czasu"))
+        assertTrue(ScanStatusText.reason("INTERRUPTED_QUOTA").contains("limitu pracy"))
+        assertFalse(ScanStatusText.reason("INTERRUPTED").contains("Android"))
+    }
     @Test fun staleProcessIsNotFalselyReportedAsCompletedOrKilledByAndroid(){
         val state=ScanState(phase="READING",heartbeat=now-120_000,changed=now-120_000)
         assertEquals("Brak potwierdzenia dalszej pracy",ScanStatusText.title(state,true,now,false))

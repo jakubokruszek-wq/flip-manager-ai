@@ -369,7 +369,8 @@ class WatcherAutomationInstrumentedTest {
         val selected=WatcherGroups.configured.take(2)
         val credentials=WatcherLink.Credentials(device,"fixture-unused-credential")
         try{
-            for(mode in listOf("budget","nested","parent")){
+            for(mode in listOf("budget","nested","parent","parent-network","parent-timeout","parent-quota","parent-disabled","parent-cancelled")){
+                var recoveries=0
                 val requestsBefore=continuationRequests
                 val nested=mode=="nested"
                 val failed=if(nested)selected.last()else selected.first()
@@ -386,6 +387,14 @@ class WatcherAutomationInstrumentedTest {
                             override fun groups(credentials:WatcherLink.Credentials)=selected
                             override fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)="fixture-receipt"
                             override fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item){}
+                            override fun interruptionReason()=when(mode){
+                                "parent-network"->androidx.work.WorkInfo.STOP_REASON_CONSTRAINT_CONNECTIVITY
+                                "parent-timeout"->androidx.work.WorkInfo.STOP_REASON_TIMEOUT
+                                "parent-quota"->androidx.work.WorkInfo.STOP_REASON_QUOTA
+                                "parent-cancelled"->androidx.work.WorkInfo.STOP_REASON_CANCELLED_BY_APP
+                                else->androidx.work.WorkInfo.STOP_REASON_NOT_STOPPED
+                            }
+                            override fun recoverInterrupted(context:Context){recoveries++}
                             override fun sourceTimeoutMs(remaining:Long)=if(nested)5_000L else 100L
                             override suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult {
                                 calls.add(group.key);started.complete(Unit)
@@ -398,13 +407,25 @@ class WatcherAutomationInstrumentedTest {
                         }
                 }
                 fun worker()=androidx.work.testing.TestListenableWorkerBuilder<WatcherAutomationWorker>(context).setWorkerFactory(factory).build()
-                if(mode=="parent"){
+                if(mode.startsWith("parent")){
                     kotlinx.coroutines.withTimeout(5_000){
                         val job=async{worker().doWork()}
-                        started.await();job.cancel();job.join()
+                        started.await();if(mode=="parent-disabled")prefs.edit().putBoolean("enabled",false).commit();job.cancel();job.join()
                         assertTrue("Parent cancellation must propagate, never become a source failure",job.isCancelled)
                     }
-                    assertEquals("INTERRUPTED",WatcherScanStatus.read(context).reason)
+                    val state=WatcherScanStatus.read(context)
+                    val shouldRecover=mode !in setOf("parent-disabled","parent-cancelled")
+                    assertEquals(if(shouldRecover)1 else 0,recoveries)
+                    assertEquals(if(shouldRecover)"RETRY"else "ERROR",state.phase)
+                    assertEquals(when(mode){
+                        "parent-network"->"INTERRUPTED_NETWORK"
+                        "parent-timeout"->"INTERRUPTED_TIMEOUT"
+                        "parent-quota"->"INTERRUPTED_QUOTA"
+                        "parent-disabled"->"AUTOMATION_DISABLED"
+                        "parent-cancelled"->"INTERRUPTED_CANCELLED"
+                        else->"INTERRUPTED"
+                    },state.reason)
+                    assertNotNull("The same manual cycle must remain pending",prefs.getString("requested_scan",null))
                     WatcherOutbox(context).use{q->assertTrue(q.cycleReports(prefs.getString("capture_cycle",null)!!).isEmpty())}
                     continue
                 }
@@ -425,6 +446,52 @@ class WatcherAutomationInstrumentedTest {
                     assertFalse(q.status().contains("INTERRUPTED"))
                 }
             }
+        }finally{
+            WatcherAutomation.configure(context,false)
+            val edit=prefs.edit().clear();for((k,v)in backup)when(v){is String->edit.putString(k,v);is Boolean->edit.putBoolean(k,v);is Long->edit.putLong(k,v);is Int->edit.putInt(k,v)};edit.commit()
+            WatcherAutomation.uiVisible=visible;WatcherGroups.setActive(oldGroups);catalog.edit().putString("watcher_active_groups",oldCatalog).commit();context.deleteDatabase("watcher-outbox-v1.db")
+        }
+    }
+    @Test fun interruptionResumesSameCycleWithoutRescanningCompletedSource()=runBlocking {
+        val prefs=WatcherAutomation.preferences(context);val backup=prefs.all.toMap()
+        val visible=WatcherAutomation.uiVisible;val oldGroups=WatcherGroups.active.toList()
+        val catalog=context.getSharedPreferences("gecko_poc",Context.MODE_PRIVATE);val oldCatalog=catalog.getString("watcher_active_groups",null)
+        val selected=WatcherGroups.configured.take(2)
+        val credentials=WatcherLink.Credentials(device,"fixture-unused-credential")
+        val entered=kotlinx.coroutines.CompletableDeferred<Unit>();val calls=mutableListOf<String>()
+        var interrupt=true;var recoveries=0
+        val request=java.util.UUID.randomUUID().toString()
+        val factory=object:androidx.work.WorkerFactory(){
+            override fun createWorker(appContext:Context,name:String,parameters:androidx.work.WorkerParameters):androidx.work.ListenableWorker =
+                object:WatcherAutomationWorker(appContext,parameters){
+                    override fun credentials(context:Context)=credentials
+                    override fun groups(credentials:WatcherLink.Credentials)=selected
+                    override fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)="fixture-receipt"
+                    override fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item){}
+                    override fun interruptionReason()=androidx.work.WorkInfo.STOP_REASON_CONSTRAINT_CONNECTIVITY
+                    override fun recoverInterrupted(context:Context){recoveries++}
+                    override suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult {
+                        calls.add(group.key)
+                        if(interrupt&&group.key==selected.last().key){entered.complete(Unit);kotlinx.coroutines.awaitCancellation()}
+                        return result().copy(captureStats=DesktopProtocol.emptyStats()+mapOf("pageVisible" to 1,"scrollMoves" to 1))
+                    }
+                }
+        }
+        fun worker()=androidx.work.testing.TestListenableWorkerBuilder<WatcherAutomationWorker>(context).setWorkerFactory(factory).build()
+        try{
+            context.deleteDatabase("watcher-outbox-v1.db")
+            prefs.edit().clear().putBoolean("enabled",true).putLong("schedule_since",0).putString("requested_scan",request).commit()
+            WatcherAutomation.uiVisible=false
+            kotlinx.coroutines.withTimeout(5_000){val job=async{worker().doWork()};entered.await();job.cancel();job.join();assertTrue(job.isCancelled)}
+            assertEquals(1,recoveries);assertEquals("RETRY",WatcherScanStatus.read(context).phase)
+            val cycle=prefs.getString("capture_cycle",null)!!
+            WatcherOutbox(context).use{q->assertTrue(q.scanned(cycle,selected.first().key));assertFalse(q.scanned(cycle,selected.last().key))}
+            interrupt=false
+            assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork())
+            assertEquals(cycle,prefs.getString("capture_cycle",null))
+            assertEquals(1,calls.count{it==selected.first().key});assertEquals(2,calls.count{it==selected.last().key})
+            assertEquals(2,WatcherScanStatus.read(context).done);assertEquals("DONE",WatcherScanStatus.read(context).phase)
+            assertNull(prefs.getString("requested_scan",null))
         }finally{
             WatcherAutomation.configure(context,false)
             val edit=prefs.edit().clear();for((k,v)in backup)when(v){is String->edit.putString(k,v);is Boolean->edit.putBoolean(k,v);is Long->edit.putLong(k,v);is Int->edit.putInt(k,v)};edit.commit()
