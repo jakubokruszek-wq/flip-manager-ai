@@ -1788,6 +1788,13 @@ class PocActivity : ComponentActivity() {
         toolPanel.visibility=View.GONE
         val mainTools=LinearLayout(this).apply{
             orientation=LinearLayout.VERTICAL
+            addView(android.widget.ImageView(this@PocActivity).apply{
+                setImageResource(R.drawable.metron_company)
+                contentDescription="MetrON — Nieruchomości i Inwestycje"
+                scaleType=android.widget.ImageView.ScaleType.FIT_CENTER
+                setBackgroundColor(Color.rgb(6,15,28))
+                layoutParams=LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,(112*dp).toInt())
+            })
             addView(row(button("desktopPreview","Automatyczny podgląd • 30 s"){startDesktopPreview()}))
             addView(row(button("desktopResult","Oferty"){selectContentTab(true)}))
             addView(row(button("watcherConnect","Połącz / synchronizuj Watchera"){watcherConnection()}))
