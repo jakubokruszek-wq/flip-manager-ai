@@ -14,7 +14,7 @@ class ScanStatusTextTest {
         assertFalse(ScanStatusText.reason("INTERRUPTED").contains("Android"))
     }
     @Test fun firstDegradedSourceCountsAsAttemptedWhileWaitingForRetry(){
-        val state=ScanState(phase="READING",heartbeat=now,total=52,done=0,attempted=1,retrying=1,group="Bieżąca grupa",position=39,posts=14,photos=2,uploads=1)
+        val state=ScanState(phase="READING",started=now-70_000,heartbeat=now,total=52,done=0,attempted=1,retrying=1,group="Bieżąca grupa",position=39,posts=14,photos=2,uploads=1)
         val text=ScanStatusText.details(state,true,now,now+1000,true,true,"uruchomione",true)
         assertTrue(text.contains("Źródła z próbą odczytu: 1/52"))
         assertTrue(text.contains("Zamknięte źródła: 0/52 • do ponowienia: 1"))
