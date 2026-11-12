@@ -1,7 +1,7 @@
 name: Public Android download verification
 on:
   push:
-    branches: [main]
+    branches: [main, codex/android-chrome-download]
     paths: ['features/android-download/**', 'app/api/android/**', 'lib/supabase/auth-proxy.ts', '.github/workflows/android-public-download.yml']
 permissions:
   contents: read
@@ -14,7 +14,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - run: npm ci --no-audit --no-fund
+      - name: Use installed Chrome or install Chromium
+        run: |
+          browser_path="$(command -v google-chrome || command -v chromium || true)"
+          if [ -n "$browser_path" ]; then
+            echo "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$browser_path" >> "$GITHUB_ENV"
+          else
+            npx playwright install --with-deps chromium
+          fi
       - name: Verify production completion and interrupted resume
         env:
           ANDROID_APK_PUBLIC_CHECK: '1'
         run: node --experimental-strip-types --test features/android-download/public-download.test.mjs
+      - name: Verify Chrome finishes saving the APK
+        env:
+          ANDROID_APK_PUBLIC_CHECK: '1'
+        run: node --experimental-strip-types --test features/android-download/chrome-download.test.cjs
