@@ -1,3 +1,4 @@
+import { constructionYearFromSource } from "./construction-year";
 import type { PropertySourceListing } from "@/features/properties/types/property";
 import { calculateContentHash } from "./otodom-search";
 import { resolveBuildingType, resolveOwnership } from "./listing-attribute-extraction";
@@ -110,6 +111,7 @@ function toListing(candidate: JsonRecord, config: ExternalSourceConfig, fallback
     locationText: [district, city].filter(Boolean).join(", ") || null,
     thumbnailUrl: images[0] ?? null,
     images,
+    yearBuilt: constructionYearFromSource(candidate, cleanDescription),
     buildingType: resolveBuildingType(explicitBuildingType, title, cleanDescription),
     ownership: resolveOwnership(explicitOwnership, title, cleanDescription),
     description: cleanDescription,

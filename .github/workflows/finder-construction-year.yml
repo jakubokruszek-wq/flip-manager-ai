@@ -1,0 +1,52 @@
+name: Finder construction year
+on:
+  push:
+    branches: [codex/finder-construction-year]
+  pull_request:
+    branches: [main]
+    paths:
+      - "features/flip-finder/**"
+      - "supabase/migrations/20261112215509*"
+      - ".github/workflows/finder-construction-year.yml"
+permissions:
+  contents: read
+concurrency:
+  group: finder-year-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx tsc --noEmit
+      - run: npx eslint features/flip-finder
+      - name: Own source facts, filter boundaries, persistence and migration
+        run: >-
+          node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test
+          features/flip-finder/construction-year.test.ts
+          features/flip-finder/finder-building-detail.test.ts
+          features/flip-finder/radar-nuxt-source-detail.test.ts
+          features/flip-finder/external-source-adapters.test.ts
+          features/flip-finder/external-source-parser.test.ts
+          features/flip-finder/filter-evaluation.test.ts
+          features/flip-finder/server/listing-attribute-reuse.test.ts
+          features/flip-finder/server/persist-listing-year-built.test.ts
+          features/flip-finder/server/search-filters-year-built.test.ts
+          features/flip-finder/server/year-built-migration.test.ts
+          features/flip-finder/server/manual-scan-source-timeout-budget.test.ts
+      - name: Inspect public source facts for the reported listing
+        continue-on-error: true
+        run: |
+          node --import ./scripts/test-alias-loader.mjs --input-type=module <<'JS'
+          import {parseRadarOfferDetail} from './features/flip-finder/external-source-adapters.ts';
+          for (const [source,url] of [['gratka','https://gratka.pl/nieruchomosci/mieszkanie-lodz-polesie-zielona/ob/49593457'],['morizon','https://www.morizon.pl/oferta/sprzedaz-mieszkanie-lodz-polesie-zielona-74m2-mzn2048352413']]) {
+            try {const r=await fetch(url,{signal:AbortSignal.timeout(15000)});const d=parseRadarOfferDetail(source,await r.text(),url);console.log(JSON.stringify({source,status:r.status,yearBuilt:d.yearBuilt,buildingType:d.buildingType,contradictoryFields:d.contradictoryFields}));}
+            catch {console.log(JSON.stringify({source,unavailable:true}));}
+          }
+          JS

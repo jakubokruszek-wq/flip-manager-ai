@@ -7,6 +7,7 @@ import { activeSources, type SourceFetchResult, type SourceListing, type SearchS
 import { finderPortalSources, OLX_ONLY_FILTER_MESSAGE } from "@/features/flip-finder/server/finder-portal-sources";
 import { persistListing } from "@/features/flip-finder/server/persist-listing";
 import { invalidSalePriceWarning, validSaleListings } from "@/features/flip-finder/sale-price";
+import { enrichFinderBuildingDetail, needsFinderBuildingDetail, FINDER_BUILDING_DETAIL_TIMEOUT_MS } from "../finder-building-detail";
 import { reuseExistingListingAttributes } from "@/features/flip-finder/server/listing-attribute-reuse";
 import { getSearchFilter } from "@/features/flip-finder/server/search-filters";
 import { recalculateFilterMatches } from "@/features/flip-finder/server/filter-match-recalculation";
@@ -607,11 +608,11 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
       assertCheckpointSize(checkpoint);
       await updateSourceProgress(supabase, scan.id, filter, { fetched, matched, counters, updated, priceDrops }, controller.signal, scanClock.continuationLeaseToken, checkpoint);
     };
-    const requireTime = () => {
+    const requireTime = (reserveMs = 0) => {
       controller.signal.throwIfAborted();
       // Leave time for a final guarded checkpoint and lease release. Yielding
       // after committed work is not a network timeout and needs no backoff.
-      if (Date.now() >= started + timeoutMs - Math.min(5_000, Math.floor(timeoutMs / 6))) throw new SourceSliceYield();
+      if (Date.now() + reserveMs >= started + timeoutMs - Math.min(5_000, Math.floor(timeoutMs / 6))) throw new SourceSliceYield();
     };
     const drainBuffer = async () => {
       if (checkpoint.offset < checkpoint.buffer.length) {
@@ -622,7 +623,13 @@ export async function scanSource(source: SearchSource, filterId: string, filter:
       }
       while (checkpoint.offset < checkpoint.buffer.length) {
         requireTime();
-        const listing = checkpoint.buffer[checkpoint.offset];
+        let listing = checkpoint.buffer[checkpoint.offset];
+        const preliminary = evaluateListingAgainstFilter(listing, filter);
+        if (preliminary.bucket !== "REJECTED" && needsFinderBuildingDetail(listing, filter)) {
+          requireTime(FINDER_BUILDING_DETAIL_TIMEOUT_MS + 1000);
+          listing = await enrichFinderBuildingDetail(listing, controller.signal);
+          checkpoint.buffer[checkpoint.offset] = listing;
+        }
         const decision = evaluateListingAgainstFilter(listing, filter);
         if (source.id === "otodom") addOtodomFilterDecision(otodomSummary, listing, decision);
         await assertContinuationLease(supabase, scan.id, scanClock.continuationLeaseToken, controller.signal);

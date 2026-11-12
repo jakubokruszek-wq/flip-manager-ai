@@ -1141,6 +1141,7 @@ function ExpandableListingCardContent({ result, averagePricePerSqm, marketType, 
           <div className="mt-4 space-y-2.5 text-sm text-muted-foreground">
             <p className="flex min-w-0 items-start gap-2"><MapPin aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-foreground/65" /><span className="min-w-0 whitespace-normal break-words [overflow-wrap:anywhere]">{location}</span></p>
             <p className="flex items-center gap-2"><BedDouble aria-hidden="true" className="size-4 shrink-0 text-foreground/65" /><span>{measure(result.rooms, "pok.")} <span className="mx-1.5 text-border">•</span> {measure(result.area, "m²")}</span></p>
+            {result.yearBuilt != null ? <p className="flex items-center gap-2"><Clock3 aria-hidden="true" className="size-4 shrink-0 text-foreground/65" /><span>Rok budowy: {result.yearBuilt}</span></p> : null}
             <p className="flex min-w-0 items-start gap-2"><Clock3 aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-foreground/65" /><span className="min-w-0 whitespace-normal break-words [overflow-wrap:anywhere]">{publicationLabel(result.publishedAt)}</span></p>
             <p className="flex min-w-0 items-start gap-2"><Clock3 aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-foreground/65" /><span className="min-w-0 whitespace-normal break-words [overflow-wrap:anywhere]">{firstSeenLabel(result.firstSeenAt)}</span></p>
             <ListingFreshness result={result} />

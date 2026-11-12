@@ -1,4 +1,5 @@
 import "server-only";
+import { constructionYearFromSource } from "../construction-year";
 
 import type { SearchFilter } from "@/features/flip-finder";
 import {
@@ -888,7 +889,7 @@ export function toListingRow(row: Row): ListingRow | null {
     // confirmed match after an older import/recalculation.
     buildingType: resolveBuildingType(row.building_type, nullableString(row.title), nullableString(row.description)),
     rawBuildingType: row.building_type ?? null,
-    yearBuilt: nullableNumber(row.year_built),
+    yearBuilt: constructionYearFromSource({ yearBuilt: row.year_built }, nullableString(row.description)),
     ownership: nullableString(row.ownership),
     description: nullableString(row.description),
     pricePerSqm: nullableNumber(row.price_per_sqm),

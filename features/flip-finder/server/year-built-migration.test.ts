@@ -26,6 +26,16 @@ function extractBlock(sql: string, startMarker: string, endMarker: string): stri
   return sql.slice(start, end + endMarker.length);
 }
 
+test("production construction-year migration can follow the earlier draft and repeat safely", async () => {
+  const db = await freshDb();
+  try {
+    const sql = fs.readFileSync(path.join(process.cwd(), "supabase/migrations/20261112215509_enable_finder_construction_year_filter.sql"), "utf8");
+    await db.exec(sql);await db.exec(sql);
+    const result = await db.query<{ column_name: string }>("select column_name from information_schema.columns where table_schema='public' and ((table_name='listings' and column_name='year_built') or (table_name='search_filters' and column_name='year_built_min'))");
+    assert.equal(result.rows.length, 2);
+  } finally { await db.close(); }
+});
+
 async function freshDb(): Promise<PGlite> {
   const db = new PGlite();
   const foundation = fs.readFileSync(path.join(process.cwd(), "supabase/migrations/20260719113000_create_flip_finder_foundation.sql"), "utf8");

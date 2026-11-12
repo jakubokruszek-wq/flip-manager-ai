@@ -66,3 +66,11 @@ test("attribute reuse prefers the newest stored confirmation and never overwrite
   assert.equal(freshWins?.buildingType, "dom", "a current confirmed attribute takes precedence over older stored evidence");
   assert.equal(freshWins?.ownership, "pełna własność", "a missing current field is filled from the latest stored confirmation");
 });
+
+test("a stored construction year is reused even when other current attributes are complete", async () => {
+  const db = orderedRowsClient([{ source: "domy", external_listing_id: "domy-123", normalized_url: "https://domy.pl/mieszkanie/123", year_built: 1930, last_seen_at: "2026-11-12T22:00:00Z" }]);
+  const [reused] = await reuseExistingListingAttributes(db as never, [sourceListing({ buildingType: "blok", ownership: "pełna własność" })]);
+  assert.equal(reused.yearBuilt, 1930);
+  const [fresh] = await reuseExistingListingAttributes(db as never, [sourceListing({ yearBuilt: 1960 })]);
+  assert.equal(fresh.yearBuilt, 1960);
+});

@@ -1046,6 +1046,7 @@ function FilterSettingsDialog({ filter, onAction, open, onOpenChange }: { filter
           <FilterSetting icon={<Coins />} label="Maks. cena za m²">{filter.maxPricePerSqm !== null ? formatCurrency(filter.maxPricePerSqm) : "Nie ustawiono"}</FilterSetting>
           <FilterSetting icon={<Ruler />} label="Powierzchnia">{formatAreaRange(filter)}</FilterSetting>
           <FilterSetting icon={<DoorOpen />} label="Liczba pokoi">{filter.rooms.length ? filter.rooms.join(", ") : "Nie ustawiono"}</FilterSetting>
+          <FilterSetting icon={<DoorOpen />} label="Rok budowy od">{filter.yearBuiltMin ?? "Nie ustawiono"}</FilterSetting>
           <FilterSetting className="sm:col-span-2" icon={<Radio />} label="Aktywne źródła ogłoszeń">
             {sources.length ? (
               <ul aria-label="Aktywne źródła ogłoszeń" className="mt-1 flex flex-wrap gap-1.5">
