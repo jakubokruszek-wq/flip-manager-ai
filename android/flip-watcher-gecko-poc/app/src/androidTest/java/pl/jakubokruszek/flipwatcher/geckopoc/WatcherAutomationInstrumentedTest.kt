@@ -232,6 +232,22 @@ class WatcherAutomationInstrumentedTest {
             }
         }finally{context.deleteDatabase("watcher-outbox-v1.db")}
     }
+    @Test fun realFailedLoadRetriesIntoFreshBrowserWithBoundRowsAndPhotos()=runBlocking {
+        val path="/groups/$FIXTURE_GROUP_ID/"
+        val server=LoopbackFixtureServer(pages=mapOf(path to "desktop-viewport")){name->runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}
+        val closedPort=java.net.ServerSocket(0).use{it.localPort}
+        var attempts=0
+        try{
+            val saved=BackgroundLoadRetry.run("GROUP",{true},pause={}){
+                attempts++
+                val port=if(attempts==1)closedPort else server.port
+                BackgroundWatcherScan(context).runFixture("http://127.0.0.1:$port$path"){true}
+            }
+            assertEquals(2,attempts);assertEquals(2,saved.captureStats["groupLoadAttempts"])
+            assertTrue(saved.rows.isNotEmpty());assertTrue(saved.photos.isNotEmpty())
+            assertTrue(saved.photos.all{photo->saved.rows.any{it.postId==photo.postId}&&photo.jpeg.isNotEmpty()})
+        }finally{server.close()}
+    }
     @Test fun actualBackgroundRendererReadsExactRowsAndBoundPhotoWithoutActivity()=runBlocking {
         val path="/groups/$FIXTURE_GROUP_ID/"
         val server=LoopbackFixtureServer(redirects=mapOf(path to path.trimEnd('/')),pages=mapOf(path.trimEnd('/') to "desktop-viewport")){name->runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}
