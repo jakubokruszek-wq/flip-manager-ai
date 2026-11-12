@@ -118,7 +118,7 @@ class ScanStatusInstrumentedTest {
         val calls=mutableListOf<String>();var fail=true
         suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult {
             calls+=group.id;progress("READING")
-            if(group==first&&fail){fail=false;error("GROUP_LOAD_ERROR")}
+            if(group==first&&fail){fail=false;error("NETWORK_UNAVAILABLE")}
             // Measured non-offer post proves a healthy read, unlike an unmeasured empty stub.
             val row=DesktopRow("550000000000099",group.url+"posts/550000000000099/","DOM",null,"NONE",null,null,null,null,null,"OTHER",false,0,"INTENT")
             return SavedResult(System.currentTimeMillis(),listOf(row),emptyList(),emptyList(),captureStats=DesktopProtocol.emptyStats()+mapOf("pageVisible" to 1,"scrollMoves" to 1))
@@ -126,12 +126,28 @@ class ScanStatusInstrumentedTest {
         assertEquals(androidx.work.ListenableWorker.Result.success(),worker(scan=::scan).doWork())
         assertEquals(1,continuations)
         val partial=WatcherScanStatus.read(context)
-        assertEquals("RETRY",partial.phase);assertEquals("GROUP_LOAD_ERROR",partial.reason);assertEquals(1,partial.done);assertEquals(2,partial.attempted);assertEquals(1,partial.retrying);assertEquals(2,partial.total);assertEquals(0L,partial.lastSuccess)
+        assertEquals("RETRY",partial.phase);assertEquals("NETWORK_UNAVAILABLE",partial.reason);assertEquals(1,partial.done);assertEquals(2,partial.attempted);assertEquals(1,partial.retrying);assertEquals(2,partial.total);assertEquals(0L,partial.lastSuccess)
         assertEquals("status-test",WatcherAutomation.preferences(context).getString("requested_scan",null))
         assertEquals(androidx.work.ListenableWorker.Result.success(),worker(scan=::scan).doWork())
         val done=WatcherScanStatus.read(context);assertEquals("DONE",done.phase);assertEquals(2,done.done);assertEquals(2,done.attempted);assertEquals(0,done.retrying);assertTrue(done.lastSuccess>0)
         assertNull(WatcherAutomation.preferences(context).getString("requested_scan",null))
         assertEquals(2,calls.count{it==first.id});assertEquals(1,calls.count{it==second.id})
+    }
+    @Test fun exhaustedRenderingClosesWithWarningWithoutReplayingTheWholeSource()=runBlocking {
+        val first=WatcherGroups.configured[0]
+        val calls=mutableListOf<String>()
+        suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult {
+            calls+=group.id;progress("READING")
+            if(group==first)error("GROUP_RENDER_RETRY_FAILED")
+            val row=DesktopRow("550000000000099",group.url+"posts/550000000000099/","DOM",null,"NONE",null,null,null,null,null,"OTHER",false,0,"INTENT")
+            return SavedResult(System.currentTimeMillis(),listOf(row),emptyList(),emptyList(),captureStats=DesktopProtocol.emptyStats()+mapOf("pageVisible" to 1,"scrollMoves" to 1))
+        }
+        assertEquals(androidx.work.ListenableWorker.Result.success(),worker(scan=::scan).doWork())
+        val partial=WatcherScanStatus.read(context)
+        assertEquals("PARTIAL",partial.phase);assertEquals("CAPTURE_PARTIAL",partial.reason)
+        assertEquals(2,partial.done);assertEquals(0,partial.retrying);assertEquals(0,continuations)
+        assertEquals(0L,partial.lastSuccess)
+        worker(scan=::scan).doWork();assertEquals(2,calls.size)
     }
     @Test fun missingPairingAndVisibleBrowserHaveDistinctPersistentReasons()=runBlocking {
         val unused:suspend (WatcherGroup,(String)->Unit)->SavedResult={_,_->error("Browser must not start")}
