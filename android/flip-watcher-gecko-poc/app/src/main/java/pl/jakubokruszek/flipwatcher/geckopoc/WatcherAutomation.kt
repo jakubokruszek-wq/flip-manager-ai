@@ -236,7 +236,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             val evidence=WatcherCaptureReport.create(context,slot,run,group,scanned,issue,android.os.SystemClock.elapsedRealtime()-groupClock,queue.transferCounts())
                             queue.report(credentials.deviceId,slot,group.key,evidence)
                             // One bounded retry for degraded capture; do not spin forever on the same source.
-                            if(issue.isEmpty()||prior){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
+                            if(SourceRetryPolicy.closeCapture(issue,prior)){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
                             else{lastIssue=issue;queue.log(issue)}
                             val diagnostic=queue.nextReport(credentials.deviceId)
                             if(diagnostic!=null)runCatching{sendReport(credentials,diagnostic);queue.reportSent(diagnostic.id)}
@@ -257,7 +257,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                 val hadAttempt=queue.attemptedSources(slot).contains(group.key)
                                 val evidence=WatcherCaptureReport.create(context,slot,run,group,null,lastIssue,android.os.SystemClock.elapsedRealtime()-groupClock,queue.transferCounts())
                                 runCatching{queue.report(credentials.deviceId,slot,group.key,evidence)}
-                                if(hadAttempt&&lastIssue !in setOf("LOGIN_REQUIRED","CAPTCHA","CHECKPOINT","WAITING_FOR_BACKGROUND")){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
+                                if(SourceRetryPolicy.closeFailure(lastIssue,hadAttempt)){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
                                 updateCounts{it.copy(phase="PREPARING",reason=lastIssue)}
                                 // A single unavailable group cannot starve every later source.
                                 if(e.message in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA"))break
