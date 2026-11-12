@@ -473,7 +473,8 @@ class WatcherAutomationInstrumentedTest {
                     override suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult {
                         calls.add(group.key)
                         if(interrupt&&group.key==selected.last().key){entered.complete(Unit);kotlinx.coroutines.awaitCancellation()}
-                        return result().copy(captureStats=DesktopProtocol.emptyStats()+mapOf("pageVisible" to 1,"scrollMoves" to 1))
+                        val value=result()
+                        return value.copy(rows=value.rows.map{it.copy(permalink=group.url+"posts/"+it.postId+"/")},captureStats=DesktopProtocol.emptyStats()+mapOf("pageVisible" to 1,"scrollMoves" to 1))
                     }
                 }
         }

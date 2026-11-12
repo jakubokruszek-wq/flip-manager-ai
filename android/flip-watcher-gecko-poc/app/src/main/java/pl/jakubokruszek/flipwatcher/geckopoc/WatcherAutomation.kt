@@ -283,7 +283,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                     Result.success()
                 }catch(e:CancellationException){
                     val stopped=interruptionReason()
-                    queue.log("WORK_STOP_"+stopped)
+                    queue.log("WORK_STOP_"+stopped.toString().replace("-","NEG_"))
                     val recover=begun&&WatcherAutomation.enabled(context)&&stopped!=WorkInfo.STOP_REASON_CANCELLED_BY_APP
                     val reason=when(stopped){
                         WorkInfo.STOP_REASON_CONSTRAINT_CONNECTIVITY->"INTERRUPTED_NETWORK"
