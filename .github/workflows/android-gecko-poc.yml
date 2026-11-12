@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-gecko-poc-${{ github.ref }}${{ github.ref == 'refs/heads/codex/android-scan-performance-089' && '-release-089' || '' }}
+  group: android-gecko-poc-${{ github.ref }}${{ github.ref == 'refs/heads/codex/android-performance-090' && '-release-090' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -111,12 +111,13 @@ jobs:
             unzip -l "$apk" | grep -E "assets/ext/flip_poc/(manifest.json|collector-core.js|poc-adapter.js|poc-content.js)" | wc -l | grep -qx 4
             unzip -p "$apk" assets/ext/flip_poc/collector-core.js | sha256sum | grep -q "^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b "
             python3 pilot/assert-not-in-apk.py "$apk"
+            python3 -c 'import sys,zipfile,json,os; z=zipfile.ZipFile(sys.argv[1]); libs=[e for e in z.infolist() if e.filename.startswith("lib/") and e.filename.endswith(".so")]; assert libs and all(e.compress_type==8 for e in libs); print(json.dumps({"apk_bytes":os.path.getsize(sys.argv[1]),"native_raw":sum(e.file_size for e in libs),"native_stored":sum(e.compress_size for e in libs)}))' "$apk"
             sha256sum "$apk"
           done
 
       - name: Upload unit test reports
         if: always()
-        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-scan-performance-089' }}
+        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-performance-090' }}
         timeout-minutes: 3
         uses: actions/upload-artifact@v4
         with:
@@ -154,7 +155,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Offline OCR and consent on API 36 (dedicated device)
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-scan-performance-089'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-performance-090'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -193,10 +194,10 @@ jobs:
           retention-days: 14
 
       - name: Release the offline emulator disk before creating the fresh device
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-scan-performance-089'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-performance-090'
         run: avdmanager delete avd --name gecko-ocr-offline
       - name: Complete worker, own-message and image-binding regressions on API 36
-        if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-scan-performance-089'
+        if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-performance-090'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -208,14 +209,13 @@ jobs:
           avd-name: gecko-schema-recovery
           force-avd-creation: true
           script: |
-            if [ '${{ github.ref }}' = 'refs/heads/codex/android-scan-performance-089' ]; then ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#newSourceCountsIgnoreBodyVariantsRetriesAndHeldRows || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1); fi
+            if [ '${{ github.ref }}' = 'refs/heads/codex/android-performance-090' ]; then ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#newSourceCountsIgnoreBodyVariantsRetriesAndHeldRows || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1); fi
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#backgroundReadsOwnAriaDescriptionAndActualPhotoWithoutBorrowingComments || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
-            # 0.5.88 changes only durable status/counter metadata. These 51 reader-only
-            # tests passed on ae136030; keep the complete worker/profile/archive suite below.
-            if [ '${{ github.ref }}' != 'refs/heads/codex/android-scan-performance-089' ]; then ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.FeedMessageInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.DesktopPreviewInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.PhotoBindingInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SinglePhotoInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1); fi
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherLinkInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.GroupArchiveInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ProfileWatcherInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SavedResultInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            # Packaging changes must exercise all native reader/image bindings.
+            if true; then ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.FeedMessageInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.DesktopPreviewInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.PhotoBindingInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SinglePhotoInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1); fi
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.OcrInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherLinkInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.GroupArchiveInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ProfileWatcherInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SavedResultInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
       - name: Online Gecko flow and full regression on API 36 (fresh device)
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-scan-performance-089'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-performance-090'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -254,7 +254,7 @@ jobs:
 
       - name: Upload instrumented test reports
         if: always()
-        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-scan-performance-089' }}
+        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-performance-090' }}
         timeout-minutes: 3
         uses: actions/upload-artifact@v4
         with:
@@ -606,9 +606,9 @@ jobs:
           NOTES
           gh release create gecko-poc-0.5.87 flip-watcher-0.5.87-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.87 — opisy i zdjęcia w automacie' --prerelease --notes-file release-notes.md
 
-  publish-tested-0589:
-    name: Publish tested Android 0.5.89
-    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-scan-performance-089'
+  publish-tested-0590:
+    name: Publish tested Android 0.5.90
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-performance-090'
     needs: [guard, build, instrumented, verified-apk]
     runs-on: ubuntu-24.04
     permissions:
@@ -623,16 +623,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-scan-performance-089 --jq .object.sha)" = '${{ github.sha }}'
+          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-performance-090 --jq .object.sha)" = '${{ github.sha }}'
           apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
           test -n "$apk_path" && test -f "$apk_path"
-          cp "$apk_path" flip-watcher-0.5.89-arm64.apk
-          unzip -p flip-watcher-0.5.89-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.89")process.exit(1)})'
-          unzip -p flip-watcher-0.5.89-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
-          sha256sum flip-watcher-0.5.89-arm64.apk > SHA256SUMS
+          cp "$apk_path" flip-watcher-0.5.90-arm64.apk
+          unzip -p flip-watcher-0.5.90-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.90")process.exit(1)})'
+          unzip -p flip-watcher-0.5.90-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
+          sha256sum flip-watcher-0.5.90-arm64.apk > SHA256SUMS
           cat > release-notes.md <<'NOTES'
-          Android 0.5.89 — lżejszy raport postępu skanu.
-          Liczniki nowych ofert są liczone jednym wspólnym zapytaniem zamiast osobno dla każdej grupy, najwyżej co 10 sekund oraz po zakończeniu źródła. Odczyt ofert i zasady jakości pozostają bez zmian.
+          Android 0.5.90 — mniejszy pakiet i kodowanie zdjęć poza wątkiem interfejsu.
+          Pakiet kompresuje niezmienione biblioteki natywne; Android rozpakowuje je przy instalacji. Kodowanie miniatur JPEG odbywa się poza wątkiem interfejsu, z zachowaniem tych samych zdjęć i parametrów jakości.
           Dane, kolejka, klucze szyfrowania i sesja Facebooka pozostają zachowane. Instaluj jako aktualizację.
           NOTES
-          gh release create gecko-poc-0.5.89 flip-watcher-0.5.89-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.89 — lżejszy podgląd skanu' --prerelease --notes-file release-notes.md
+          gh release create gecko-poc-0.5.90 flip-watcher-0.5.90-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.90 — mniejszy pakiet i płynniejszy interfejs' --prerelease --notes-file release-notes.md

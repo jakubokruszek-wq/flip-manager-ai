@@ -24,6 +24,26 @@ class WatcherAutomationInstrumentedTest {
     private fun result(price:Double=430000.0)=SavedResult(System.currentTimeMillis(),listOf(
         DesktopRow("550000000000091",group.url+"posts/550000000000091/","DOM",price,"EXPLICIT_TOTAL",42.0,2,"Bałuty",null,null,"SELL_PROPERTY",true,0)
     ),emptyList(),listOf(photo()))
+    @Test fun backgroundPhotoEncodingYieldsMainThreadAndPreservesOwnedPixels()=runBlocking {
+        val images=DesktopThumbnails(50)
+        val bitmap=android.graphics.Bitmap.createBitmap(192,144,android.graphics.Bitmap.Config.ARGB_8888)
+        android.graphics.Canvas(bitmap).drawColor(android.graphics.Color.WHITE)
+        val row=result().rows.single()
+        check(images.put(row.postId,0,bitmap))
+        try{
+            val expected=ResultArchive.photo(row.postId,0,false,bitmap)
+            val encoded=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main){
+                BackgroundPhotoEncoding.encode(listOf(row),images){id,slot,b->
+                    assertNotEquals(android.os.Looper.getMainLooper(),android.os.Looper.myLooper())
+                    assertFalse(b.isRecycled)
+                    ResultArchive.photo(id,slot,false,b)
+                }
+            }
+            assertEquals(1,encoded.size);assertEquals(expected.postId,encoded[0].postId);assertArrayEquals(expected.jpeg,encoded[0].jpeg)
+            assertFalse(bitmap.isRecycled)
+        }finally{images.clear()}
+        assertTrue(bitmap.isRecycled)
+    }
     @Test fun newSourceCountsIgnoreBodyVariantsRetriesAndHeldRows(){
         context.deleteDatabase("watcher-outbox-v1.db")
         WatcherOutbox(context).use{q->

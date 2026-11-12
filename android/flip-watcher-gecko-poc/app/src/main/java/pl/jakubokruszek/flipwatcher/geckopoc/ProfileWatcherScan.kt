@@ -97,7 +97,9 @@ class ProfileWatcherScan(private val context:Context){
                     project={id,texts->GeckoHost.background.profileOcrFields(source,id,texts)},
                     now={android.os.SystemClock.elapsedRealtime()},progress=progress)
                 check(bound()){stop?:"PROFILE_CONTEXT_REJECTED"}
-                val photos=rows.flatMap{row->images.rows(row.postId).mapIndexed{slot,b->ResultArchive.photo(row.postId,slot,false,b)}}
+                channel.viewportBridge?.close()
+                val photos=BackgroundPhotoEncoding.encode(rows,images)
+                check(bound()){stop?:"PROFILE_CONTEXT_REJECTED"}
                 val counters=checkNotNull(channel.viewportBridge).captureCounts
                 val keys=listOf("profileCaptureAttempts","profileCaptureInactive","profileCaptureAspect","profileCaptureFrame","profileCaptureLate","profileCaptureError","profileCapturePending","profileCaptureCommitted")
                 SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,reply.postTexts,reply.stats+keys.mapIndexed{i,key->key to counters[i]}.toMap()+mapOf("profileRenderedFrames" to checkNotNull(surface).renderedFrames,"profileSurfaceResets" to surfaceResets))

@@ -48,7 +48,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = providers.gradleProperty("GECKO_POC_VERSION_CODE").orElse("8000").get().toInt()
-        versionName = "0.5.89-gecko-poc"
+        versionName = "0.5.90-gecko-poc"
         buildConfigField("String", "COLLECTOR_CORE_SHA256", "\"$collectorCoreSha256\"")
         // Transfers require explicit automation opt-in and paired device credentials.
         buildConfigField("boolean", "LIVE_UPLOAD_ENABLED", "true")
@@ -77,6 +77,10 @@ android {
             isUniversalApk = false
         }
     }
+
+    // Compress native libraries for distribution; Android extracts the unchanged
+    // libraries at install time. Keep the same package/signing key for updates.
+    packaging { jniLibs { useLegacyPackaging = true } }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

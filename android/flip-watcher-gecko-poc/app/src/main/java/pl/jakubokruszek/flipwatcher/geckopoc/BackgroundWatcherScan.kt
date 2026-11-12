@@ -85,7 +85,9 @@ class BackgroundWatcherScan(private val context:Context) {
                     project={id,texts->GeckoHost.background.ocrFields(id,texts,true,group.id)},
                     now={android.os.SystemClock.elapsedRealtime()},progress=progress)
                 check(live()){stopReason?:"CANCELLED"}
-                val photos=rows.flatMap{row->images.rows(row.postId).mapIndexed{slot,b->ResultArchive.photo(row.postId,slot,false,b)}}
+                channel.viewportBridge?.close()
+                val photos=BackgroundPhotoEncoding.encode(rows,images)
+                check(live()){stopReason?:"CANCELLED"}
                 val counts=channel.lastViewportCaptureCounts
                 val keys=listOf("groupCaptureAttempts","groupCaptureInactive","groupCaptureAspect","groupCaptureFrame","groupCaptureLate","groupCaptureError","groupCapturePending","groupCaptureCommitted")
                 SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,checkNotNull(result.reply).postTexts,
