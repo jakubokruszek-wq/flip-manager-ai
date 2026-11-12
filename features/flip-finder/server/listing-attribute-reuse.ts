@@ -3,7 +3,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { SourceListing } from "@/features/flip-finder/server/search-source-registry";
 
-type StoredAttributes = { source: string; external_listing_id: string | null; normalized_url: string | null; building_type: string | null; ownership: string | null };
+type StoredAttributes = { source: string; external_listing_id: string | null; normalized_url: string | null; building_type: string | null; ownership: string | null; year_built: number | null };
 
 /**
  * Reuses previously confirmed canonical attributes before evaluating a fresh
@@ -16,7 +16,7 @@ export async function reuseExistingListingAttributes<T extends SourceListing>(
   supabase: SupabaseClient,
   listings: readonly T[],
 ): Promise<T[]> {
-  const missing = listings.filter((listing) => !listing.buildingType || !listing.ownership);
+  const missing = listings.filter((listing) => !listing.buildingType || !listing.ownership || listing.yearBuilt == null);
   if (!missing.length) return [...listings];
 
   const bySource = new Map<string, T[]>();
@@ -34,7 +34,7 @@ export async function reuseExistingListingAttributes<T extends SourceListing>(
     if (ids.length) {
       const { data, error } = await supabase
         .from("listings")
-        .select("source,external_listing_id,normalized_url,building_type,ownership")
+        .select("source,external_listing_id,normalized_url,building_type,ownership,year_built")
         .eq("source", source)
         .in("external_listing_id", ids)
         .order("last_seen_at", { ascending: false });
@@ -50,7 +50,7 @@ export async function reuseExistingListingAttributes<T extends SourceListing>(
     if (urls.length) {
       const { data, error } = await supabase
         .from("listings")
-        .select("source,external_listing_id,normalized_url,building_type,ownership")
+        .select("source,external_listing_id,normalized_url,building_type,ownership,year_built")
         .eq("source", source)
         .in("normalized_url", urls)
         .order("last_seen_at", { ascending: false });
@@ -64,7 +64,7 @@ export async function reuseExistingListingAttributes<T extends SourceListing>(
   }
 
   return listings.map((listing) => {
-    if (listing.buildingType && listing.ownership) return listing;
+    if (listing.buildingType && listing.ownership && listing.yearBuilt != null) return listing;
     const stored = byIdentity.get(identityKey(listing.source, listing.externalListingId))
       ?? urlCandidates(listing.source, listing.normalizedUrl)
         .map((url) => byUrl.get(identityKey(listing.source, url)))
@@ -74,6 +74,7 @@ export async function reuseExistingListingAttributes<T extends SourceListing>(
       ...listing,
       buildingType: listing.buildingType ?? stored.building_type,
       ownership: listing.ownership ?? stored.ownership,
+      yearBuilt: listing.yearBuilt ?? stored.year_built,
     };
   });
 }
@@ -94,6 +95,7 @@ function toStoredAttributes(value: Record<string, unknown>): StoredAttributes | 
     external_listing_id: typeof value.external_listing_id === "string" ? value.external_listing_id : null,
     normalized_url: typeof value.normalized_url === "string" ? value.normalized_url : null,
     building_type: typeof value.building_type === "string" ? value.building_type : null,
+    year_built: typeof value.year_built === "number" ? value.year_built : null,
     ownership: typeof value.ownership === "string" ? value.ownership : null,
   };
 }

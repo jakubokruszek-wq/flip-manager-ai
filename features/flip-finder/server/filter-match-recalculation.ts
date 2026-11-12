@@ -308,7 +308,7 @@ async function fetchListingsForSources(
   for (let start = 0; ; start += pageSize) {
     const { data, error } = await supabase
       .from("listings")
-      .select("id,source,original_url,title,description,price,area,price_per_sqm,rooms,floor,city,district,address,building_type,ownership,manual_decision,lifecycle_status")
+      .select("id,source,original_url,title,description,price,area,price_per_sqm,rooms,floor,city,district,address,building_type,year_built,ownership,manual_decision,lifecycle_status")
       .in("source", sources)
       .range(start, start + pageSize - 1);
 
@@ -395,7 +395,7 @@ async function fetchListingsByIds(
     for (let start = 0; ; start += pageSize) {
       const { data, error } = await supabase
         .from("listings")
-        .select("id,source,original_url,title,description,price,area,price_per_sqm,rooms,floor,city,district,address,building_type,ownership,manual_decision,lifecycle_status")
+        .select("id,source,original_url,title,description,price,area,price_per_sqm,rooms,floor,city,district,address,building_type,year_built,ownership,manual_decision,lifecycle_status")
         .in("id", idChunk)
         .order("id", { ascending: true })
         .range(start, start + pageSize - 1);
@@ -496,6 +496,7 @@ export function toListing(row: Row): RecalculationListing | null {
     locationText: nullableString(row.address),
     buildingType: resolveBuildingType(row.building_type, nullableString(row.title), nullableString(row.description)),
     ownership: nullableString(row.ownership),
+    yearBuilt: nullableNumber(row.year_built),
     manualDecision: row.manual_decision === "ACCEPTED" || row.manual_decision === "REJECTED" ? row.manual_decision : null,
     lifecycleStatus: row.lifecycle_status === "ACTIVE" || row.lifecycle_status === "REVIEW" || row.lifecycle_status === "STALE" || row.lifecycle_status === "ARCHIVED" || row.lifecycle_status === "REJECTED" ? row.lifecycle_status : null,
   };
