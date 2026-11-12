@@ -48,6 +48,60 @@ class ScanStatusInstrumentedTest {
         WatcherScanSummary.finish(context);assertFalse(WatcherScanSummary.text(context).contains("Zakończenie: niepotwierdzone"))
         context.getSharedPreferences("watcher-source-summary-v1",Context.MODE_PRIVATE).edit().clear().commit()
     }
+    @Test fun twoHundredSourcesStayCollapsedAndCurrentStateAndResumeAreFirst(){
+        val summary=context.getSharedPreferences("watcher-source-summary-v1",Context.MODE_PRIVATE)
+        val backup=summary.getString("current",null)
+        val groups=(0 until 200).map{WatcherGroup("source$it","Źródło testowe #%03d".format(it),if(it%3==0)"PROFILE"else"GROUP")}
+        try{
+            WatcherScanSummary.start(context,"compact-cycle",groups)
+            WatcherScanSummary.source(context,"compact-cycle",groups.first(),0,"")
+            val report=WatcherCaptureReport.create(context,"compact-cycle","compact-run",groups.first(),null,"SOURCE_TIMEOUT",62_000L)
+            WatcherOutbox(context).use{it.report(credentials.deviceId,"compact-cycle",groups.first().key,report)}
+            WatcherScanStatus.begin(context,"compact-run")
+            WatcherScanStatus.update(context,"compact-run"){it.copy(phase="READING",total=200,done=1,position=2,group="Bieżąca grupa")}
+            val compact=WatcherScanStatus.report(context)
+            assertTrue(compact.startsWith("Odczyt postów i zdjęć"))
+            assertTrue("The main report must stay bounded",compact.lines().size<40)
+            assertFalse(compact.contains(groups.last().name))
+            val details=WatcherScanStatus.sourceReport(context)
+            assertTrue(details.contains(groups.last().name));assertTrue(details.contains("czas: 1 min 2 s"))
+            assertEquals("Each source must be listed once",1,Regex(Regex.escape(groups.first().name)).findAll(details).count())
+            ActivityScenario.launch(ScanStatusActivity::class.java).use{scenario->
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+                scenario.onActivity{a->
+                    val root=a.findViewById<android.view.ViewGroup>(android.R.id.content)
+                    val sources=root.findViewWithTag<android.widget.TextView>("scan.live.sources")
+                    val journal=root.findViewWithTag<android.widget.TextView>("scan.live.journal")
+                    assertEquals(android.view.View.GONE,sources.visibility);assertEquals("",sources.text.toString())
+                    assertEquals(android.view.View.GONE,journal.visibility);assertEquals("",journal.text.toString())
+                    val resume=root.findViewWithTag<android.widget.Button>("scan.resume")
+                    assertTrue("Resume must be visible above the long report",resume.getGlobalVisibleRect(android.graphics.Rect()))
+                    root.findViewWithTag<android.widget.Button>("scan.sources.toggle").performClick()
+                }
+                val deadline=android.os.SystemClock.elapsedRealtime()+10_000
+                var expanded=false
+                while(!expanded&&android.os.SystemClock.elapsedRealtime()<deadline){
+                    scenario.onActivity{a->expanded=a.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.widget.TextView>("scan.live.sources").text.toString().contains(groups.last().name)}
+                    if(!expanded)Thread.sleep(100)
+                }
+                assertTrue("Expanded source list must load all 200 sources",expanded)
+                scenario.onActivity{a->
+                    val root=a.findViewById<android.view.ViewGroup>(android.R.id.content)
+                    root.findViewWithTag<android.widget.Button>("scan.sources.toggle").performClick()
+                    assertEquals(android.view.View.GONE,root.findViewWithTag<android.widget.TextView>("scan.live.sources").visibility)
+                    assertEquals("",root.findViewWithTag<android.widget.TextView>("scan.live.sources").text.toString())
+                    root.findViewWithTag<android.widget.Button>("scan.journal.toggle").performClick()
+                }
+                scenario.recreate()
+                scenario.onActivity{a->
+                    val root=a.findViewById<android.view.ViewGroup>(android.R.id.content)
+                    assertEquals(android.view.View.GONE,root.findViewWithTag<android.widget.TextView>("scan.live.sources").visibility)
+                    assertEquals(android.view.View.VISIBLE,root.findViewWithTag<android.widget.TextView>("scan.live.journal").visibility)
+                }
+                assertFalse("Progress view must not stop the browser",WatcherAutomation.uiVisible)
+            }
+        }finally{summary.edit().putString("current",backup).commit()}
+    }
     private fun worker(missingCredentials:Boolean=false,groups:List<WatcherGroup> = WatcherGroups.configured.take(2),scan:suspend (WatcherGroup,(String)->Unit)->SavedResult)=
         androidx.work.testing.TestListenableWorkerBuilder<WatcherAutomationWorker>(context).setWorkerFactory(object:androidx.work.WorkerFactory(){
             override fun createWorker(appContext:Context,name:String,parameters:androidx.work.WorkerParameters):androidx.work.ListenableWorker=

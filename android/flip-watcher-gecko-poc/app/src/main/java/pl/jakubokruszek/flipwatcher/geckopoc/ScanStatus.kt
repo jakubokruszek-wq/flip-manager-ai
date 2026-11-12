@@ -142,6 +142,8 @@ object WatcherScanStatus {
         if(s.active)notification.setProgress(s.total,s.done,s.total==0)
         manager.notify(NOTICE,notification.build())
     }}
+    /** Loaded only when expanded; use the summary's cycle to avoid mixing attempts. */
+    fun sourceReport(context:Context):String=WatcherScanSummary.sourceDetails(context)
     /** IO only: constraints can prevent doWork from being entered at all. */
     fun report(context:Context):String {
         val now=System.currentTimeMillis();val enabled=WatcherAutomation.enabled(context)
@@ -157,10 +159,8 @@ object WatcherScanStatus {
         val window=AutomationPolicy.current(Instant.ofEpochMilli(now),ZoneId.systemDefault(),WatcherAutomation.schedule(context))
         val prefs=WatcherAutomation.preferences(context)
         val due=enabled&&window.at.toEpochMilli()>=prefs.getLong("schedule_since",0)&&prefs.getString("completed_slot",null)!=WatcherCaptureReport.cycle(window.key)
-        val cycle=prefs.getString("capture_cycle",null)
-        val evidence=if(cycle==null)"" else WatcherOutbox(context).use{WatcherCaptureReport.summary(it.cycleReports(cycle))}
         val state=read(context);val continuation=prefs.getLong("continuation_at",0)
         val plan=if(enabled&&!state.active&&continuation>0)"\nPlan wznowienia tej samej próby: "+ScanStatusText.time(continuation,ZoneId.systemDefault())+". Android może opóźnić start; możesz użyć przycisku wznowienia."else ""
-        return WatcherScanSummary.text(context)+"\n\n"+(if(evidence.isEmpty())""else evidence+"\n\n")+ScanStatusText.details(state,enabled,now,next,network,notifications,work,running,pendingWindow=if(due)window.at.toEpochMilli()else 0)+plan
+        return ScanStatusText.details(state,enabled,now,next,network,notifications,work,running,pendingWindow=if(due)window.at.toEpochMilli()else 0)+plan+"\n\n"+WatcherScanSummary.text(context,includeSources=false)
     }
 }

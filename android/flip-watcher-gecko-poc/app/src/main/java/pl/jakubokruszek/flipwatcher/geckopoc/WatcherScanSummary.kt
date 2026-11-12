@@ -31,7 +31,14 @@ object WatcherScanSummary {
         countedAt=0L;save(c,j)
     }
     fun finish(c:Context)=synchronized(guard){val j=read(c);if(j.has("started")){j.put("ended",System.currentTimeMillis());countedAt=0L;save(c,j)}}
-    fun text(c:Context):String=synchronized(guard){
+    internal fun sourceDetails(c:Context):String=synchronized(guard){
+        val cycle=read(c).optString("cycle")
+        val reports=if(cycle.isEmpty())emptyList()else WatcherOutbox(c).use{it.cycleReports(cycle)}
+        val elapsed=reports.associate{it.optString("groupId") to (it.optJSONObject("stats")?.optLong("groupElapsedMs")?:0L)}
+        val evidence=WatcherCaptureReport.summary(reports,includeSources=false)
+        text(c,elapsed=elapsed)+(if(evidence.isEmpty())""else "\n\n"+evidence)
+    }
+    fun text(c:Context,includeSources:Boolean=true,elapsed:Map<String,Long> = emptyMap()):String=synchronized(guard){
         val j=read(c);val sources=j.optJSONObject("sources")
         if(sources!=null){
             val key=j.optString("cycle")+":"+j.optLong("started")
@@ -42,20 +49,29 @@ object WatcherScanSummary {
             }
             for(source in sources.keys())sources.getJSONObject(source).put("new",counts[source]?:0)
         }
-        format(j)
+        format(j,includeSources=includeSources,elapsed=elapsed)
     }
-    internal fun format(j:JSONObject,zone:ZoneId=ZoneId.systemDefault()):String=buildString{
+    internal fun format(j:JSONObject,zone:ZoneId=ZoneId.systemDefault(),includeSources:Boolean=true,elapsed:Map<String,Long> = emptyMap()):String=buildString{
         if(!j.has("started")){append("Ostatni skan — brak nowego raportu w tej wersji.");return@buildString}
         appendLine("Ostatni skan — rozpoczęcie: ${ScanStatusText.time(j.optLong("started"),zone)}")
         appendLine("Zakończenie: ${if(j.optLong("ended")>0)ScanStatusText.time(j.optLong("ended"),zone)else "niepotwierdzone — cykl trwa lub oczekuje na wznowienie"}")
         j.optJSONObject("previous")?.let{appendLine("Poprzedni zakończony skan: ${ScanStatusText.time(it.optLong("started"),zone)} — ${ScanStatusText.time(it.optLong("ended"),zone)}")}
-        appendLine("Nowe oferty według źródła:")
         val sources=j.optJSONObject("sources")?:JSONObject()
+        val entries=sources.keys().asSequence().map{sources.getJSONObject(it)}.toList()
+        if(!includeSources){
+            appendLine("Nowe posty sprzedaży ze zdjęciem: ${entries.sumOf{it.optInt("new")}}")
+            appendLine("Źródła z próbą odczytu: ${entries.count{it.optBoolean("attempted")}}/${entries.size}")
+            append("Źródła z brakami odczytu: ${entries.count{it.optBoolean("attempted")&&it.optString("issue").isNotEmpty()}}. Szczegóły pod przyciskiem „Pokaż grupy i profile”.")
+            return@buildString
+        }
+        appendLine("Nowe oferty według źródła:")
         for(key in sources.keys()){
             val s=sources.getJSONObject(key)
             val prefix=if(s.optString("type")=="PROFILE")"Profil"else"Grupa"
             val count=when{!s.optBoolean("attempted")->"jeszcze nie odczytano";!s.optBoolean("confirmed")->"brak potwierdzonego odczytu (wcześniej nowe: ${s.optInt("new")})";else->"nowe: ${s.optInt("new")} • odczytane oferty: ${s.optInt("read")}"}
-            appendLine("$prefix: ${s.optString("name")} — $count"+(if(s.optString("issue").isNotEmpty())" • odczyt częściowy"else""))
+            val ms=elapsed[key]?:0
+            val duration=if(ms>0)" • czas: ${ms/60000} min ${ms/1000%60} s"else""
+            appendLine("$prefix: ${s.optString("name")} — $count"+(if(s.optString("issue").isNotEmpty())" • odczyt częściowy"else"")+duration)
         }
         append("Liczniki nowych ofert odświeżamy najwyżej co 10 sekund oraz po zakończeniu odczytu źródła. Nowe = posty sprzedaży ze zdjęciem po raz pierwszy zapisane w kolejce tego źródła. Ponowienia nie zwiększają wyniku; to nie jest liczba różnych mieszkań ani potwierdzenie wysyłki do Managera.")
     }
