@@ -1,0 +1,40 @@
+name: MetrON branding
+on:
+  push:
+    branches: [codex/metron-branding]
+  pull_request:
+    paths:
+      - "components/ui/company-brand.tsx"
+      - "components/layout/sidebar.tsx"
+      - "components/layout/top-nav.tsx"
+      - "components/layout/app-shell-branding.browser.test.cjs"
+      - "public/brand/**"
+      - "public/icons/**"
+      - "app/icon.png"
+      - "app/apple-icon.png"
+      - "app/favicon.ico"
+      - "app/manifest.ts"
+      - "app/login/page.tsx"
+      - ".github/workflows/metron-branding.yml"
+permissions:
+  contents: read
+concurrency:
+  group: metron-branding-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  branding:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx tsc --noEmit
+      - run: npx eslint components/ui/company-brand.tsx components/layout/sidebar.tsx components/layout/top-nav.tsx components/layout/app-shell-branding.browser.test.cjs app/login/page.tsx app/manifest.ts lib/constants.ts
+      - run: node --test components/ui/logo.test.cjs
+      - run: npx playwright install --with-deps chromium
+      - name: Product and company branding on phones and desktop
+        run: node --test components/layout/app-shell-branding.browser.test.cjs
