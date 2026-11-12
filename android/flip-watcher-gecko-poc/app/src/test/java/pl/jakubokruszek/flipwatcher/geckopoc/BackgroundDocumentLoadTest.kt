@@ -42,11 +42,11 @@ class BackgroundDocumentLoadTest {
         }
     }
     @Test fun retriesDoNotLoopAndNeverRetryLoginCancellationOrParserFailures()=runBlocking {
-        for(reason in listOf("GROUP_LOAD_ERROR_C1_E2","GROUP_NOT_READY","LOGIN_REQUIRED","CHECKPOINT","CAPTCHA","GROUP_CONTEXT_REJECTED","SCAN_PROTOCOL")){
+        for(reason in listOf("GROUP_LOAD_ERROR_C1_E2","GROUP_NOT_READY","GROUP_RENDER_RETRY_FAILED","LOGIN_REQUIRED","CHECKPOINT","CAPTCHA","GROUP_CONTEXT_REJECTED","SCAN_PROTOCOL")){
             var attempts=0
             val error=runCatching{BackgroundLoadRetry.run("GROUP",{true},pause={}){attempts++;error(reason)}}.exceptionOrNull()
             assertEquals(reason,error?.message)
-            assertEquals(if(reason.startsWith("GROUP_LOAD_ERROR")||reason=="GROUP_NOT_READY")2 else 1,attempts)
+            assertEquals(if(reason.startsWith("GROUP_LOAD_ERROR")||reason in setOf("GROUP_NOT_READY","GROUP_RENDER_RETRY_FAILED"))2 else 1,attempts)
         }
         var attempts=0
         val error=runCatching{BackgroundLoadRetry.run("GROUP",{true},pause={}){attempts++;throw CancellationException("GROUP_LOAD_ERROR")}}.exceptionOrNull()

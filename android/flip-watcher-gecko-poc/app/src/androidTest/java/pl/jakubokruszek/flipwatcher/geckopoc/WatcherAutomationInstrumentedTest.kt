@@ -232,6 +232,17 @@ class WatcherAutomationInstrumentedTest {
             }
         }finally{context.deleteDatabase("watcher-outbox-v1.db")}
     }
+    @Test fun groupRecreatesStalledSurfaceAndRequiresActualFrameBeforeReading()=runBlocking {
+        val path="/groups/$FIXTURE_GROUP_ID/"
+        val server=LoopbackFixtureServer(pages=mapOf(path to "desktop-viewport")){name->runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}
+        try{
+            val saved=BackgroundWatcherScan(context).runFixture("http://127.0.0.1:${server.port}$path",forceSurfaceRefresh=true){true}
+            assertEquals(1,saved.captureStats["groupSurfaceResets"])
+            assertTrue((saved.captureStats["groupRenderedFrames"]?:0)>0)
+            assertTrue(saved.rows.isNotEmpty());assertTrue(saved.photos.isNotEmpty())
+            assertTrue(saved.photos.all{photo->saved.rows.any{it.postId==photo.postId}&&photo.jpeg.isNotEmpty()})
+        }finally{server.close()}
+    }
     @Test fun realFailedLoadRetriesIntoFreshBrowserWithBoundRowsAndPhotos()=runBlocking {
         val path="/groups/$FIXTURE_GROUP_ID/"
         val server=LoopbackFixtureServer(pages=mapOf(path to "desktop-viewport")){name->runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}

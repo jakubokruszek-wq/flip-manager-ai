@@ -21,11 +21,11 @@ import java.util.UUID
 /** Phone-only Gecko session using the existing profile, parser, document proofs and photo binding. */
 class BackgroundWatcherScan(private val context:Context) {
     suspend fun run(group:WatcherGroup,alive:()->Boolean,progress:(String)->Unit={}):SavedResult=BackgroundLoadRetry.run("GROUP",alive,progress){runTarget(group,group.url,false,alive,progress)}
-    internal suspend fun runFixture(target:String,alive:()->Boolean):SavedResult {
+    internal suspend fun runFixture(target:String,forceSurfaceRefresh:Boolean=false,alive:()->Boolean):SavedResult {
         require(java.net.URI(target).host=="127.0.0.1")
-        return runTarget(WatcherGroup(FIXTURE_GROUP_ID,"Fixture"),target,true,alive)
+        return runTarget(WatcherGroup(FIXTURE_GROUP_ID,"Fixture"),target,true,alive,forceSurfaceRefresh=forceSurfaceRefresh)
     }
-    private suspend fun runTarget(group:WatcherGroup,target:String,fixture:Boolean,alive:()->Boolean,progress:(String)->Unit={}):SavedResult=withContext(Dispatchers.Main){
+    private suspend fun runTarget(group:WatcherGroup,target:String,fixture:Boolean,alive:()->Boolean,progress:(String)->Unit={},forceSurfaceRefresh:Boolean=false):SavedResult=withContext(Dispatchers.Main){
         withTimeout(if(fixture)300_000 else 180_000){
             check(alive())
             val browser=GeckoSession()
@@ -73,6 +73,21 @@ class BackgroundWatcherScan(private val context:Context) {
                 }
                 check(live()&&current!=null&&load.ready&&channel.isConnected&&channel.connectedUrl==current){load.reason?:"GROUP_NOT_READY"}
                 val actualTarget=checkNotNull(current)
+                val initialGeneration=channel.connectionGeneration
+                fun documentReady()=live()&&load.ready&&current==actualTarget&&channel.connectionGeneration==initialGeneration&&channel.connectedUrl==actualTarget
+                val frameUntil=android.os.SystemClock.elapsedRealtime()+2500
+                while(!forceSurfaceRefresh&&documentReady()&&checkNotNull(surface).renderedFrames==0&&android.os.SystemClock.elapsedRealtime()<frameUntil)delay(50)
+                var surfaceResets=0
+                if(documentReady()&&(forceSurfaceRefresh||checkNotNull(surface).renderedFrames==0)){
+                    // Match the proven profile recovery: only a delivered frame
+                    // on the replacement surface counts as rendering evidence.
+                    checkNotNull(surface).close();surface=BackgroundViewport(browser);surfaceResets++
+                    browser.setActive(true);browser.setFocused(true)
+                    val freshUntil=android.os.SystemClock.elapsedRealtime()+5000
+                    while(documentReady()&&checkNotNull(surface).renderedFrames==0&&android.os.SystemClock.elapsedRealtime()<freshUntil)delay(50)
+                }
+                check(documentReady()){load.reason?:"GROUP_NOT_READY"}
+                check(checkNotNull(surface).renderedFrames>0){"GROUP_RENDER_RETRY_FAILED"}
                 val trial=DesktopTrial(actualTarget,{android.os.SystemClock.elapsedRealtime()},fixture,groupId=group.id,allowRootQuery=true)
                 gate=trial;initial=false;check(trial.begin(true));val nonce=UUID.randomUUID().toString()
                 observer=launch{var last="";while(true){val phase=if(trial.phase==DesktopTrial.Phase.READING)"READING"else"LOADING";if(phase!=last){last=phase;progress(phase)};delay(500)}}
@@ -91,7 +106,7 @@ class BackgroundWatcherScan(private val context:Context) {
                 val counts=channel.lastViewportCaptureCounts
                 val keys=listOf("groupCaptureAttempts","groupCaptureInactive","groupCaptureAspect","groupCaptureFrame","groupCaptureLate","groupCaptureError","groupCapturePending","groupCaptureCommitted")
                 SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,checkNotNull(result.reply).postTexts,
-                    checkNotNull(result.reply).stats+keys.mapIndexed{i,key->key to counts.getOrElse(i){0}}.toMap()+mapOf("groupRenderedFrames" to checkNotNull(surface).renderedFrames))
+                    checkNotNull(result.reply).stats+keys.mapIndexed{i,key->key to counts.getOrElse(i){0}}.toMap()+mapOf("groupRenderedFrames" to checkNotNull(surface).renderedFrames,"groupSurfaceResets" to surfaceResets))
             }finally {
                 observer?.cancel()
                 runCatching{channel.close()};runCatching{surface?.close()};images.clear()
