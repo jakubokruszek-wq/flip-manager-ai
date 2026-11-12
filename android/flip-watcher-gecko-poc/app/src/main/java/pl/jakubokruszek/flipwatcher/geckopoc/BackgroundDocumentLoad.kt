@@ -8,7 +8,7 @@ internal class BackgroundDocumentLoad(private val prefix:String) {
     var ready=false;private set
     var reason:String?=null;private set
     fun started(){ready=false}
-    fun stopped(success:Boolean){ready=success}
+    fun stopped(success:Boolean){if(success)ready=true}
     fun reject(code:String){if(reason==null)reason=code}
     fun failed(uri:String?,category:Int,code:Int){
         // about:blank is never evidence of a source document. Its teardown must

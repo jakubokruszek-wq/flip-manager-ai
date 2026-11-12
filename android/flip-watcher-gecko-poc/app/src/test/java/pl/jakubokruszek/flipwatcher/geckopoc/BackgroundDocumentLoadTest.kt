@@ -12,6 +12,9 @@ class BackgroundDocumentLoadTest {
         assertFalse(load.ready);assertNull(load.reason)
         load.started();load.stopped(true)
         assertTrue(load.ready);assertNull(load.reason)
+        // A late unscoped abort cannot invalidate a subsequently proven page.
+        load.stopped(false);assertTrue(load.ready)
+        load.started();assertFalse(load.ready)
     }
     @Test fun loginAndContextReasonsSurviveLaterGenericLoadEvents(){
         for(reason in listOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA","GROUP_CONTEXT_REJECTED")){
