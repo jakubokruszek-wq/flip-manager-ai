@@ -13,6 +13,14 @@ class ScanStatusTextTest {
         assertTrue(ScanStatusText.reason("INTERRUPTED_QUOTA").contains("limitu pracy"))
         assertFalse(ScanStatusText.reason("INTERRUPTED").contains("Android"))
     }
+    @Test fun firstDegradedSourceCountsAsAttemptedWhileWaitingForRetry(){
+        val state=ScanState(phase="READING",heartbeat=now,total=52,done=0,attempted=1,retrying=1,group="Bieżąca grupa",position=39,posts=14,photos=2,uploads=1)
+        val text=ScanStatusText.details(state,true,now,now+1000,true,true,"uruchomione",true)
+        assertTrue(text.contains("Źródła z próbą odczytu: 1/52"))
+        assertTrue(text.contains("Zamknięte źródła: 0/52 • do ponowienia: 1"))
+        assertTrue(text.contains("nr 39 na liście"));assertFalse(text.contains("Źródło 39/52"))
+        assertTrue(text.contains("posty 14 • zdjęcia 2 • wysłane 1"))
+    }
     @Test fun staleProcessIsNotFalselyReportedAsCompletedOrKilledByAndroid(){
         val state=ScanState(phase="READING",heartbeat=now-120_000,changed=now-120_000)
         assertEquals("Brak potwierdzenia dalszej pracy",ScanStatusText.title(state,true,now,false))
@@ -23,7 +31,7 @@ class ScanStatusTextTest {
     @Test fun slowStageShowsHeartbeatSeparatelyFromActualProgress(){
         val state=ScanState(phase="READING",heartbeat=now,changed=now-120_000,total=11,done=3,position=4,group="Grupa testowa",posts=8,photos=5,started=now-130_000)
         val text=ScanStatusText.details(state,true,now,now+1000,true,true,"uruchomione",true,ZoneId.of("Europe/Warsaw"))
-        assertTrue(text.contains("Źródła z zakończoną próbą: 3/11"));assertTrue(text.contains("posty 8 • zdjęcia 5"));assertTrue(text.contains("nie oznacza znalezienia nowych postów"));assertFalse(text.contains("%"))
+        assertTrue(text.contains("Źródła z próbą odczytu: 3/11"));assertTrue(text.contains("posty 8 • zdjęcia 5"));assertTrue(text.contains("nie oznacza znalezienia nowych postów"));assertFalse(text.contains("%"))
     }
     @Test fun blockedStartHasSpecificReasonAndNoInventedAndroidDiagnosis(){
         val text=ScanStatusText.details(ScanState(phase="QUEUED"),true,now,now+1000,false,false,"zadanie oczekuje",false,pendingWindow=now-60_000)

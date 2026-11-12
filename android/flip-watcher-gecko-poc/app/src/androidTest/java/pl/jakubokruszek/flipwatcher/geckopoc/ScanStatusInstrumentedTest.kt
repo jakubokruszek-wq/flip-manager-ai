@@ -126,10 +126,10 @@ class ScanStatusInstrumentedTest {
         assertEquals(androidx.work.ListenableWorker.Result.success(),worker(scan=::scan).doWork())
         assertEquals(1,continuations)
         val partial=WatcherScanStatus.read(context)
-        assertEquals("RETRY",partial.phase);assertEquals("GROUP_LOAD_ERROR",partial.reason);assertEquals(1,partial.done);assertEquals(2,partial.total);assertEquals(0L,partial.lastSuccess)
+        assertEquals("RETRY",partial.phase);assertEquals("GROUP_LOAD_ERROR",partial.reason);assertEquals(1,partial.done);assertEquals(2,partial.attempted);assertEquals(1,partial.retrying);assertEquals(2,partial.total);assertEquals(0L,partial.lastSuccess)
         assertEquals("status-test",WatcherAutomation.preferences(context).getString("requested_scan",null))
         assertEquals(androidx.work.ListenableWorker.Result.success(),worker(scan=::scan).doWork())
-        val done=WatcherScanStatus.read(context);assertEquals("DONE",done.phase);assertEquals(2,done.done);assertTrue(done.lastSuccess>0)
+        val done=WatcherScanStatus.read(context);assertEquals("DONE",done.phase);assertEquals(2,done.done);assertEquals(2,done.attempted);assertEquals(0,done.retrying);assertTrue(done.lastSuccess>0)
         assertNull(WatcherAutomation.preferences(context).getString("requested_scan",null))
         assertEquals(2,calls.count{it==first.id});assertEquals(1,calls.count{it==second.id})
     }
@@ -190,14 +190,14 @@ class ScanStatusInstrumentedTest {
             val deadline=android.os.SystemClock.elapsedRealtime()+10_000
             var shown=false
             while(!shown&&android.os.SystemClock.elapsedRealtime()<deadline){
-                scenario.onActivity{a->shown=a.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.widget.TextView>("scan.live.status").text.toString().contains("Źródła z zakończoną próbą: 1/11")}
+                scenario.onActivity{a->shown=a.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.widget.TextView>("scan.live.status").text.toString().contains("Źródła z próbą odczytu: 1/11")}
                 if(!shown)Thread.sleep(100)
             }
             assertTrue(shown);assertFalse("Read-only progress must not pause background scanning",WatcherAutomation.uiVisible)
             WatcherScanStatus.update(context,"live-test"){it.copy(done=2,photos=5)}
             var refreshed=false
             while(!refreshed&&android.os.SystemClock.elapsedRealtime()<deadline){
-                scenario.onActivity{a->refreshed=a.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.widget.TextView>("scan.live.status").text.toString().contains("Źródła z zakończoną próbą: 2/11")}
+                scenario.onActivity{a->refreshed=a.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.widget.TextView>("scan.live.status").text.toString().contains("Źródła z próbą odczytu: 2/11")}
                 if(!refreshed)Thread.sleep(100)
             }
             assertTrue(refreshed);assertFalse(WatcherAutomation.uiVisible)

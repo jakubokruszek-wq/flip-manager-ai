@@ -60,7 +60,6 @@ object WatcherScanSummary {
         val entries=sources.keys().asSequence().map{sources.getJSONObject(it)}.toList()
         if(!includeSources){
             appendLine("Nowe posty sprzedaży ze zdjęciem: ${entries.sumOf{it.optInt("new")}}")
-            appendLine("Źródła z próbą odczytu: ${entries.count{it.optBoolean("attempted")}}/${entries.size}")
             append("Źródła z brakami odczytu: ${entries.count{it.optBoolean("attempted")&&it.optString("issue").isNotEmpty()}}. Szczegóły pod przyciskiem „Pokaż grupy i profile”.")
             return@buildString
         }

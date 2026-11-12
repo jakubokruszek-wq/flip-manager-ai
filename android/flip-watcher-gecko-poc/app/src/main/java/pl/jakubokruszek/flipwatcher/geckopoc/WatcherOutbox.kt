@@ -136,6 +136,8 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
     }
     fun retry(){writableDatabase.execSQL("UPDATE outbox SET state='pending',next_at=0,attempt=0 WHERE state NOT IN ('sent','deleted')")}
     fun scanned(slot:String,group:String)=readableDatabase.rawQuery("SELECT 1 FROM scans WHERE slot=? AND source=?",arrayOf(slot,group)).use{it.moveToFirst()}
+    fun scannedSources(slot:String):Set<String> = readableDatabase.rawQuery("SELECT source FROM scans WHERE slot=?",arrayOf(slot)).use{c->buildSet{while(c.moveToNext())add(c.getString(0))}}
+    fun attemptedSources(slot:String):Set<String> = readableDatabase.rawQuery("SELECT DISTINCT source FROM capture_reports WHERE slot=?",arrayOf(slot)).use{c->buildSet{while(c.moveToNext())add(c.getString(0))}}
     fun completeScan(slot:String,group:String){writableDatabase.execSQL("INSERT OR IGNORE INTO scans(slot,source) VALUES(?,?)",arrayOf(slot,group))}
     /** Bounded encrypted diagnostics; never contains post bodies, photos or credentials. */
     fun report(device:String,slot:String,source:String,report:JSONObject){

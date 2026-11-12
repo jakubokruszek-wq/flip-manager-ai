@@ -22,7 +22,8 @@ data class ScanState(
     val heartbeat:Long=0, val ended:Long=0, val lastSuccess:Long=0,
     val group:String="", val position:Int=0, val total:Int=0, val done:Int=0,
     val posts:Int=0, val photos:Int=0, val uploads:Int=0, val reason:String="",
-    val checked:Long=0, val skipped:String="", val groupStarted:Long=0
+    val checked:Long=0, val skipped:String="", val groupStarted:Long=0,
+    val attempted:Int=0, val retrying:Int=0
 ) { val active get()=phase in setOf("PREPARING","UPLOADING","LOADING","READING","OCR","SAVING") }
 
 object ScanStatusText {
@@ -79,7 +80,11 @@ object ScanStatusText {
     fun time(at:Long,zone:ZoneId):String=if(at<=0)"brak" else Instant.ofEpochMilli(at).atZone(zone).format(DateTimeFormatter.ofPattern("dd.MM HH:mm:ss"))
     fun details(s:ScanState,enabled:Boolean,now:Long,next:Long,network:Boolean,notifications:Boolean,work:String,running:Boolean?,zone:ZoneId=ZoneId.systemDefault(),pendingWindow:Long=0):String=buildString {
         appendLine(title(s,enabled,now,running))
-        if(s.total>0){appendLine("Źródła z zakończoną próbą: ${s.done}/${s.total}");if(s.group.isNotEmpty())appendLine("Źródło ${s.position}/${s.total}: ${s.group}")}
+        if(s.total>0){
+            appendLine("Źródła z próbą odczytu: ${maxOf(s.attempted,s.done)}/${s.total}")
+            appendLine("Zamknięte źródła: ${s.done}/${s.total} • do ponowienia: ${s.retrying}")
+            if(s.group.isNotEmpty())appendLine("Bieżące źródło: ${s.group} (nr ${s.position} na liście)")
+        }
         if(s.groupStarted>0){
             val until=if(s.ended>0)s.ended else now
             val seconds=((until-s.groupStarted).coerceAtLeast(0)/1000)
@@ -115,10 +120,10 @@ object WatcherScanStatus {
     private const val NOTICE=73573
     internal fun read(context:Context):ScanState=synchronized(guard){
         val j=runCatching{JSONObject(context.getSharedPreferences(PREFS,Context.MODE_PRIVATE).getString("state",null)?:"{}")} .getOrElse{JSONObject()}
-        ScanState(j.optString("run"),j.optString("phase","IDLE"),j.optLong("started"),j.optLong("changed"),j.optLong("heartbeat"),j.optLong("ended"),j.optLong("lastSuccess"),j.optString("group"),j.optInt("position"),j.optInt("total"),j.optInt("done"),j.optInt("posts"),j.optInt("photos"),j.optInt("uploads"),j.optString("reason"),j.optLong("checked"),j.optString("skipped"),j.optLong("groupStarted"))
+        ScanState(j.optString("run"),j.optString("phase","IDLE"),j.optLong("started"),j.optLong("changed"),j.optLong("heartbeat"),j.optLong("ended"),j.optLong("lastSuccess"),j.optString("group"),j.optInt("position"),j.optInt("total"),j.optInt("done"),j.optInt("posts"),j.optInt("photos"),j.optInt("uploads"),j.optString("reason"),j.optLong("checked"),j.optString("skipped"),j.optLong("groupStarted"),j.optInt("attempted",j.optInt("done")),j.optInt("retrying"))
     }
     private fun change(context:Context,alert:Boolean=true,f:(ScanState)->ScanState):ScanState=synchronized(guard){
-        val s=f(read(context));val j=JSONObject().put("run",s.run).put("phase",s.phase).put("started",s.started).put("changed",s.changed).put("heartbeat",s.heartbeat).put("ended",s.ended).put("lastSuccess",s.lastSuccess).put("group",s.group).put("position",s.position).put("total",s.total).put("done",s.done).put("posts",s.posts).put("photos",s.photos).put("uploads",s.uploads).put("reason",s.reason).put("checked",s.checked).put("skipped",s.skipped).put("groupStarted",s.groupStarted)
+        val s=f(read(context));val j=JSONObject().put("run",s.run).put("phase",s.phase).put("started",s.started).put("changed",s.changed).put("heartbeat",s.heartbeat).put("ended",s.ended).put("lastSuccess",s.lastSuccess).put("group",s.group).put("position",s.position).put("total",s.total).put("done",s.done).put("posts",s.posts).put("photos",s.photos).put("uploads",s.uploads).put("reason",s.reason).put("checked",s.checked).put("skipped",s.skipped).put("groupStarted",s.groupStarted).put("attempted",s.attempted).put("retrying",s.retrying)
         check(context.getSharedPreferences(PREFS,Context.MODE_PRIVATE).edit().putString("state",j.toString()).commit())
         if(alert)notify(context,s)
         s
@@ -138,9 +143,9 @@ object WatcherScanStatus {
         if(!manager.areNotificationsEnabled())return
         val intent=PendingIntent.getActivity(context,NOTICE,Intent(context,ScanStatusActivity::class.java),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val title=ScanStatusText.title(s,true,System.currentTimeMillis(),true)
-        val text=if(s.reason.isNotEmpty())ScanStatusText.reason(s.reason)else if(s.total>0)"Ukończone źródła ${s.done}/${s.total} • posty ${s.posts} • zdjęcia ${s.photos}"else "Otwórz aplikację, aby zobaczyć szczegóły."
+        val text=if(s.reason.isNotEmpty())ScanStatusText.reason(s.reason)else if(s.total>0)"Źródła z próbą ${maxOf(s.attempted,s.done)}/${s.total} • do ponowienia: ${s.retrying} • posty ${s.posts} • zdjęcia ${s.photos}"else "Otwórz aplikację, aby zobaczyć szczegóły."
         val notification=Notification.Builder(context,CHANNEL).setSmallIcon(android.R.drawable.ic_menu_search).setContentTitle(title).setContentText(text).setStyle(Notification.BigTextStyle().bigText(text)).setContentIntent(intent).setOnlyAlertOnce(true).setOngoing(s.active).setVisibility(Notification.VISIBILITY_PRIVATE).setWhen(s.started).setShowWhen(s.started>0)
-        if(s.active)notification.setProgress(s.total,s.done,s.total==0)
+        if(s.active)notification.setProgress(s.total,maxOf(s.attempted,s.done),s.total==0)
         manager.notify(NOTICE,notification.build())
     }}
     /** Loaded only when expanded; use the summary's cycle to avoid mixing attempts. */

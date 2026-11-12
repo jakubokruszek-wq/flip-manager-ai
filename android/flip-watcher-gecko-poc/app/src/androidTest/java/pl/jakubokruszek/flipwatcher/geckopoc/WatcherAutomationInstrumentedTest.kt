@@ -381,8 +381,12 @@ class WatcherAutomationInstrumentedTest {
             worker().doWork();assertEquals("Manual request must re-read both sources",4,calls)
             degraded=true;prefs.edit().putString("requested_scan",java.util.UUID.randomUUID().toString()).commit()
             assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork());assertEquals(6,calls);assertEquals(1,continuationRequests)
+            val retry=WatcherScanStatus.read(context)
+            assertEquals(2,retry.attempted);assertEquals(0,retry.done);assertEquals(2,retry.retrying)
             assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork());assertEquals(8,calls)
             assertEquals("PARTIAL",WatcherScanStatus.read(context).phase);assertEquals("CAPTURE_PARTIAL",WatcherScanStatus.read(context).reason)
+            val closed=WatcherScanStatus.read(context)
+            assertEquals(2,closed.attempted);assertEquals(2,closed.done);assertEquals(0,closed.retrying)
             worker().doWork();assertEquals("Degraded sources must not spin forever",8,calls)
         }finally{
             WatcherAutomation.configure(context,false)
