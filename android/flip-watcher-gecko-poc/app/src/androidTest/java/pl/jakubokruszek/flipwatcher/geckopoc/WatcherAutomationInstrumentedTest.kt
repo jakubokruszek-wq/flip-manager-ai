@@ -355,7 +355,7 @@ class WatcherAutomationInstrumentedTest {
         val window=AutomationPolicy.current(java.time.Instant.now(),java.time.ZoneId.systemDefault(),WatcherAutomation.schedule(context))
         val obsolete="capture-2/reader5/"+window.key
         val credentials=WatcherLink.Credentials(device,"fixture-unused-credential")
-        var calls=0;var degraded=false;var reports=0
+        var calls=0;var degraded=false;var missingPhoto=false;var reports=0
         val factory=object:androidx.work.WorkerFactory(){
             override fun createWorker(appContext:Context,name:String,parameters:androidx.work.WorkerParameters):androidx.work.ListenableWorker =
                 object:WatcherAutomationWorker(appContext,parameters){
@@ -366,7 +366,7 @@ class WatcherAutomationInstrumentedTest {
                     override fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item){reports++;assertFalse(item.body.contains("jpeg"))}
                     override suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult {
                         calls++;val value=result();val row=value.rows.single().copy(permalink=group.url+"posts/"+value.rows.single().postId+"/")
-                        return value.copy(rows=listOf(row),photos=if(degraded)emptyList()else value.photos,captureStats=DesktopProtocol.emptyStats()+mapOf("pageVisible" to 1,"scrollMoves" to 1))
+                        return value.copy(rows=listOf(row),photos=if(missingPhoto)emptyList()else value.photos,captureStats=DesktopProtocol.emptyStats()+mapOf("pageVisible" to 1,"scrollMoves" to if(degraded)0 else 1))
                     }
                 }
         }
@@ -379,15 +379,21 @@ class WatcherAutomationInstrumentedTest {
             worker().doWork();assertEquals("Calendar must reuse only this revision's valid completion",2,calls)
             prefs.edit().putString("requested_scan",java.util.UUID.randomUUID().toString()).commit()
             worker().doWork();assertEquals("Manual request must re-read both sources",4,calls)
-            degraded=true;prefs.edit().putString("requested_scan",java.util.UUID.randomUUID().toString()).commit()
-            assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork());assertEquals(6,calls);assertEquals(1,continuationRequests)
+            missingPhoto=true;prefs.edit().putString("requested_scan",java.util.UUID.randomUUID().toString()).commit()
+            assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork());assertEquals(6,calls);assertEquals(0,continuationRequests)
+            val photoGap=WatcherScanStatus.read(context)
+            assertEquals("PARTIAL",photoGap.phase);assertEquals("CAPTURE_PARTIAL",photoGap.reason)
+            assertEquals(2,photoGap.done);assertEquals(0,photoGap.retrying)
+            worker().doWork();assertEquals("Missing photos must not re-read the entire group",6,calls)
+            missingPhoto=false;degraded=true;prefs.edit().putString("requested_scan",java.util.UUID.randomUUID().toString()).commit()
+            assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork());assertEquals(8,calls);assertEquals(1,continuationRequests)
             val retry=WatcherScanStatus.read(context)
             assertEquals(2,retry.attempted);assertEquals(0,retry.done);assertEquals(2,retry.retrying)
-            assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork());assertEquals(8,calls)
+            assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork());assertEquals(10,calls)
             assertEquals("PARTIAL",WatcherScanStatus.read(context).phase);assertEquals("CAPTURE_PARTIAL",WatcherScanStatus.read(context).reason)
             val closed=WatcherScanStatus.read(context)
             assertEquals(2,closed.attempted);assertEquals(2,closed.done);assertEquals(0,closed.retrying)
-            worker().doWork();assertEquals("Degraded sources must not spin forever",8,calls)
+            worker().doWork();assertEquals("Degraded sources must not spin forever",10,calls)
         }finally{
             WatcherAutomation.configure(context,false)
             val edit=prefs.edit().clear();for((k,v)in backup)when(v){is String->edit.putString(k,v);is Boolean->edit.putBoolean(k,v);is Long->edit.putLong(k,v);is Int->edit.putInt(k,v)};edit.commit()
