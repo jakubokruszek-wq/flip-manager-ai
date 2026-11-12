@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {androidRelease as apk} from './release.ts';
-const url=`https://flip-manager-ai-jok6.vercel.app${apk.path}`;
+const url=`https://flip-manager-ai.vercel.app${apk.path}`;
 const etag=`"sha256-${apk.sha256}"`;
 // This checks the production HTTP route after deployment, including middleware and CDN.
 test('public APK completes and an interrupted download resumes to the exact same SHA-256', {skip:process.env.ANDROID_APK_PUBLIC_CHECK!=='1',timeout:720000},async()=>{
