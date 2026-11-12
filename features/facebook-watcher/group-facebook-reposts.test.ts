@@ -171,3 +171,12 @@ test("incomplete photo grouping rejects contradictory facts, workflow and unsupp
  for(const patch of [{area:65},{rooms:2},{floor:1},{street:"Maczka 9"},{workflowStatus:"crm" as const},{images:[image("234567","b".repeat(64))]},{lifecycleStatus:"ARCHIVED"}])assert.equal(groupFacebookReposts([a,item("234567",{...a,listingId:"234567",...patch})]).length,2,JSON.stringify(patch));
  const sparse={price:null,area:null,rooms:null,street:null,description:null};assert.equal(groupFacebookReposts([item("123456",sparse),item("234567",sparse)]).length,2);
 });
+
+test("photo URL parsing is bounded per grouping pass and never stays stale across edited inputs",context=>{
+ const NativeURL=globalThis.URL;let parses=0;
+ context.mock.method(globalThis,"URL",class extends NativeURL{constructor(input:string|URL,base?:string|URL){parses++;super(input,base);}});
+ const records=Array.from({length:120},(_,i)=>({...item(String(900000+i)),price:215000,area:33.5,rooms:null,street:null,description:null,images:[`https://p.supabase.co/storage/v1/object/public/facebook-watcher-images/android/11111111-1111-1111-1111-111111111111/${900000+i}/${i.toString(16).padStart(64,"0")}.jpg`]}));
+ assert.equal(groupFacebookReposts(records).length,120);assert.ok(parses<=records.length*3,`${parses} URL parses`);
+ const pair=[records[0],{...records[1],images:[records[0].images[0]]}];assert.equal(groupFacebookReposts(pair).length,1);
+ pair[1].images[0]=records[2].images[0];assert.equal(groupFacebookReposts(pair).length,2);
+});

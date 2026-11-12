@@ -208,9 +208,10 @@ async function collectGeometry(page) {
  * nothing extra once contexts are already isolated, and would only slow the
  * suite down further).
  */
-async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode = "success", listingsPayload = freshListingsPayload, photoResults = null } = {}) {
+async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode = "success", listingsPayload = freshListingsPayload, photoResults = null, initialPath = "/facebook-watcher", cpuRate = 1 } = {}) {
   const context = await browser.newContext();
   const page = await context.newPage();
+  if(cpuRate>1){const cdp=await context.newCDPSession(page);await cdp.send("Emulation.setCPUThrottlingRate",{rate:cpuRate});}
   await context.addCookies([{ name: "sb-127-auth-token", value: JSON.stringify(operatorSession), url: baseUrl, httpOnly: true, sameSite: "Lax" }]);
 
   let patchMode = initialPatchMode;
@@ -287,7 +288,7 @@ async function setupWatcherPage(browser, baseUrl, { patchMode: initialPatchMode 
     return route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true }), status: 200 });
   });
 
-  await page.goto(`${baseUrl}/facebook-watcher`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${baseUrl}${initialPath}`, { waitUntil: "domcontentloaded" });
   // Regression guard for the exact race this rearchitecture fixes: the
   // listings fetch for THIS page's own navigation must be explicitly
   // awaited, and awaited exactly once, before any DOM assertion — the
@@ -850,6 +851,21 @@ test("Facebook Watcher browser suite: real card UI, workflow mutations and lifec
     assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(), 1);
     assert.equal(handle.patchRequests.length, 0, "search must not mutate any workflow");
     assertNoUnexpectedNoise(handle);
+  });
+
+  await t.test("large inbox mounts only requested cards and filters the full collection on a throttled mobile CPU",async(t)=>{
+    const records=Array.from({length:500},(_,i)=>makeListing({listingId:`00000000-0000-4000-8000-${String(1000+i).padStart(12,"0")}`,title:`Wydajność-${String(i).padStart(3,"0")}`,price:200000+i*100,area:30+i*0.01,workflowStatus:"review",isNew:false}));
+    const started=Date.now();const handle=await setupWatcherPage(browser,baseUrl,{listingsPayload:()=>({listings:records}),cpuRate:4});const {page}=handle;t.after(()=>Promise.all([page.close(),handle.context.close()]));await page.setViewportSize({width:390,height:844});
+    assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(),24);console.log(`500-offer inbox initial 24 cards on 4x CPU: ${Date.now()-started}ms`);
+    await page.getByRole("button",{name:"Pokaż kolejne mieszkania",exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('article[id^="facebook-inbox-"]').length===48);
+    await page.getByRole("textbox",{name:"Szukaj ofert Facebook"}).fill("Wydajność-499");await page.locator(`#facebook-inbox-${records[499].listingId}`).waitFor({state:"visible"});assert.equal(await page.locator('article[id^="facebook-inbox-"]').count(),1);
+    await page.getByRole("textbox",{name:"Szukaj ofert Facebook"}).fill("");await page.waitForFunction(()=>document.querySelectorAll('article[id^="facebook-inbox-"]').length===48);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assertNoUnexpectedNoise(handle);
+  });
+  await t.test("a linked offer beyond the first page is mounted before opening its analysis control",async(t)=>{
+    const records=Array.from({length:70},(_,i)=>makeListing({listingId:`00000000-0000-4000-8000-${String(2000+i).padStart(12,"0")}`,price:200000+i*100,area:30+i*0.01}));
+    const handle=await setupWatcherPage(browser,baseUrl,{listingsPayload:()=>({listings:records}),initialPath:`/facebook-watcher?listing=${records[60].listingId}`});t.after(()=>Promise.all([handle.page.close(),handle.context.close()]));
+    await handle.page.locator(`#facebook-inbox-${records[60].listingId}`).waitFor({state:"attached"});assert.equal(handle.unexpectedConsoleErrors.length,0);
   });
 
   await t.test("visual photo analysis collapses recompressed 38m² reposts and keeps search/source links",async(t)=>{

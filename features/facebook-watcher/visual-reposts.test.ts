@@ -3,7 +3,7 @@ import test from "node:test";
 import fs from "node:fs";
 import sharp from "sharp";
 import { fingerprintImage } from "./server/image-fingerprint.ts";
-import { mobileImageAsset,possibleVisualRepost,similarPhoto,visualCandidates,type PhotoFingerprint } from "./visual-reposts.ts";
+import { mobileImageAsset,possibleVisualRepost,similarPhoto,createPhotoMatcher,hamming,visualCandidates,type PhotoFingerprint } from "./visual-reposts.ts";
 import { groupFacebookReposts } from "./group-facebook-reposts.ts";
 import type { FacebookWatcherListing } from "./types.ts";
 const url=(hash:string,post="123456")=>`https://p.supabase.co/storage/v1/object/public/facebook-watcher-images/android/11111111-1111-1111-1111-111111111111/${post}/${hash}.jpg`;
@@ -30,4 +30,22 @@ test("priced 33.5m² snapshots without room counts can reach visual matching",()
  assert.equal(visualCandidates([a,b]).length,2);assert.equal(groupFacebookReposts([a,b]).length,1);
  assert.equal(possibleVisualRepost(a,{...b,price:220000}),false);assert.equal(possibleVisualRepost(a,{...b,photoFingerprints:[]}),false);
  assert.equal(possibleVisualRepost({...a,rooms:2},{...b,rooms:3}),false);assert.equal(possibleVisualRepost({...a,price:null},{...b,price:null}),false);
+});
+
+test("compiled visual matching preserves all original thresholds and crop-pair semantics",()=>{
+ const matches=createPhotoMatcher();let seed=241;const random=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed;};const hash=()=>random().toString(16).padStart(8,"0")+random().toString(16).padStart(8,"0");
+ const sig=()=>({dhash:hash(),ahash:hash(),mean:[random()%256,random()%256,random()%256] as [number,number,number],detail:random()%60,aspect:0.5+(random()%120)/100});
+ const pair=(a:PhotoFingerprint,b:PhotoFingerprint)=>[a,...(a.variants??[])].some(l=>[b,...(b.variants??[])].some(r=>l.detail>=16&&r.detail>=16&&Math.abs(l.aspect-r.aspect)/Math.max(l.aspect,r.aspect)<=0.08&&l.mean.every((v,i)=>Math.abs(v-r.mean[i])<=14)&&hamming(l.dhash,r.dhash)<=6&&hamming(l.ahash,r.ahash)<=8));
+ for(let i=0;i<1000;i++){
+  const a={assetHash:"a".repeat(64),...sig(),variants:[sig(),sig(),sig()]};const b={assetHash:"b".repeat(64),...sig(),variants:[sig(),sig()]};
+  if(i%3===0)b.variants.push({...a.variants[1],mean:a.variants[1].mean.map((v,j)=>v+(i%31-15)*(j===0?1:0)) as [number,number,number]});
+  if(i%5===0){b.dhash=a.dhash;b.ahash=a.ahash;b.mean=[...a.mean];b.aspect=a.aspect;b.detail=a.detail;}
+  assert.equal(matches(a,b),pair(a,b),`case ${i}`);
+ }
+});
+
+test("compiled hash distances preserve six/eight bit boundaries across 32-bit halves",()=>{
+ const match=createPhotoMatcher();const base=proof("a".repeat(64));base.dhash="0".repeat(16);base.ahash="0".repeat(16);
+ const bits=(count:number,start:number)=>{const b=Array.from({length:64},(_,i)=>i>=start&&i<start+count?"1":"0").join("");return parseInt(b.slice(0,32),2).toString(16).padStart(8,"0")+parseInt(b.slice(32),2).toString(16).padStart(8,"0");};
+ for(const start of [0,28,40])for(let d=0;d<=12;d++)for(let a=0;a<=12;a++)assert.equal(match(base,{...base,dhash:bits(d,start),ahash:bits(a,start)}),d<=6&&a<=8,`${start}/${d}/${a}`);
 });

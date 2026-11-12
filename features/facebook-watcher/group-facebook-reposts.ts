@@ -1,8 +1,10 @@
-import { possibleVisualRepost } from "./visual-reposts";
+import { createVisualRepostMatcher } from "./visual-reposts";
 import type { FacebookWatcherListing } from "./types";
 
 /** Group the view only. Different post IDs and every source record remain intact. */
 export function groupFacebookReposts(records: FacebookWatcherListing[]): FacebookWatcherListing[] {
+  const possibleVisualRepost=createVisualRepostMatcher();
+  const {compatible,compatibleUnpicturedMember,possiblePhotoRepost,mobilePhotoHashes,sameEvidence,possibleRepost}=createGroupEvidence();
   const groups: FacebookWatcherListing[] = [];
   const members = new Map<FacebookWatcherListing, FacebookWatcherListing[]>();
   // Candidate lookup by exact price and area avoids comparing every post with every other post.
@@ -36,6 +38,11 @@ export function groupFacebookReposts(records: FacebookWatcherListing[]): Faceboo
 function publication(item: FacebookWatcherListing) {
   return { listingId: item.listingId, url: item.sourcePostUrl ?? item.originalUrl, groupName: item.groupName };
 }
+
+/** Per grouping call only: inputs remain mutable outside this pure operation. */
+function createGroupEvidence() {
+  const photoCache=new WeakMap<string[],string[]>();
+  return {compatible,compatibleUnpicturedMember,possiblePhotoRepost,mobilePhotoHashes,sameEvidence,possibleRepost};
 
 function compatible(a: FacebookWatcherListing, b: FacebookWatcherListing): boolean {
   if (a.source !== "facebook" || b.source !== "facebook" || a.area !== b.area || a.price !== b.price || (a.area == null && a.price == null)) return false;
@@ -85,7 +92,8 @@ function possiblePhotoRepost(a: FacebookWatcherListing, b: FacebookWatcherListin
 }
 
 function mobilePhotoHashes(images: string[]): string[] {
-  return images.flatMap(value => {
+  const cached=photoCache.get(images);if(cached)return cached;
+  const hashes=images.flatMap(value => {
     try {
       const url = new URL(value);
       if (url.protocol !== "https:") return [];
@@ -95,6 +103,7 @@ function mobilePhotoHashes(images: string[]): string[] {
       return match ? [`${url.origin}:${match[1]}`] : [];
     } catch { return []; }
   });
+  photoCache.set(images,hashes);return hashes;
 }
 
 /** Exact repeated own text + matching property facts can identify reposts
@@ -152,4 +161,6 @@ function possibleRepost(a:FacebookWatcherListing,b:FacebookWatcherListing):boole
     !Number.isInteger(a.area) && a.area === b.area &&
     !a.street && !b.street && !a.neighborhood && !b.neighborhood &&
     !a.district && !b.district);
+}
+
 }
