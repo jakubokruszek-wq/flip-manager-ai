@@ -97,6 +97,16 @@ test("a known yearBuilt is sent to the listings upsert as year_built", async () 
   assert.equal(rows[0]?.year_built, 1897);
 });
 
+test("later sparse scans preserve a confirmed construction year, while a fresh explicit year wins", async () => {
+  mode = "normal";upsertPayloads = [];
+  const rows: Row[] = [];
+  const db = fakeDb(rows);
+  for (const year of [1930, null, 1960]) {
+    await persistListing(db as never, "filter-1", listing(year), true, [], "scan-1", "2026-11-12T22:00:00Z", AbortSignal.timeout(1000));
+  }
+  assert.deepEqual(upsertPayloads.map((row) => row.year_built), [1930, 1930, 1960]);
+});
+
 test("if listings.year_built does not exist yet (draft migration not applied), persistListing retries without it and still saves the listing", async () => {
   mode = "missing-year-built";
   upsertPayloads = [];

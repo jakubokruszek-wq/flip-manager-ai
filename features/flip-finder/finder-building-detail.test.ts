@@ -7,7 +7,7 @@ const url = "https://gratka.pl/nieruchomosci/mieszkanie/ob/123";
 const listing: PropertySourceListing = {
   source: "gratka", externalListingId: "123", originalUrl: url, normalizedUrl: url,
   title: "Mieszkanie", description: "Do remontu", price: 345000, area: 74.81, pricePerSqm: 4612,
-  rooms: 3, floor: 3, city: "Łódź", district: "Polesie", locationText: null,
+  rooms: 3, floor: "3", city: "Łódź", district: "Polesie", locationText: null,
   buildingType: null, thumbnailUrl: null, ownership: null, images: [], publishedAt: null,
   rawPayload: {}, contentHash: "before",
 };

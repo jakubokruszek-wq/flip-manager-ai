@@ -247,6 +247,15 @@ test("the 1949/1950 boundary: 1949 rejects, 1950 passes, with yearBuiltMin = 195
   assert.ok(!atBoundary.reasons.includes("year_built_min"));
 });
 
+test("the user's 1960 cutoff rejects 1930 and 1959 even with unknown building type, and includes 1960", () => {
+  const yearFilter = { ...filter, yearBuiltMin: 1960 };
+  for (const yearBuilt of [1930, 1959]) {
+    const result = evaluateListingAgainstFilter({ ...candidate, yearBuilt, buildingType: null }, yearFilter);
+    assert.equal(result.bucket, "REJECTED");assert.ok(result.reasons.includes("year_built_min"));
+  }
+  assert.equal(evaluateListingAgainstFilter({ ...candidate, yearBuilt: 1960 }, yearFilter).bucket, "MATCHED");
+});
+
 test("a missing year with yearBuiltMin set routes to REVIEW, never MATCHED and never REJECTED outright", () => {
   const yearFilter = { ...filter, yearBuiltMin: 1950 };
   const result = evaluateListingAgainstFilter({ ...candidate, yearBuilt: null }, yearFilter);
