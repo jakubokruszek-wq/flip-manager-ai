@@ -31,13 +31,22 @@ export function visualFactsAgree(a:FacebookWatcherListing,b:FacebookWatcherListi
   const samePrice=a.price!=null&&a.price>0&&a.price===b.price;
   return area&&(samePrice||(rooms&&(location||preciseUnpricedSnapshot)));
 }
-export function possibleVisualRepost(a:FacebookWatcherListing,b:FacebookWatcherListing) {
-  if(!visualFactsAgree(a,b))return false;
-  const allowed=(r:FacebookWatcherListing)=>new Set(r.images.flatMap(u=>{const a=mobileImageAsset(u);return a?[a.hash]:[]}));
-  const leftAllowed=allowed(a),rightAllowed=allowed(b);
-  const left=readFingerprints(a.photoFingerprints).filter(f=>leftAllowed.has(f.assetHash)),right=readFingerprints(b.photoFingerprints).filter(f=>rightAllowed.has(f.assetHash));
-  return left.some(l=>right.some(r=>similarPhoto(l,r)));
+/** A fresh matcher is shared within one grouping pass, never across changed records. */
+export function createVisualRepostMatcher() {
+  const cache=new WeakMap<FacebookWatcherListing,PhotoFingerprint[]>();
+  const bound=(row:FacebookWatcherListing)=>{
+    const cached=cache.get(row);if(cached)return cached;
+    const allowed=new Set(row.images.flatMap(u=>{const a=mobileImageAsset(u);return a?[a.hash]:[]}));
+    const result=readFingerprints(row.photoFingerprints).filter(f=>allowed.has(f.assetHash));cache.set(row,result);return result;
+  };
+  return (a:FacebookWatcherListing,b:FacebookWatcherListing)=>{
+    if(!a.photoFingerprints?.length||!b.photoFingerprints?.length||!visualFactsAgree(a,b))return false;
+    const left=bound(a),right=bound(b);
+    return left.some(l=>right.some(r=>similarPhoto(l,r)));
+  };
 }
+export function possibleVisualRepost(a:FacebookWatcherListing,b:FacebookWatcherListing) { return createVisualRepostMatcher()(a,b); }
+
 export function visualCandidates(records:FacebookWatcherListing[]) {
   const buckets=new Map<string,FacebookWatcherListing[]>();
   for(const r of records){if(r.source!=="facebook"||r.workflowStatus==="rejected"||!r.area||!r.images.some(mobileImageAsset))continue;const k=`${r.area}`;if(!buckets.has(k))buckets.set(k,[]);buckets.get(k)!.push(r);}

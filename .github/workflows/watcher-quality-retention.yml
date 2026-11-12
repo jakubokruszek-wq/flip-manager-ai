@@ -1,7 +1,7 @@
 name: Watcher sale photo and saved-date cleanup
 on:
   push:
-    branches: [codex/watcher-quality-retention, codex/visual-reposts, codex/watcher-stairs-reposts, codex/saved-invoice-and-sparse-reposts]
+    branches: [codex/watcher-quality-retention, codex/visual-reposts, codex/watcher-stairs-reposts, codex/saved-invoice-and-sparse-reposts, codex/watcher-performance]
   pull_request:
     paths: ['features/collector/**', 'features/facebook-watcher/**', 'app/api/facebook-watcher/history/**', 'app/api/facebook-watcher/duplicates/**', 'app/api/collector/facebook/mobile/**', 'supabase/migrations/*watcher_quality_saved_date_cleanup.sql', '.github/workflows/watcher-quality-retention.yml']
 permissions:
@@ -21,7 +21,7 @@ jobs:
         run: node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/collector/facebook-groups-feed.test.ts features/collector/facebook-mobile.test.ts features/collector/mobile-jpeg.test.ts features/collector/facebook-import.test.ts features/facebook-watcher/offer-quality.test.ts features/facebook-watcher/saved-cleanup.test.ts features/facebook-watcher/saved-cleanup-route.test.ts features/facebook-watcher/saved-cleanup.rpc.test.ts features/facebook-watcher/history-clear.test.ts features/facebook-watcher/history-summary.integration.test.ts features/facebook-watcher/search-quality.test.ts features/facebook-watcher/facebook-inbox.test.ts features/facebook-watcher/saved-inbox-filters.test.ts features/facebook-watcher/group-facebook-reposts.test.ts features/facebook-watcher/list-facebook-watcher.test.ts
       - name: Visual matching and reported live image regression
         env:
-          WATCHER_VISUAL_LIVE_FIXTURES: ${{ (github.head_ref == 'codex/visual-reposts' || github.ref_name == 'codex/visual-reposts' || github.head_ref == 'codex/watcher-stairs-reposts' || github.ref_name == 'codex/watcher-stairs-reposts' || github.head_ref == 'codex/saved-invoice-and-sparse-reposts' || github.ref_name == 'codex/saved-invoice-and-sparse-reposts') && '1' || '0' }}
+          WATCHER_VISUAL_LIVE_FIXTURES: ${{ (github.head_ref == 'codex/visual-reposts' || github.ref_name == 'codex/visual-reposts' || github.head_ref == 'codex/watcher-stairs-reposts' || github.ref_name == 'codex/watcher-stairs-reposts' || github.head_ref == 'codex/saved-invoice-and-sparse-reposts' || github.ref_name == 'codex/saved-invoice-and-sparse-reposts' || github.head_ref == 'codex/watcher-performance' || github.ref_name == 'codex/watcher-performance') && '1' || '0' }}
         run: node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/facebook-watcher/visual-reposts.test.ts features/facebook-watcher/visual-live.test.ts features/facebook-watcher/visual-photo-route.test.ts
       - uses: actions/upload-artifact@v4
         if: always()

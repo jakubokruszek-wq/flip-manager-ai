@@ -44,6 +44,8 @@ const GALLERY_REPAIR_ERROR_MESSAGES: Record<string, string> = {
 
 export function FacebookWatcherPanel() {
   const [cleanupDate,setCleanupDate]=useState("");
+  const [page,setPage]=useState({key:"",count:24});
+  const [linkedListingId]=useState(()=>typeof window==="undefined"?null:new URLSearchParams(window.location.search).get("listing"));
   const [refreshing,setRefreshing]=useState(false);
   const [lastRefreshedAt,setLastRefreshedAt]=useState<string|null>(null);
   const refreshListingsRef=useRef<()=>Promise<void>>(async()=>{});
@@ -85,8 +87,17 @@ export function FacebookWatcherPanel() {
     document.addEventListener("visibilitychange",onReturn);
     return()=>{active=false;window.removeEventListener("focus",onReturn);window.removeEventListener("online",onReturn);document.removeEventListener("visibilitychange",onReturn);};
   },[]);
-  useEffect(()=>{if(handledDeepLink.current||!listings.length)return;const listingId=new URLSearchParams(window.location.search).get("listing");if(!listingId)return;handledDeepLink.current=true;const timeout=window.setTimeout(()=>analysisButtonsRef.current.get(listingId)?.click(),0);return()=>window.clearTimeout(timeout);},[listings]);
+
   const visible=useMemo(()=>groupFacebookReposts(sortFacebookInbox(filterFacebookInbox(listings,tab,filters),sort)),[filters,listings,sort,tab]);
+  const pageKey=JSON.stringify([tab,sort,filters]);
+  const linkedIndex=linkedListingId?visible.findIndex(item=>item.listingId===linkedListingId||item.relatedPosts?.some(post=>post.listingId===linkedListingId)):-1;
+  const shownCount=Math.max(page.key===pageKey?page.count:24,linkedIndex+1);
+  const rendered=visible.slice(0,shownCount);
+  useEffect(()=>{
+    if(handledDeepLink.current||!listings.length||!linkedListingId)return;
+    const target=linkedIndex>=0?visible[linkedIndex].listingId:linkedListingId;
+    const timeout=window.setTimeout(()=>{const button=analysisButtonsRef.current.get(target);if(button){handledDeepLink.current=true;button.click();}},0);return()=>window.clearTimeout(timeout);
+  },[linkedIndex,linkedListingId,listings,visible]);
   const groupedListings=useMemo(()=>groupFacebookReposts(sortFacebookInbox(listings,"newest")),[listings]);
   const today=groupedListings.filter(item=>item.isNew).length; const lifecycle=countFacebookWatcherLifecycle(groupedListings); const consistency=useMemo(()=>summarizeCanonicalVisibility(listings.map(item=>canonicalVisibilityDebug({listingId:item.listingId,canonicalBucket:item.currentFilterDecision??"REJECTED",lifecycleStatus:item.lifecycleStatus??null,isCurrentMatch:item.currentFilterDecision==="MATCHED",matchReasons:item.currentFilterReasons??[],visibilityInFinder:item.finderVisible===true,visibilityInWatcher:true,finderStatus:item.finderStatus,reason:item.finderStatus==="HISTORICAL"?"historical_operational_state":"current_evaluation"}))),[listings]);
   // Returns an explicit result the caller MUST check — a failed PATCH can
@@ -184,7 +195,8 @@ export function FacebookWatcherPanel() {
       {visible.some(item=>(item.relatedPosts?.length??0)>1)?<p className="text-xs text-muted-foreground">Po zgrupowaniu: {visible.length} kart · {visible.reduce((total,item)=>total+(item.relatedPosts?.length??1),0)} publikacji. „Możliwe duplikaty” oznaczają zgodne parametry bez potwierdzenia zdjęciem lub pełnym opisem. Każdy post pozostaje dostępny w „Powiązane publikacje”.</p>:null}
       {error?<p className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</p>:null}{loading?<p className="py-12 text-center text-sm text-muted-foreground">Ładowanie Inboxu…</p>:null}
       {!loading&&visible.length===0?<div className="rounded-2xl border border-dashed p-10 text-center text-muted-foreground">Brak ofert spełniających wybrane kryteria.</div>:null}
-      {photoComparisonProgress?<p role="status" className="text-xs text-muted-foreground">{photoComparisonProgress}</p>:null}<div className="grid gap-5 xl:grid-cols-2">{visible.map(item=><InboxItem addToCrm={addToCrm} registerAnalysisButton={registerAnalysisButton} busy={busyId===item.listingId} item={item} key={item.listingId} onAnalyze={openAnalysis} onRepairGallery={repairGallery} onRestoreToFinder={restoreToFinder} updateWorkflow={guardedUpdateWorkflow}/>)}</div>
+      {photoComparisonProgress?<p role="status" className="text-xs text-muted-foreground">{photoComparisonProgress}</p>:null}<div className="grid gap-5 xl:grid-cols-2">{rendered.map(item=><InboxItem addToCrm={addToCrm} registerAnalysisButton={registerAnalysisButton} busy={busyId===item.listingId} item={item} key={item.listingId} onAnalyze={openAnalysis} onRepairGallery={repairGallery} onRestoreToFinder={restoreToFinder} updateWorkflow={guardedUpdateWorkflow}/>)}</div>
+      {rendered.length<visible.length?<div className="flex flex-wrap items-center justify-center gap-3 py-4"><p className="text-sm text-muted-foreground">Pokazano {rendered.length} z {visible.length} mieszkań</p><Button variant="outline" onClick={()=>setPage({key:pageKey,count:shownCount+24})}>Pokaż kolejne mieszkania</Button></div>:null}
     </section>
     {toast?<div aria-live="polite" className={`fixed inset-x-0 bottom-5 z-50 mx-auto w-fit max-w-[calc(100%-2rem)] rounded-xl border px-4 py-3 text-sm font-medium shadow-xl ${toast.tone==="success"?"border-emerald-500/30 bg-emerald-500/10 text-emerald-600":"border-destructive/30 bg-destructive/10 text-destructive"}`}>{toast.text}</div>:null}
   </main>;

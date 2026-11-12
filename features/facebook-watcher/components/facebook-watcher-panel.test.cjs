@@ -19,7 +19,8 @@ test("the sort dropdown, sortFacebookInbox, and rendered items are the same pipe
   assert.match(panel, /const \[sort,setSort\]=useState<FacebookInboxSort>\("newest"\)/, "sort must be real component state, not a constant");
   assert.match(panel, /const visible=useMemo\(\(\)=>groupFacebookReposts\(sortFacebookInbox\(filterFacebookInbox\(listings,tab,filters\),sort\)\),\[filters,listings,sort,tab\]\)/, "visible must be computed by piping the filtered list through sortFacebookInbox with the live sort state, and the memo must depend on `sort`");
   assert.match(panel, /<select aria-label="Sortowanie"[^>]*value=\{sort\} onChange=\{event=>setSort\(event\.target\.value as FacebookInboxSort\)\}>/, "the dropdown must be a controlled input whose onChange writes directly into the sort state");
-  assert.match(panel, /\{visible\.map\(item=><InboxItem /, "the rendered list must map over `visible` (the sorted result), not the raw `listings`");
+  assert.match(panel, /const rendered=visible\.slice\(0,shownCount\)/, "pagination must preserve the sorted and filtered sequence");
+  assert.match(panel, /\{rendered\.map\(item=><InboxItem /, "only the requested sorted slice should mount cards");
   assert.doesNotMatch(panel, /\{listings\.map\(item=><InboxItem /, "rendering must never bypass sortFacebookInbox by mapping the unsorted listings directly");
 });
 
@@ -180,7 +181,7 @@ test("addToCrm can never show success after a swallowed workflow-update failure"
 // an explicit [role=button] attribute to querySelector.
 test("the ?listing= deep link clicks the exact matching analysis button once", () => {
   assert.match(panel, /const analysisButtonsRef=useRef\(new Map<string,HTMLButtonElement>\(\)\)/);
-  assert.match(panel, /const timeout=window\.setTimeout\(\(\)=>analysisButtonsRef\.current\.get\(listingId\)\?\.click\(\),0\);/);
+  assert.match(panel, /const button=analysisButtonsRef\.current\.get\(target\);if\(button\)\{handledDeepLink\.current=true;button\.click\(\);\}/);
   assert.match(panel, /const openAnalysis=\(id:string\)=>analysisButtonsRef\.current\.get\(id\)\?\.click\(\);/);
   assert.match(panel, /buttonRef=\{button=>registerAnalysisButton\(item\.listingId,button\)\}[^>]+label="Analizuj"/);
   assert.doesNotMatch(panel, /querySelector<HTMLElement>/);
@@ -212,7 +213,7 @@ test("one Watcher listing (the outer <article>) carries exactly one gold border;
 });
 
 test("multiple Watcher listings each get their own gold-bordered <article> — the border is per listing, never around the whole grid", () => {
-  assert.match(panel, /<div className="grid gap-5 xl:grid-cols-2">\{visible\.map\(item=><InboxItem /, "the grid container itself carries no border — only each mapped InboxItem's own <article> does");
+  assert.match(panel, /<div className="grid gap-5 xl:grid-cols-2">\{rendered\.map\(item=><InboxItem /, "the grid container itself carries no border — only each mapped InboxItem's own <article> does");
   const gridStart = panel.indexOf('<div className="grid gap-5 xl:grid-cols-2">');
   assert.ok(gridStart >= 0, "the results grid must exist");
   const gridLine = panel.slice(gridStart, panel.indexOf(")}</div>", gridStart) + 8);
