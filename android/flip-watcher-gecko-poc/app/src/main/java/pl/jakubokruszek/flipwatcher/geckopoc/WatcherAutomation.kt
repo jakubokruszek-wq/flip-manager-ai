@@ -54,6 +54,7 @@ object WatcherAutomation {
         val state=WatcherScanStatus.read(context)
         check(!(state.phase in setOf("DONE","PARTIAL")&&state.total>0&&state.done>=state.total)){"SCAN_ALREADY_FINISHED"}
         // Preserve the pending manual cycle and every durable source receipt.
+        check(preferences(context).edit().remove("renderer_paused_cycle").remove("renderer_paused_window").commit())
         enqueue(OneTimeWorkRequestBuilder<WatcherAutomationWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .addTag(CONTINUATION_TAG).build())
@@ -238,6 +239,12 @@ internal open class WatcherAutomationRun(val applicationContext:Context,val id:j
                             WatcherScanStatus.update(context,run){change(it).copy(total=groups.size,done=counts.closed,attempted=counts.attempted,retrying=counts.retrying)}
                         }
                         updateCounts()
+                        // A queued watchdog/UI kick cannot immediately defeat the circuit breaker.
+                        // Explicit resume clears this latch; the next calendar window can try again.
+                        if(prefs.getString("renderer_paused_cycle",null)==slot&&prefs.getString("renderer_paused_window",null)==windowKey){
+                            WatcherScanStatus.finish(context,run,"PARTIAL","RENDERER_UNAVAILABLE")
+                            return@withTimeout
+                        }
                         for(group in ordered){
                             currentCoroutineContext().ensureActive()
                             if(WatcherAutomation.uiVisible||!WatcherAutomation.enabled(context))break
@@ -294,7 +301,7 @@ internal open class WatcherAutomationRun(val applicationContext:Context,val id:j
                                 rendererPaused=renderFailures>=3
                                 if(!rendererPaused&&SourceRetryPolicy.closeFailure(lastIssue,hadAttempt)){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
                                 updateCounts{it.copy(phase="PREPARING",reason=lastIssue)}
-                                if(rendererPaused){queue.log("RENDERER_UNAVAILABLE");break}
+                                if(rendererPaused){check(prefs.edit().putString("renderer_paused_cycle",slot).putString("renderer_paused_window",windowKey).commit());queue.log("RENDERER_UNAVAILABLE");break}
                                 if(SourceRetryPolicy.pauseForNetwork(lastIssue)){networkPaused=true;break}
                                 // A single unavailable group cannot starve every later source.
                                 if(e.message in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA"))break

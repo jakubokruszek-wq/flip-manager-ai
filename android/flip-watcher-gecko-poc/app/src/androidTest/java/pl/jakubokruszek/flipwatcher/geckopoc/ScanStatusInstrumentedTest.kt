@@ -144,6 +144,11 @@ class ScanStatusInstrumentedTest {
         assertEquals(3,status.attempted);assertEquals(2,status.done);assertEquals(1,status.retrying)
         assertEquals(0,continuations)
         assertEquals("status-test",WatcherAutomation.preferences(context).getString("requested_scan",null))
+        worker(groups=sources){source,_->calls+=source.key;error("GROUP_RENDER_RETRY_FAILED")}.doWork()
+        assertEquals(3,calls.size) // A duplicate watchdog does not reopen the failed renderer.
+        WatcherAutomation.resume(context){}
+        worker(groups=sources){source,_->calls+=source.key;error("GROUP_RENDER_RETRY_FAILED")}.doWork()
+        assertEquals(sources[2].key,calls[3]) // Explicit resume keeps the unfinished source.
     }
     @Test fun pixelEvidenceRejectsBlankWrongSizeAndAcceptsVisibleContent(){
         val frame=android.graphics.Bitmap.createBitmap(1080,1920,android.graphics.Bitmap.Config.ARGB_8888)
