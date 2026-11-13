@@ -137,7 +137,7 @@ internal class BackgroundViewport(private val browser:GeckoSession,private val i
         val valid=kotlinx.coroutines.withTimeoutOrNull(2000){
             kotlinx.coroutines.suspendCancellableCoroutine<Boolean>{continuation->
                 try{display.capturePixels().accept({frame->
-                    val proof=try{continuation.isActive&&!closed&&bound()&&frame!=null&&hasContent(frame)}finally{frame?.recycle()}
+                    val proof=try{continuation.isActive&&!closed&&bound()&&frame!=null&&hasContent(frame)}catch(_:Exception){false}finally{frame?.recycle()}
                     if(continuation.isActive)continuation.resumeWith(Result.success(proof))
                 },{if(continuation.isActive)continuation.resumeWith(Result.success(false))})}
                 catch(_:Exception){if(continuation.isActive)continuation.resumeWith(Result.success(false))}
