@@ -81,7 +81,7 @@ class BackgroundWatcherScan(private val context:Context) {
                 if(documentReady()&&(forceSurfaceRefresh||checkNotNull(surface).renderedFrames==0)){
                     // Match the proven profile recovery: only a delivered frame
                     // on the replacement surface counts as rendering evidence.
-                    checkNotNull(surface).close();surface=BackgroundViewport(browser);surfaceResets++
+                    surface=BackgroundViewport.renew(browser,checkNotNull(surface));surfaceResets++
                     browser.setActive(true);browser.setFocused(true)
                     val freshUntil=android.os.SystemClock.elapsedRealtime()+5000
                     while(documentReady()&&checkNotNull(surface).renderedFrames==0&&android.os.SystemClock.elapsedRealtime()<freshUntil)delay(50)
@@ -136,5 +136,15 @@ internal class BackgroundViewport(private val browser:GeckoSession):WatcherViewp
     override fun hasWindowFocus()=!closed
     override fun onGenericMotionEvent(event:MotionEvent):Boolean {if(closed)return false;browser.panZoomController.onMotionEvent(event);return true}
     override fun capturePixels():GeckoResult<Bitmap> = display.capturePixels()
+    companion object {
+        /** Only before any capture grant: resume the compositor on a new target. */
+        fun renew(browser:GeckoSession,previous:BackgroundViewport):BackgroundViewport {
+            browser.setFocused(false);browser.setActive(false)
+            previous.close()
+            val next=BackgroundViewport(browser)
+            browser.setActive(true);browser.setFocused(true)
+            return next
+        }
+    }
     override fun close(){if(closed)return;closed=true;runCatching{display.surfaceDestroyed()};runCatching{browser.releaseDisplay(display)};reader.close();thread.quitSafely()}
 }

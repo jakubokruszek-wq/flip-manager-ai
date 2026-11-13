@@ -47,7 +47,7 @@ class WatcherWakeInstrumentedTest {
                 override suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult {
                     try{
                         if(manual){entered.complete(Unit);startReading.await()}
-                        val value=BackgroundWatcherScan(c).runFixture("http://127.0.0.1:${server.port}$path"){WatcherAutomation.enabled(c)}
+                        val value=BackgroundWatcherScan(c).runFixture("http://127.0.0.1:${server.port}$path",forceSurfaceRefresh=manual){WatcherAutomation.enabled(c)}
                         read.complete(value);return value
                     }catch(e:Throwable){
                         android.util.Log.e("GeckoPocTest","WAKE_READ_FAILURE",e)
@@ -102,6 +102,7 @@ class WatcherWakeInstrumentedTest {
             withTimeout(120_000){while(WatcherAlarmService.running)delay(100)}
             assertTrue(value.rows.isNotEmpty());assertTrue("Actual background Gecko must retain bound pixels",value.photos.isNotEmpty())
             if(manual){
+                assertEquals(1,value.captureStats["groupSurfaceResets"])
                 assertEquals("manual_service",prefs.getString("last_start_trigger",null))
                 WatcherOutbox(context).use{assertTrue("The original manual cycle receipt must survive a coalesced resume",it.scanned(WatcherCaptureReport.cycle("manual/"+manualId),group.key))}
                 assertTrue("A repeated manual tap must be handed off without replaying completed sources",runs.get()>=2)

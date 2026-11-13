@@ -194,3 +194,12 @@ test('pinch-sized visible viewport caps the step even when the layout viewport i
  const h=env(),moves=[];h.w.visualViewport={width:400,height:291,scale:2,offsetLeft:0,offsetTop:0};const original=h.w.scrollBy;h.w.scrollBy=function(o){moves.push(o.top);original.call(this,o)};
  const r=await preview.run(h.w,{...m,fastScroll:true},core,fields,h.safe,h.send,h.setAbort,h.notify);assert.equal(r.status,'OK');assert.equal(r.stats.scrollMoves,60);assert(moves.every(n=>n===247));assert.equal(r.stats.viewportHeight,800);assert.equal(r.stats.visualViewportHeight,291);assert.equal(r.stats.visualScale100,200);
 });
+
+test('automatic read reserves final transport time after a slow reload without extending the grant',async()=>{
+ const h=env(),budget=45000,send=h.send;
+ const card={parentElement:null};card.querySelectorAll=s=>s==='a[href]'?[{href:`https://www.facebook.com/groups/${group}/posts/550000000000091/`,closest:()=>card}]:[];
+ h.w.document.querySelectorAll=s=>s==='[role="article"],article'?[card]:[];
+ h.send=async x=>{if(x.type==='readDesktop'){await new Promise(r=>h.w.setTimeout(r,5000));if(h.w.performance.now()>=budget)return{status:'STOP'};}return send(x);};
+ const r=await preview.run(h.w,{...m,fastScroll:true,includePostText:true,remainingMs:budget},core,fields,h.safe,h.send,h.setAbort,h.notify);
+ assert.equal(r.status,'OK');assert.equal(r.rows.length,1);assert(h.w.performance.now()<budget);assert(h.disposed());
+});

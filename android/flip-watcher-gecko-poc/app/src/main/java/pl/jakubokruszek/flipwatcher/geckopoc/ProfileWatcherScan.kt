@@ -81,7 +81,7 @@ class ProfileWatcherScan(private val context:Context){
                 if(bound()&&!rendered){
                     // A background compositor can retain an idle render target after reload.
                     // Reattach once; only a real frame delivered to this NEW surface is proof.
-                    checkNotNull(surface).close();surface=BackgroundViewport(browser);surfaceResets++
+                    surface=BackgroundViewport.renew(browser,checkNotNull(surface));surfaceResets++
                     browser.setActive(true);browser.setFocused(true)
                     val freshUntil=android.os.SystemClock.elapsedRealtime()+5000
                     while(bound()&&checkNotNull(surface).renderedFrames==0&&android.os.SystemClock.elapsedRealtime()<freshUntil)delay(50)
