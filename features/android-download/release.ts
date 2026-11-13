@@ -81,4 +81,12 @@ export const androidRelease096 = {
   source: "https://github.com/jakubokruszek-wq/flip-manager-ai/releases/download/gecko-poc-0.5.96/flip-watcher-0.5.96-arm64.apk",
   path: "/api/android/flip-watcher-0.5.96.apk",
 } as const;
-export const androidRelease: AndroidRelease = androidRelease096;
+export const androidRelease097 = {
+  version: "0.5.97",
+  filename: "flip-watcher-0.5.97-arm64.apk",
+  bytes: 112151518,
+  sha256: "f268e49e00e69911b9ce3e9bc29dc85941815ad358cc33192edaee0b4abf96c0",
+  source: "https://github.com/jakubokruszek-wq/flip-manager-ai/releases/download/gecko-poc-0.5.97/flip-watcher-0.5.97-arm64.apk",
+  path: "/api/android/flip-watcher-0.5.97.apk",
+} as const;
+export const androidRelease: AndroidRelease = androidRelease097;
