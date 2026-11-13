@@ -59,10 +59,6 @@ class BackgroundWatcherScan(private val context:Context) {
             }
             try {
                 channel.attach(GeckoHost.collectorExtension(context));check(live())
-                // A cold extension can connect before its native delegate exists.
-                // Its watchdog reconnects and revokes desktop grants on disconnect;
-                // finish that handshake before granting a freshly reloaded page.
-                check(GeckoHost.background.awaitPort(8_000)&&live()){load.reason?:"GROUP_BACKGROUND_NOT_READY"}
                 DesktopSessionPreview.applyDesktop(browser)
                 browser.open(GeckoHost.runtime(context));surface=BackgroundViewport(browser)
                 browser.setActive(true);browser.setFocused(true);browser.loadUri(target)
@@ -92,6 +88,11 @@ class BackgroundWatcherScan(private val context:Context) {
                 }
                 check(documentReady()){load.reason?:"GROUP_NOT_READY"}
                 check(checkNotNull(surface).renderedFrames>0){"GROUP_RENDER_RETRY_FAILED"}
+                // A cold extension can connect before its native delegate exists.
+                // Its watchdog reconnects and revokes desktop grants on disconnect;
+                // finish that handshake before granting a freshly reloaded page.
+                check(GeckoHost.background.awaitPort(8_000)&&live()){load.reason?:"GROUP_BACKGROUND_NOT_READY"}
+                check(documentReady()){load.reason?:"GROUP_NOT_READY"}
                 val trial=DesktopTrial(actualTarget,{android.os.SystemClock.elapsedRealtime()},fixture,groupId=group.id,allowRootQuery=true)
                 gate=trial;initial=false;check(trial.begin(true));val nonce=UUID.randomUUID().toString()
                 observer=launch{var last="";while(true){val phase=if(trial.phase==DesktopTrial.Phase.READING)"READING"else"LOADING";if(phase!=last){last=phase;progress(phase)};delay(500)}}
