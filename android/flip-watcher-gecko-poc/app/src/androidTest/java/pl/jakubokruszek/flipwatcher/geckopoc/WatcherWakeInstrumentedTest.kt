@@ -48,14 +48,23 @@ class WatcherWakeInstrumentedTest {
             shell("dumpsys deviceidle whitelist +${context.packageName}")
             withTimeout(5000){while(!WatcherWake.exact(context))delay(100)}
             delay(1000)
-            prefs.edit().putBoolean("enabled",true).commit()
-            val expected=System.currentTimeMillis()+15_000
+            // Use a real next calendar minute: background scheduleNext calls
+            // must preserve this same alarm, rather than replacing a synthetic
+            // now+15s calendar alarm with the next configured daily time.
+            val expected=((System.currentTimeMillis()+15_000)/60_000+1)*60_000
+            val local=java.time.Instant.ofEpochMilli(expected).atZone(java.time.ZoneId.systemDefault())
+            val minute=local.hour*60+local.minute
+            val times=AutomationPolicy.validate(listOf(minute,(minute+480)%1440,(minute+960)%1440))
+            prefs.edit().putBoolean("enabled",true).putString("scan_minutes",AutomationPolicy.encode(times)).commit()
+            assertEquals(expected,AutomationPolicy.next(java.time.Instant.now(),java.time.ZoneId.systemDefault(),times).toEpochMilli())
             assertTrue(WatcherWake.schedule(context,expected))
+            WatcherAutomation.scheduleNext(context)
+            assertEquals(expected,prefs.getLong("wake_alarm_at",0))
             shell("input keyevent KEYCODE_HOME");shell("input keyevent KEYCODE_SLEEP")
             shell("dumpsys battery unplug");shell("dumpsys deviceidle force-idle")
             assertFalse(power.isInteractive);assertTrue("Fixture must actually enter Doze",power.isDeviceIdleMode)
-            val value=withTimeout(120_000){read.await()}
-            withTimeout(30_000){while(WatcherAlarmService.running)delay(100)}
+            val value=withTimeout(180_000){read.await()}
+            withTimeout(120_000){while(WatcherAlarmService.running)delay(100)}
             assertTrue(value.rows.isNotEmpty());assertTrue("Actual background Gecko must retain bound pixels",value.photos.isNotEmpty())
             assertFalse(prefs.getBoolean("last_service_screen_on",true))
             assertTrue("Alarm should execute while device is still in Doze",prefs.getBoolean("last_service_idle",false))
@@ -66,6 +75,11 @@ class WatcherWakeInstrumentedTest {
             assertTrue(state.phase in setOf("DONE","PARTIAL"));assertEquals(1,state.done);assertEquals(0,state.retrying)
             WatcherOutbox(context).use{assertTrue(it.scanned(prefs.getString("capture_cycle","")!!,group.key))}
             assertFalse(power.isInteractive)
+        }catch(e:Throwable){
+            val keys=setOf("enabled","scan_minutes","schedule_since","wake_alarm_at","wake_retry_at","last_alarm_expected","last_alarm_received","last_service_started","last_service_screen_on","last_service_idle","last_start_trigger")
+            android.util.Log.e("GeckoPocTest","WAKE_DIAGNOSTIC "+org.json.JSONObject(prefs.all.filterKeys{it in keys}).toString()+" status="+WatcherScanStatus.read(context).toString())
+            android.util.Log.e("GeckoPocTest","WAKE_ALARMS "+shell("dumpsys alarm").lines().filter{it.contains(context.packageName)||it.contains("WatcherAlarm")}.take(30).joinToString(" | "))
+            throw e
         }finally{
             WatcherAutomation.configure(context,false);context.stopService(Intent(context,WatcherAlarmService::class.java))
             withTimeoutOrNull(5000){while(WatcherAlarmService.running)delay(100)}

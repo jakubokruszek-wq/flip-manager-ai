@@ -39,7 +39,8 @@ internal object WatcherWake {
         val p=WatcherAutomation.preferences(c);val n=p.getInt("wake_retry_attempt",0)
         val delay=(10*60_000L*(1L shl n.coerceAtMost(3))).coerceAtMost(60*60_000L)
         p.edit().putInt("wake_retry_attempt",n+1).apply()
-        if(!schedule(c,System.currentTimeMillis()+delay,RETRY))WatcherAutomation.retry(c)
+        val at=System.currentTimeMillis()+delay
+        if(schedule(c,at,RETRY))p.edit().putLong("continuation_at",at).apply() else WatcherAutomation.retry(c)
     }
     fun cancel(c:Context){
         val alarms=c.getSystemService(AlarmManager::class.java)
