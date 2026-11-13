@@ -67,6 +67,10 @@ class WatcherWakeInstrumentedTest {
             assertEquals(expected,prefs.getLong("wake_alarm_at",0))
             shell("input keyevent KEYCODE_HOME");shell("input keyevent KEYCODE_SLEEP")
             shell("dumpsys battery unplug");shell("dumpsys deviceidle force-idle")
+            // The shell transition and the app's PowerManager notification
+            // are asynchronous. Wait for the real state, never assume force-idle
+            // has already reached this process when its command returns.
+            withTimeout(5_000){while(power.isInteractive||!power.isDeviceIdleMode)delay(50)}
             assertFalse(power.isInteractive);assertTrue("Fixture must actually enter Doze",power.isDeviceIdleMode)
             val value=withTimeout(180_000){read.await()}
             withTimeout(120_000){while(WatcherAlarmService.running)delay(100)}
