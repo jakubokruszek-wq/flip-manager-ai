@@ -2,6 +2,7 @@ package pl.jakubokruszek.flipwatcher.geckopoc
 
 import android.content.Context
 import androidx.work.*
+import androidx.work.ListenableWorker.Result
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
@@ -70,6 +71,7 @@ object WatcherAutomation {
     fun scheduleNext(context:Context){
         if(!enabled(context))return
         val now=Instant.now();val at=AutomationPolicy.next(now,ZoneId.systemDefault(),schedule(context))
+        WatcherWake.schedule(context,at.toEpochMilli())
         val work=OneTimeWorkRequestBuilder<WatcherAutomationWorker>()
             .setInitialDelay((at.toEpochMilli()-now.toEpochMilli()).coerceAtLeast(0),TimeUnit.MILLISECONDS)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
@@ -86,6 +88,8 @@ object WatcherAutomation {
             manager.enqueueUniquePeriodicWork("watcher-calendar-v1",ExistingPeriodicWorkPolicy.KEEP,work)
             scheduleNext(context);retry(context)
         }else{
+            WatcherWake.cancel(context)
+            context.stopService(android.content.Intent(context,WatcherAlarmService::class.java))
             WatcherScanStatus.quiet(context)
             manager.cancelUniqueWork("watcher-calendar-v1");manager.cancelUniqueWork("watcher-retry-v1")
             manager.cancelUniqueWork("watcher-background-kick-v2");manager.cancelAllWorkByTag(WINDOW_TAG)
@@ -132,9 +136,32 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
     internal open fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=WatcherUpload.report(credentials,item)
     internal open fun groups(credentials:WatcherLink.Credentials)=WatcherLink.sources(credentials,verifyDevice=true)
     internal open suspend fun scan(group:WatcherGroup,progress:(String)->Unit)=if(group.type=="PROFILE")ProfileWatcherScan(applicationContext).run(group,{!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(applicationContext)},progress)else BackgroundWatcherScan(applicationContext).run(group,{!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(applicationContext)},progress)
-    override suspend fun doWork():Result {
+    override suspend fun doWork():Result = object:WatcherAutomationRun(applicationContext,id){
+        override fun interruptionReason()=this@WatcherAutomationWorker.interruptionReason()
+        override fun recoverInterrupted(context:Context)=this@WatcherAutomationWorker.recoverInterrupted(context)
+        override fun continueScan(context:Context)=this@WatcherAutomationWorker.continueScan(context)
+        override fun sourceTimeoutMs(remaining:Long)=this@WatcherAutomationWorker.sourceTimeoutMs(remaining)
+        override fun credentials(context:Context)=this@WatcherAutomationWorker.credentials(context)
+        override fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=this@WatcherAutomationWorker.send(credentials,item)
+        override fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=this@WatcherAutomationWorker.sendReport(credentials,item)
+        override fun groups(credentials:WatcherLink.Credentials)=this@WatcherAutomationWorker.groups(credentials)
+        override suspend fun scan(group:WatcherGroup,progress:(String)->Unit)=this@WatcherAutomationWorker.scan(group,progress)
+    }.run()
+}
+
+internal open class WatcherAutomationRun(val applicationContext:Context,val id:java.util.UUID) {
+    internal open fun interruptionReason()=WorkInfo.STOP_REASON_UNKNOWN
+    internal open fun recoverInterrupted(context:Context)=WatcherAutomation.recoverInterrupted(context)
+    internal open fun continueScan(context:Context)=WatcherAutomation.continuation(context)
+    internal open fun sourceTimeoutMs(remaining:Long)=minOf(175_000L,(remaining-30_000L).coerceAtLeast(1L))
+    internal open fun credentials(context:Context)=WatcherLink.load(context)
+    internal open fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=WatcherUpload.send(credentials,item)
+    internal open fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=WatcherUpload.report(credentials,item)
+    internal open fun groups(credentials:WatcherLink.Credentials)=WatcherLink.sources(credentials,verifyDevice=true)
+    internal open suspend fun scan(group:WatcherGroup,progress:(String)->Unit)=if(group.type=="PROFILE")ProfileWatcherScan(applicationContext).run(group,{!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(applicationContext)},progress)else BackgroundWatcherScan(applicationContext).run(group,{!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(applicationContext)},progress)
+    suspend fun run(waitForLock:Boolean=false):Result {
         // A duplicate calendar/kick must not spend its job budget waiting behind another scan.
-        if(!WatcherAutomation.lock.tryLock())return Result.success()
+        if(waitForLock)WatcherAutomation.lock.lock() else if(!WatcherAutomation.lock.tryLock())return Result.success()
         return try{runWork()}finally{WatcherAutomation.lock.unlock()}
     }
     private suspend fun runWork():Result {

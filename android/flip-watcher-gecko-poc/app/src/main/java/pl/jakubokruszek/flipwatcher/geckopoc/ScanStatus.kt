@@ -41,6 +41,8 @@ object ScanStatusText {
         "WATCHER_DEVICE_MISMATCH"->"Dane połączonego urządzenia nie zgadzają się z odpowiedzią Managera. Połącz ponownie Watchera."
         "NO_ACTIVE_GROUPS"->"Brak aktywnych grup. Zsynchronizuj grupy z Managerem."
         "ANDROID_FOREGROUND_START_DENIED"->"Android odmówił uruchomienia usługi w tle."
+        "ALARM_FGS_START_REFUSED"->"Alarm dotarł, ale Android odmówił uruchomienia skanu. Sprawdź uprawnienia alarmów i ustawienia baterii aplikacji."
+        "ALARM_SERVICE_BUDGET"->"Zapisano postęp po osiągnięciu limitu czasu usługi; zaplanowano dalszy odczyt."
         "ANDROID_PERMISSION_DENIED"->"Android odmówił uprawnienia potrzebnego do pracy."
         "BATCH_CONTINUE"->"Partia osiągnęła limit czasu. Zaplanowano kontynuację tej samej próby, z zachowaniem postępu źródeł."
         "SOURCE_TIMEOUT"->"Źródło przekroczyło budżet czasu. Nie potwierdzono odczytu; automat przechodzi do kolejnych źródeł."
@@ -161,14 +163,19 @@ object WatcherScanStatus {
             val m=WorkManager.getInstance(context)
             (listOf("watcher-calendar-v1","watcher-retry-v1","watcher-background-kick-v2").flatMap{m.getWorkInfosForUniqueWork(it).get(2,TimeUnit.SECONDS)}+m.getWorkInfosByTag("watcher-window-v2").get(2,TimeUnit.SECONDS)+m.getWorkInfosByTag(WatcherAutomation.CONTINUATION_TAG).get(2,TimeUnit.SECONDS)).distinctBy{it.id}.filter{!it.state.isFinished}
         }.getOrNull()
-        val running=infos?.any{it.state==WorkInfo.State.RUNNING}
-        val work=when {infos==null->"nie udało się odczytać stanu";running==true->"zadanie uruchomione";infos.any{it.state==WorkInfo.State.ENQUEUED}->"zadanie oczekuje; dokładny powód opóźnienia nie jest udostępniany";infos.any{it.state==WorkInfo.State.BLOCKED}->"zadanie zablokowane zależnością";else->"brak oczekującego zadania"}
+        val running=if(WatcherAlarmService.running)true else infos?.any{it.state==WorkInfo.State.RUNNING}
+        val work=when {WatcherAlarmService.running->"skan uruchomiony z alarmu — usługa aktywna";infos==null->"nie udało się odczytać stanu";running==true->"zadanie uruchomione";infos.any{it.state==WorkInfo.State.ENQUEUED}->"zadanie oczekuje; dokładny powód opóźnienia nie jest udostępniany";infos.any{it.state==WorkInfo.State.BLOCKED}->"zadanie zablokowane zależnością";else->"brak oczekującego zadania"}
         val next=AutomationPolicy.next(Instant.ofEpochMilli(now),ZoneId.systemDefault(),WatcherAutomation.schedule(context)).toEpochMilli()
         val window=AutomationPolicy.current(Instant.ofEpochMilli(now),ZoneId.systemDefault(),WatcherAutomation.schedule(context))
         val prefs=WatcherAutomation.preferences(context)
         val due=enabled&&window.at.toEpochMilli()>=prefs.getLong("schedule_since",0)&&prefs.getString("completed_slot",null)!=WatcherCaptureReport.cycle(window.key)
         val state=read(context);val continuation=prefs.getLong("continuation_at",0)
         val plan=if(enabled&&!state.active&&continuation>0)"\nPlan wznowienia tej samej próby: "+ScanStatusText.time(continuation,ZoneId.systemDefault())+". Android może opóźnić start; możesz użyć przycisku wznowienia."else ""
-        return ScanStatusText.details(state,enabled,now,next,network,notifications,work,running,pendingWindow=if(due)window.at.toEpochMilli()else 0)+plan+"\n\n"+WatcherScanSummary.text(context,includeSources=false)
+        val wake=buildString{
+            append("\n"+WatcherWake.description(context))
+            if(prefs.getLong("last_alarm_received",0)>0)append("\nAlarm — plan: "+ScanStatusText.time(prefs.getLong("last_alarm_expected",0),ZoneId.systemDefault())+" • odebrano: "+ScanStatusText.time(prefs.getLong("last_alarm_received",0),ZoneId.systemDefault()))
+            if(prefs.getLong("last_service_started",0)>0)append("\nStart usługi: "+ScanStatusText.time(prefs.getLong("last_service_started",0),ZoneId.systemDefault())+" • ekran "+if(prefs.getBoolean("last_service_screen_on",true))"włączony"else"wygaszony")
+        }
+        return ScanStatusText.details(state,enabled,now,next,network,notifications,work,running,pendingWindow=if(due)window.at.toEpochMilli()else 0)+plan+wake+"\n\n"+WatcherScanSummary.text(context,includeSources=false)
     }
 }

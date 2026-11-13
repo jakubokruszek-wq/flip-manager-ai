@@ -11,6 +11,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- User-granted ("Alarms & reminders"); without it the test alarm is inexact. -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:allowBackup="false"
@@ -37,6 +38,17 @@
         <receiver
             android:name=".ScreenOffAlarmReceiver"
             android:exported="false" />
+        <receiver android:name=".WatcherAlarmReceiver" android:exported="false" />
+        <receiver android:name=".WatcherClockReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+        <service android:name=".WatcherAlarmService" android:exported="false" android:foregroundServiceType="dataSync" />
 
         <service
             android:name=".ScreenOffTestService"
