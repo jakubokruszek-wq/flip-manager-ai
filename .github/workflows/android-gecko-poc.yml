@@ -217,17 +217,7 @@ jobs:
           avd-name: gecko-schema-recovery
           force-avd-creation: true
           script: |
-            if [ '${{ github.ref }}' = 'refs/heads/codex/android-source-retry-budget' ]; then
-              adb install -r ../../../watcher-upgrade-102/android/flip-watcher-gecko-poc/app/build/outputs/apk/debug/app-x86_64-debug.apk
-              adb install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-              adb shell am instrument -w -e class pl.jakubokruszek.flipwatcher.geckopoc.RollbackUpgradeInstrumentedTest#a_seedOn102 pl.jakubokruszek.flipwatcher.geckopoc.test/androidx.test.runner.AndroidJUnitRunner > rollback-seed.txt
-              cat rollback-seed.txt
-              grep -q 'OK (1 test)' rollback-seed.txt
-              adb install -r app/build/outputs/apk/debug/app-x86_64-debug.apk
-              adb shell am instrument -w -e class pl.jakubokruszek.flipwatcher.geckopoc.RollbackUpgradeInstrumentedTest#b_verifyAfterInPlaceUpdate pl.jakubokruszek.flipwatcher.geckopoc.test/androidx.test.runner.AndroidJUnitRunner > rollback-verify.txt
-              cat rollback-verify.txt
-              grep -q 'OK (1 test)' rollback-verify.txt
-            fi
+            if [ '${{ github.ref }}' = 'refs/heads/codex/android-source-retry-budget' ]; then sh scripts/rollback-upgrade.sh; fi
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true '-Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#sourceTimeoutDoesNotStopLaterGroupsAndFailedGroupGetsOnlyOneRetry,pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#interruptionResumesSameCycleWithoutRescanningCompletedSource,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest#interruptionRecoveryIsUniqueDelayedNetworkConstrainedAndRespectsDisable' || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             if [ '${{ github.ref }}' = 'refs/heads/codex/android-source-retry-budget' ]; then ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#newSourceCountsIgnoreBodyVariantsRetriesAndHeldRows || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1); fi
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#calendarIgnoresOldRevisionAndManualCycleRechecksWhileDegradedReadGetsExactlyOneRetry,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
