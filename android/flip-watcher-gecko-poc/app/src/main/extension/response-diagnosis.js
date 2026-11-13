@@ -40,6 +40,10 @@
       revoked.add(m.nonce);while(revoked.size>32)revoked.delete(revoked.values().next().value);
       if(current?.load && current.nonce===m.nonce)abort();
     }
+    function diagnoseLoad(sender) {
+      const s=current;
+      return !s?1:!s.load?2:!s.navigated?3:s.closed?4:s.expired?5:now()>=s.deadline?6:sender?.tab?.id!==s.tab?7:!senderOK(sender,{consent:true,groupId:s.group,fixture:s.fixture})?8:0;
+    }
     function loadContext(sender) {
       const s=current;
       if(!s || !s.load || !s.navigated || s.closed || s.expired || now()>=s.deadline || sender?.tab?.id!==s.tab || !senderOK(sender,{consent:true,groupId:s.group,fixture:s.fixture}))return {active:false};
@@ -256,7 +260,7 @@
         listenerReady=true;
       }catch{}
     }
-    return {arm,read,abort,before,observe,loadContext,confirmLoad,recordLoadScroll,readLoad,abortLoad,stop(m,sender){if(current && current.nonce===m.nonce && current.tab===sender?.tab?.id && sender.frameId===0)abort();}};
+    return {arm,read,abort,before,observe,diagnoseLoad,loadContext,confirmLoad,recordLoadScroll,readLoad,abortLoad,stop(m,sender){if(current && current.nonce===m.nonce && current.tab===sender?.tab?.id && sender.frameId===0)abort();}};
   }
   const exported={create,keys,groupURL};scope.FlipResponseFactory=exported;
   if(typeof module!=="undefined")module.exports=exported;

@@ -524,9 +524,11 @@ function readDOM(w,model,core,group){
  }
 }
 async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=null){
- const empty=reason=>({status:'STOP',reason,rows:[],stats:zero()});
+ const fixture=m.allowLoopback===true&&(()=>{try{return new URL(w.location.href).hostname==='127.0.0.1';}catch{return false;}})();
+ let contextStage=1,contextTransport=0;
+ const empty=reason=>({status:'STOP',reason,rows:[],stats:zero(),...(fixture&&reason==='CONTEXT'?{fixtureContextFailure:contextStage,fixtureContextTransport:contextTransport}:{})});
  if(m.consent!==true||!safe(m))return empty('CONTEXT');
- const baseline=m.baselineScroll===true;
+ contextStage=2;const baseline=m.baselineScroll===true;
  const automatic=m.includePostText===true,scrollMs=automatic?45000:30000;
  const fast=m.fastScroll===true&&m.gestureScroll!==true,maxSteps=fast?60:30,cadence=fast?(automatic?750:500):1000;
  if((m.gestureScroll===true&&!baseline)||baseline&&(m.photosConsent===true||m.viewportConsent===true))return empty('CONTEXT');
@@ -542,18 +544,18 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
  const abort=()=>{if(invalid)return;invalid=true;model.clear();wake();notify({type:'desktopPreviewStop',nonce:m.nonce});void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});};
  const pause=ms=>Promise.race([new Promise(r=>w.setTimeout(r,ms)),cancelled]);setAbort(abort);
  try{
-  const info=await send({type:'desktopContext',nonce:m.nonce});if(!info?.active||info.nonce!==m.nonce||!safe(m))return empty('CONTEXT');
-  dispose=w.FlipVisiblePosts.watch(w,m,abort);
+  contextStage=4;const info=await send({type:'desktopContext',nonce:m.nonce});contextTransport=info?.fixtureDiagnostic||0;if(!info?.active||info.nonce!==m.nonce||!safe(m))return empty('CONTEXT');
+  contextStage=5;dispose=w.FlipVisiblePosts.watch(w,m,abort);
   const ack=await send({type:'confirmDesktop',nonce:m.nonce,safe:true});if(!ack?.confirmed||invalid||!safe(m))return empty('CONTEXT');
   const active=async()=>{if(invalid||!safe(m)||w.FlipDesktopNotice?.inspect(w).blocked||w.performance.now()>=end)return false;const c=await send({type:'desktopContext',nonce:m.nonce});return !invalid&&safe(m)&&c?.active===true&&c.nonce===m.nonce;};
-  if(!w.FlipDesktopNotice)return empty('ERROR');
+  contextStage=6;if(!w.FlipDesktopNotice)return empty('ERROR');
   const notice=await w.FlipDesktopNotice.dismiss(w,{safe:()=>!invalid&&safe(m),pause,deadline:end-1500,onKnown:()=>notify({type:'desktopGestureHint',nonce:m.nonce,stage:'NOTICE'})});
   model.stats.noticeDetected=notice.detected;model.stats.noticeClosed=notice.closed;
   for(const [from,to] of [['reason','noticeReason'],['modals','noticeModals'],['visible','noticeVisible'],['source','noticeNameSource']])model.stats[to]=notice[from]||0;
   if(invalid||!safe(m)||notice.status==='CONTEXT')return empty('CONTEXT');
   if(notice.status==='BLOCKED')return {status:'STOP',reason:'NOTICE_BLOCKED',rows:[],stats:{...zero(),verified:1,desktop:Number(w.innerWidth>=900),noticeDetected:notice.detected,noticeReason:notice.reason||1,noticeModals:notice.modals||0,noticeVisible:notice.visible||0,noticeNameSource:notice.source||0}};
-  noticeDispose=w.FlipDesktopNotice.watch?.(w,abort);if(invalid)return empty('CONTEXT');
-  let gestureTarget=null;
+  contextStage=7;noticeDispose=w.FlipDesktopNotice.watch?.(w,abort);if(invalid)return empty('CONTEXT');
+  contextStage=8;let gestureTarget=null;
   model.stats.gestureRequested=Number(m.gestureScroll===true);
   if(m.gestureScroll===true){
    if(!w.FlipDesktopGesture)return empty('ERROR');
@@ -565,11 +567,11 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
    for(const [from,to] of [['touches','gestureTouches'],['anchored','gestureAnchored'],['rejected','gestureRejected']])model.stats[to]=picked?.stats?.[from]||0;
   }
   // Reserve time for final extraction and native delivery within the original deadline.
-  const scrollStart=w.performance.now(),scrollEnd=m.gestureScroll===true&&!gestureTarget?scrollStart:Math.min(scrollStart+scrollMs,end-1500);
+  contextStage=10;const scrollStart=w.performance.now(),scrollEnd=m.gestureScroll===true&&!gestureTarget?scrollStart:Math.min(scrollStart+scrollMs,end-1500);
   let noTargetStreak=0,lastTailAt=-Infinity,nativeFailures=0,lastMoved=null;const photoSlots=new Map(),viewport=baseline?null:w.FlipDesktopViewport;let mediaBindings=[];const snapshots=new Map(),textExpansions=new Set();
   model.stats.viewportModule=Number(!!viewport);
   model.stats.viewportGranted=Number(m.viewportConsent===true||m.photosConsent===true);
-  if(viewport&&model.stats.viewportGranted){
+  contextStage=9;if(viewport&&model.stats.viewportGranted){
    for(let attempt=0;attempt<3&&w.performance.now()<scrollEnd;attempt++){
     if(!await active())return empty('CONTEXT');
     const probe=await notify({type:'desktopViewportRequest',nonce:m.nonce,action:'probe'});

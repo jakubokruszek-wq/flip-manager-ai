@@ -134,6 +134,7 @@ class CollectorChannel(
     suspend fun desktopPreview(nonce:String,documentAfter:Long,remainingMs:Int,group:String=PocPolicy.APPROVED_GROUP_ID,previous:DesktopDocumentProof?=null,baseline:Boolean=false,gesture:Boolean=false,fastScroll:Boolean=false,expandMessages:Boolean=false,includePostText:Boolean=false):DesktopReply? {
         if(desktopNonce!=nonce||previous==null)return null
         val result=request(nonce,JSONObject().put("type","desktopPreview").put("nonce",nonce).put("consent",true).put("groupId",group).put("allowLoopback",fixtureMode).put("documentAfter",documentAfter).put("remainingMs",remainingMs).put("previousDocumentId",previous.documentId).put("previousTimeOrigin",previous.timeOrigin).put("baselineScroll",baseline).put("gestureScroll",gesture).put("fastScroll",fastScroll).put("viewportConsent",!baseline&&viewportBridge!=null).put("photosConsent",!baseline&&viewportBridge!=null).put("messageConsent",expandMessages).put("includePostText",includePostText),remainingMs.toLong().coerceIn(500,60_000))
+        if(fixtureMode&&result?.has("fixtureContextFailure")==true)error("FIXTURE_CONTEXT_STAGE_${result.optInt("fixtureContextFailure")}_TRANSPORT_${result.optInt("fixtureContextTransport")}")
         return DesktopProtocol.parse(result,nonce,group,includePostText)
     }
     fun abortDesktop(){viewportBridge?.let{it.close();lastViewportCaptureCounts=it.captureCounts.toList()};viewportBridge=null;desktopNonce=null;runCatching{port?.postMessage(JSONObject().put("type","abortDesktopPreview").put("nonce",UUID.randomUUID().toString()))}}

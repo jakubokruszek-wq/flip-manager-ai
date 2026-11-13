@@ -21,7 +21,7 @@ function create(api,core,fields,factory,timers=root){
   state.timer=timers.setTimeout(()=>abort({nonce:m.nonce}),wait);
   return {status:'ARMED'};
  }
- function context(m,sender){const s=state,info=net.loadContext(sender);return {active:!!(s&&s.nonce===m.nonce&&info.active&&now()<s.deadline),nonce:s?.nonce===m.nonce?m.nonce:'',remainingMs:s?.nonce===m.nonce?Math.max(0,s.deadline-now()):0};}
+ function context(m,sender){const s=state,info=net.loadContext(sender);return {active:!!(s&&s.nonce===m.nonce&&info.active&&now()<s.deadline),nonce:s?.nonce===m.nonce?m.nonce:'',remainingMs:s?.nonce===m.nonce?Math.max(0,s.deadline-now()):0,...(s?.fixture?{fixtureDiagnostic:net.diagnoseLoad(sender)}:{})};}
  function confirm(m,sender){if(!context(m,sender).active||m.safe!==true)return {confirmed:false};const confirmed=net.confirmLoad(m,sender);if(confirmed)state.confirmed=true;return {confirmed};}
  function snapshot(m,sender){
   if(!context(m,sender).active||state.confirmed!==true)return {status:'STOP',rows:[],media:[]};
