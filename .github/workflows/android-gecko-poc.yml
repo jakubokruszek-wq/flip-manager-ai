@@ -137,7 +137,7 @@ jobs:
           retention-days: 30
 
   instrumented:
-    name: GeckoView instrumented tests (Android 17 comparison, local HTML)
+    name: GeckoView instrumented tests (Android 16 comparison, local HTML)
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     steps:
@@ -204,11 +204,11 @@ jobs:
           git worktree add ../watcher-upgrade-105 FETCH_HEAD
           (cd ../watcher-upgrade-105/android/flip-watcher-gecko-poc && ./gradlew --no-daemon assembleDebug -PGECKO_POC_VERSION_CODE=8693)
           (cd android/flip-watcher-gecko-poc && ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest -PGECKO_POC_VERSION_CODE=$((8000 + ${{ github.run_number }})))
-      - name: Complete worker, own-message and image-binding regressions on API 37 (phone SDK)
+      - name: Complete worker, own-message and image-binding regressions on API 36 (API 37 image unavailable)
         if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-096-comparison-106'
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 37
+          api-level: 36
           target: google_apis
           arch: x86_64
           disable-animations: true
