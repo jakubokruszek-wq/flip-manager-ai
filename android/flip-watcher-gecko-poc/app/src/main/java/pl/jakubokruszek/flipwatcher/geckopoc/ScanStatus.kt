@@ -41,6 +41,7 @@ object ScanStatusText {
         "WATCHER_DEVICE_MISMATCH"->"Dane połączonego urządzenia nie zgadzają się z odpowiedzią Managera. Połącz ponownie Watchera."
         "NO_ACTIVE_GROUPS"->"Brak aktywnych grup. Zsynchronizuj grupy z Managerem."
         "ANDROID_FOREGROUND_START_DENIED"->"Android odmówił uruchomienia usługi w tle."
+        "MANUAL_FGS_START_REFUSED"->"Android odmówił uruchomienia ręcznego skanu. Postęp zachowano; ponów przyciskiem z otwartego podglądu."
         "ALARM_FGS_START_REFUSED"->"Alarm dotarł, ale Android odmówił uruchomienia skanu. Sprawdź uprawnienia alarmów i ustawienia baterii aplikacji."
         "ALARM_SERVICE_BUDGET"->"Zapisano postęp po osiągnięciu limitu czasu usługi; zaplanowano dalszy odczyt."
         "ANDROID_PERMISSION_DENIED"->"Android odmówił uprawnienia potrzebnego do pracy."
@@ -66,6 +67,7 @@ object ScanStatusText {
     fun title(s:ScanState,enabled:Boolean,now:Long,running:Boolean?):String=when {
         !enabled->"Automat wyłączony"
         s.active&&now-s.heartbeat>90_000->if(running==true)"Zadanie uruchomione — brak świeżego potwierdzenia"else"Brak potwierdzenia dalszej pracy"
+        s.active&&s.groupStarted>0&&s.phase in setOf("LOADING","READING","OCR")&&now-s.groupStarted>190_000->"Odczyt przekroczył limit — brak postępu"
         s.phase=="QUEUED"->"Skan zlecony — oczekuje na uruchomienie"
         s.phase=="PREPARING"->"Przygotowanie skanu"
         s.phase=="UPLOADING"->"Wysyłanie zapisanych ofert"
@@ -136,7 +138,7 @@ object WatcherScanStatus {
     fun resume(context:Context)=change(context){s->if(s.active&&System.currentTimeMillis()-s.heartbeat<90_000)s else s.copy(phase="QUEUED",reason="",changed=System.currentTimeMillis())}
     fun begin(context:Context,id:String)=change(context){s->val now=System.currentTimeMillis();ScanState(run=id,phase="PREPARING",started=now,changed=now,heartbeat=now,lastSuccess=s.lastSuccess,checked=now)}
     fun update(context:Context,id:String,f:(ScanState)->ScanState)=change(context){s->if(s.run!=id||s.ended>0)s else f(s).copy(changed=System.currentTimeMillis(),heartbeat=System.currentTimeMillis())}
-    fun beat(context:Context,id:String)=change(context,false){s->if(s.run==id&&s.active)s.copy(heartbeat=System.currentTimeMillis())else s}
+    fun beat(context:Context,id:String,refreshNotification:Boolean=false)=change(context,refreshNotification){s->if(s.run==id&&s.active)s.copy(heartbeat=System.currentTimeMillis())else s}
     fun finish(context:Context,id:String,phase:String,reason:String=""):ScanState { return change(context){s->if(s.run!=id)s else {if(phase in setOf("DONE","PARTIAL"))WatcherScanSummary.finish(context);val now=System.currentTimeMillis();s.copy(phase=phase,reason=reason,ended=now,changed=now,heartbeat=now,lastSuccess=if(phase=="DONE")now else s.lastSuccess)}} }
     fun checked(context:Context,reason:String)=change(context,false){it.copy(checked=System.currentTimeMillis(),skipped=reason)}
     fun quiet(context:Context){runCatching{context.getSystemService(NotificationManager::class.java).cancel(NOTICE)}}
@@ -148,7 +150,7 @@ object WatcherScanStatus {
         val intent=PendingIntent.getActivity(context,NOTICE,Intent(context,ScanStatusActivity::class.java),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val title=ScanStatusText.title(s,true,System.currentTimeMillis(),true)
         val text=if(s.reason.isNotEmpty())ScanStatusText.reason(s.reason)else if(s.total>0)"Źródła z próbą ${maxOf(s.attempted,s.done)}/${s.total} • do ponowienia: ${s.retrying} • posty ${s.posts} • zdjęcia ${s.photos}"else "Otwórz aplikację, aby zobaczyć szczegóły."
-        val notification=Notification.Builder(context,CHANNEL).setSmallIcon(android.R.drawable.ic_menu_search).setContentTitle(title).setContentText(text).setStyle(Notification.BigTextStyle().bigText(text)).setContentIntent(intent).setOnlyAlertOnce(true).setOngoing(s.active).setVisibility(Notification.VISIBILITY_PRIVATE).setWhen(s.started).setShowWhen(s.started>0)
+        val notification=Notification.Builder(context,CHANNEL).setSmallIcon(android.R.drawable.ic_menu_search).setContentTitle(title).setContentText(text).setStyle(Notification.BigTextStyle().bigText(text+"\nPotwierdzenie pracy: "+ScanStatusText.time(s.heartbeat,ZoneId.systemDefault())+if(s.groupStarted>0&&s.active)" • źródło: "+((System.currentTimeMillis()-s.groupStarted).coerceAtLeast(0)/1000)+" s"else"")).setContentIntent(intent).setOnlyAlertOnce(true).setOngoing(s.active).setVisibility(Notification.VISIBILITY_PRIVATE).setWhen(s.heartbeat).setShowWhen(s.heartbeat>0)
         if(s.active)notification.setProgress(s.total,maxOf(s.attempted,s.done),s.total==0)
         manager.notify(NOTICE,notification.build())
     }}

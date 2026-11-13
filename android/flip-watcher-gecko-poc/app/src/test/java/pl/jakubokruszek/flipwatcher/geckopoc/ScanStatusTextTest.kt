@@ -5,6 +5,13 @@ import org.junit.Test
 import java.time.ZoneId
 
 class ScanStatusTextTest {
+    @Test fun heartbeatCannotHideAStalledSourcePastItsBudget(){
+        val now=1_800_000_000_000L
+        val state=ScanState(phase="LOADING",heartbeat=now,groupStarted=now-200_000,total=52,attempted=4)
+        assertEquals("Odczyt przekroczył limit — brak postępu",ScanStatusText.title(state,true,now,true))
+        assertEquals("Wczytywanie źródła",ScanStatusText.title(state.copy(groupStarted=now-30_000),true,now,true))
+        assertEquals("Zadanie uruchomione — brak świeżego potwierdzenia",ScanStatusText.title(state.copy(heartbeat=now-100_000),true,now,true))
+    }
     private val now=1_800_000_000_000L
     @Test fun interruptedRecoveryIsPendingAndOnlyKnownStopReasonsAreExplained(){
         assertEquals("Skan częściowy — oczekuje na ponowienie",ScanStatusText.title(ScanState(phase="RETRY",reason="INTERRUPTED"),true,now,false))

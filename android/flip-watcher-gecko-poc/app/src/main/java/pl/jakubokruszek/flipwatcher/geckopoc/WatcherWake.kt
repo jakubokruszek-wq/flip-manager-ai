@@ -24,6 +24,11 @@ internal object WatcherWake {
     private const val RETRY=92
     const val AT="expected_at"
     internal var runFactory:(Context)->WatcherAutomationRun={WatcherAutomationRun(it,UUID.randomUUID())}
+    /** Only invoked by a visible user action; no exact-alarm grant is needed. */
+    fun startManual(c:Context){
+        try{c.startForegroundService(Intent(c,WatcherAlarmService::class.java).putExtra("trigger","manual"))}
+        catch(_:Exception){WatcherScanStatus.checked(c,"MANUAL_FGS_START_REFUSED");WatcherAutomation.retry(c)}
+    }
     fun exact(context:Context)=Build.VERSION.SDK_INT<31||context.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
     private fun operation(c:Context,code:Int,at:Long)=PendingIntent.getBroadcast(c,code,Intent(c,WatcherAlarmReceiver::class.java).putExtra(AT,at),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     fun schedule(c:Context,at:Long,code:Int=CALENDAR):Boolean {
@@ -93,10 +98,16 @@ class WatcherAlarmService:Service(){
         val power=getSystemService(PowerManager::class.java)
         wake=power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"flipwatcher:automatic-scan").apply{setReferenceCounted(false);acquire(MAX_RUN_MS+30_000)}
         WatcherAutomation.preferences(this).edit().putLong("last_service_started",System.currentTimeMillis())
-            .putBoolean("last_service_screen_on",power.isInteractive).putBoolean("last_service_idle",power.isDeviceIdleMode).putString("last_start_trigger","exact_alarm_service").apply()
+            .putBoolean("last_service_screen_on",power.isInteractive).putBoolean("last_service_idle",power.isDeviceIdleMode).putString("last_start_trigger",if(intent?.getStringExtra("trigger")=="manual")"manual_service"else"exact_alarm_service").apply()
         task=scope.launch {
             try {
                 withTimeout(MAX_RUN_MS){
+                    // A tap in PocActivity starts the service while foreground;
+                    // its read-only progress screen is then opened. Wait for
+                    // browser ownership to be released before collecting.
+                    val uiUntil=android.os.SystemClock.elapsedRealtime()+30_000
+                    while(WatcherAutomation.uiVisible&&WatcherAutomation.enabled(this@WatcherAlarmService)&&android.os.SystemClock.elapsedRealtime()<uiUntil)delay(100)
+                    if(WatcherAutomation.uiVisible){WatcherScanStatus.checked(this@WatcherAlarmService,"WAITING_FOR_BACKGROUND");return@withTimeout}
                     do {
                         var continuation=false
                         val base=WatcherWake.runFactory(this@WatcherAlarmService)

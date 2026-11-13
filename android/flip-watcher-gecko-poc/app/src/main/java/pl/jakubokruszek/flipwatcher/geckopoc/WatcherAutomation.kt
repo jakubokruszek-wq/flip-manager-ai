@@ -49,7 +49,7 @@ object WatcherAutomation {
         enqueue(CONTINUATION_TAG,ExistingWorkPolicy.APPEND_OR_REPLACE,work)
         check(preferences(context).edit().putLong("continuation_at",System.currentTimeMillis()+CONTINUATION_DELAY_MS).commit())
     }
-    internal fun resume(context:Context,enqueue:(OneTimeWorkRequest)->Unit={WorkManager.getInstance(context).enqueue(it);Unit}){
+    internal fun resume(context:Context,enqueue:(OneTimeWorkRequest)->Unit={WatcherWake.startManual(context);Unit}){
         check(enabled(context)){"AUTOMATION_DISABLED"}
         val state=WatcherScanStatus.read(context)
         check(!(state.phase in setOf("DONE","PARTIAL")&&state.total>0&&state.done>=state.total)){"SCAN_ALREADY_FINISHED"}
@@ -113,7 +113,7 @@ object WatcherAutomation {
         check(enabled(context)){"AUTOMATION_DISABLED"}
         check(preferences(context).edit().putString("requested_scan",java.util.UUID.randomUUID().toString()).commit())
         WatcherScanStatus.request(context)
-        retry(context)
+        WatcherWake.startManual(context)
     }
     fun errorCode(error:Exception):String = when(error.javaClass.simpleName){
         "TimeoutCancellationException"->"SOURCE_TIMEOUT"
@@ -170,7 +170,7 @@ internal open class WatcherAutomationRun(val applicationContext:Context,val id:j
         return withContext(Dispatchers.IO){
             WatcherOutbox(context).use { queue ->
                 val run=id.toString();var begun=false;var ticker:Job?=null
-                fun begin(){if(!begun){WatcherAutomation.preferences(context).edit().remove("continuation_at").apply();WatcherScanStatus.begin(context,run);begun=true;ticker=launch{while(isActive){WatcherScanStatus.beat(context,run);delay(5_000)}}}}
+                fun begin(){if(!begun){WatcherAutomation.preferences(context).edit().remove("continuation_at").apply();WatcherScanStatus.begin(context,run);begun=true;ticker=launch{var ticks=0;while(isActive){WatcherScanStatus.beat(context,run,++ticks%3==0);delay(5_000)}}}}
                 var budgetReached=false;var retryNeeded=false;var networkPaused=false;var lastIssue=""
                 try {
                     // Ordinary WorkManager jobs need no background-started foreground service.
