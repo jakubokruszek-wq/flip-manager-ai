@@ -164,7 +164,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                         if(windowReopened>0&&prefs.getString("completed_slot",null)==windowKey)
                             check(prefs.edit().remove("completed_slot").putBoolean("completed_capture_ok",false).commit())
                         // Diagnostics retry independently and never prevent business queue delivery.
-                        for(attempt in 0 until 3){val diagnostic=queue.nextReport(credentials.deviceId)?:break
+                        for(attempt in 0 until 3){val diagnostic=queue.nextReport(credentials.deviceId,if(RenderDiagnostics.enabled(context))slot else null)?:break
                             try{sendReport(credentials,diagnostic);queue.reportSent(diagnostic.id)}catch(_:Exception){break}}
                         val alreadyCompleted=requested==null&&prefs.getString("completed_slot",null)==slot
                         if(!scheduleDue&&!queue.hasDue(credentials.deviceId,System.currentTimeMillis())){WatcherScanStatus.checked(context,"WINDOW_NOT_DUE");return@withTimeout}
@@ -242,7 +242,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             // One bounded retry for degraded capture; do not spin forever on the same source.
                             if(SourceRetryPolicy.closeCapture(issue,prior)){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
                             else{lastIssue=issue;queue.log(issue)}
-                            val diagnostic=queue.nextReport(credentials.deviceId)
+                            val diagnostic=queue.nextReport(credentials.deviceId,if(RenderDiagnostics.enabled(context))slot else null)
                             if(diagnostic!=null)runCatching{sendReport(credentials,diagnostic);queue.reportSent(diagnostic.id)}
                             queue.log("SCAN_SAVED",result.rows.size)
                             updateCounts{it.copy(posts=it.posts+result.rows.size,photos=it.photos+result.photos.size)}
@@ -259,7 +259,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                 queue.log(lastIssue)
                                 WatcherScanSummary.source(context,slot,group,null,lastIssue)
                                 val hadAttempt=queue.attemptedSources(slot).contains(group.key)
-                                val evidence=WatcherCaptureReport.create(context,slot,run,group,null,lastIssue,android.os.SystemClock.elapsedRealtime()-groupClock,queue.transferCounts())
+                                val evidence=WatcherCaptureReport.create(context,slot,run,group,null,lastIssue,android.os.SystemClock.elapsedRealtime()-groupClock,queue.transferCounts(),(e as? RenderObservationFailure)?.stats?:emptyMap())
                                 runCatching{queue.report(credentials.deviceId,slot,group.key,evidence)}
                                 if(SourceRetryPolicy.closeFailure(lastIssue,hadAttempt)){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
                                 updateCounts{it.copy(phase="PREPARING",reason=lastIssue)}

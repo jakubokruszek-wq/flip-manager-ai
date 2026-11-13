@@ -19,7 +19,7 @@ class ProfileWatcherScan(private val context:Context){
     private suspend fun runTarget(source:WatcherGroup,target:String,fixture:Boolean,alive:()->Boolean,progress:(String)->Unit={},forceSurfaceRefresh:Boolean=false):SavedResult=withContext(Dispatchers.Main){
         require(source.type=="PROFILE")
         withTimeout(if(fixture)300_000 else 180_000){
-            val browser=GeckoSession();val channel=CollectorChannel(browser,fixtureMode=fixture);val images=DesktopThumbnails(50,profile=true)
+            val browser=GeckoSession();val observation=RenderDiagnostics.begin(context,"PROFILE");RenderDiagnostics.attach(browser,observation);var surfaceResets=0;val channel=CollectorChannel(browser,fixtureMode=fixture);val images=DesktopThumbnails(50,profile=true)
             var surface:BackgroundViewport?=null;var current:String?=null;var reading=false;val load=BackgroundDocumentLoad("PROFILE")
             fun live()=alive()&&load.reason==null
             fun rejection(raw:String):String?{
@@ -51,7 +51,7 @@ class ProfileWatcherScan(private val context:Context){
             try{
                 progress("LOADING");check(live())
                 channel.attach(GeckoHost.collectorExtension(context));DesktopSessionPreview.applyDesktop(browser)
-                browser.open(GeckoHost.runtime(context));surface=BackgroundViewport(browser);browser.setActive(true);browser.setFocused(true);browser.loadUri(target)
+                browser.open(GeckoHost.runtime(context));surface=BackgroundViewport(browser,observation);browser.setActive(true);browser.setFocused(true);browser.loadUri(target)
                 suspend fun awaitDocument(afterGeneration:Long?=null){
                     val until=android.os.SystemClock.elapsedRealtime()+if(fixture)90_000 else 35_000
                     while(live()&&android.os.SystemClock.elapsedRealtime()<until){
@@ -76,12 +76,11 @@ class ProfileWatcherScan(private val context:Context){
                 fun bound()=live()&&load.ready&&current==expected&&channel.connectionGeneration==generation&&channel.connectedUrl==expected
                 val renderUntil=android.os.SystemClock.elapsedRealtime()+5000
                 while(bound()&&checkNotNull(surface).renderedFrames<=framesBeforeReload&&android.os.SystemClock.elapsedRealtime()<renderUntil)delay(50)
-                var surfaceResets=0
                 var rendered=!forceSurfaceRefresh&&checkNotNull(surface).renderedFrames>framesBeforeReload
                 if(bound()&&!rendered){
                     // A background compositor can retain an idle render target after reload.
                     // Reattach once; only a real frame delivered to this NEW surface is proof.
-                    checkNotNull(surface).close();surface=BackgroundViewport(browser);surfaceResets++
+                    checkNotNull(surface).close();surface=BackgroundViewport(browser,observation);surfaceResets++
                     browser.setActive(true);browser.setFocused(true)
                     val freshUntil=android.os.SystemClock.elapsedRealtime()+5000
                     while(bound()&&checkNotNull(surface).renderedFrames==0&&android.os.SystemClock.elapsedRealtime()<freshUntil)delay(50)
@@ -103,7 +102,7 @@ class ProfileWatcherScan(private val context:Context){
                 val counters=checkNotNull(channel.viewportBridge).captureCounts
                 val keys=listOf("profileCaptureAttempts","profileCaptureInactive","profileCaptureAspect","profileCaptureFrame","profileCaptureLate","profileCaptureError","profileCapturePending","profileCaptureCommitted")
                 SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,reply.postTexts,reply.stats+keys.mapIndexed{i,key->key to counters[i]}.toMap()+mapOf("profileRenderedFrames" to checkNotNull(surface).renderedFrames,"profileSurfaceResets" to surfaceResets))
-            }finally{runCatching{channel.close()};runCatching{surface?.close()};images.clear();runCatching{browser.stop()};runCatching{browser.setActive(false)};runCatching{browser.close()}}
+            }catch(e:Exception){throw RenderDiagnostics.failure(context,"PROFILE",e,observation,surface,surfaceResets)}finally{runCatching{channel.close()};runCatching{surface?.close()};images.clear();runCatching{browser.stop()};runCatching{browser.setActive(false)};runCatching{browser.close()}}
         }
     }
 }

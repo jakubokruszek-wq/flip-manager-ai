@@ -161,7 +161,11 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
         writableDatabase.insertOrThrow("capture_reports",null,ContentValues().apply{put("id",id);put("device",device);put("slot",slot);put("source",source);put("body",seal(id,bytes))})
         writableDatabase.execSQL("DELETE FROM capture_reports WHERE rowid NOT IN (SELECT rowid FROM capture_reports ORDER BY rowid DESC LIMIT 256)")
     }
-    fun nextReport(device:String):Item?=readableDatabase.rawQuery("SELECT id,body FROM capture_reports WHERE device=? AND sent=0 ORDER BY rowid LIMIT 1",arrayOf(device)).use{if(!it.moveToFirst())null else Item(it.getString(0),open(it.getString(0),it.getBlob(1)),0)}
+    fun nextReport(device:String,preferredSlot:String?=null):Item? {
+        val sql=if(preferredSlot==null)"SELECT id,body FROM capture_reports WHERE device=? AND sent=0 ORDER BY rowid LIMIT 1"else"SELECT id,body FROM capture_reports WHERE device=? AND sent=0 ORDER BY (slot=?) DESC,CASE WHEN slot=? THEN rowid END DESC,rowid LIMIT 1"
+        val args=if(preferredSlot==null)arrayOf(device)else arrayOf(device,preferredSlot,preferredSlot)
+        return readableDatabase.rawQuery(sql,args).use{if(!it.moveToFirst())null else Item(it.getString(0),open(it.getString(0),it.getBlob(1)),0)}
+    }
     fun reportSent(id:String){writableDatabase.execSQL("UPDATE capture_reports SET sent=1 WHERE id=?",arrayOf(id))}
     fun cycleReports(slot:String):List<JSONObject> = readableDatabase.rawQuery("SELECT id,body FROM capture_reports WHERE rowid IN (SELECT MAX(rowid) FROM capture_reports WHERE slot=? GROUP BY source)",arrayOf(slot)).use{c->buildList{while(c.moveToNext())add(JSONObject(open(c.getString(0),c.getBlob(1))))}}
     fun log(code:String,count:Int=0) {

@@ -29,6 +29,8 @@ class BackgroundWatcherScan(private val context:Context) {
         withTimeout(if(fixture)300_000 else 180_000){
             check(alive())
             val browser=GeckoSession()
+            val observation=RenderDiagnostics.begin(context,"GROUP");RenderDiagnostics.attach(browser,observation)
+            var surfaceResets=0
             val images=DesktopThumbnails(50)
             progress("LOADING")
             var observer:Job?=null
@@ -60,7 +62,7 @@ class BackgroundWatcherScan(private val context:Context) {
             try {
                 channel.attach(GeckoHost.collectorExtension(context));check(live())
                 DesktopSessionPreview.applyDesktop(browser)
-                browser.open(GeckoHost.runtime(context));surface=BackgroundViewport(browser)
+                browser.open(GeckoHost.runtime(context));surface=BackgroundViewport(browser,observation)
                 browser.setActive(true);browser.setFocused(true);browser.loadUri(target)
                 val until=android.os.SystemClock.elapsedRealtime()+(if(fixture)90_000 else 35_000)
                 while(live()&&android.os.SystemClock.elapsedRealtime()<until){
@@ -77,11 +79,10 @@ class BackgroundWatcherScan(private val context:Context) {
                 fun documentReady()=live()&&load.ready&&current==actualTarget&&channel.connectionGeneration==initialGeneration&&channel.connectedUrl==actualTarget
                 val frameUntil=android.os.SystemClock.elapsedRealtime()+2500
                 while(!forceSurfaceRefresh&&documentReady()&&checkNotNull(surface).renderedFrames==0&&android.os.SystemClock.elapsedRealtime()<frameUntil)delay(50)
-                var surfaceResets=0
                 if(documentReady()&&(forceSurfaceRefresh||checkNotNull(surface).renderedFrames==0)){
                     // Match the proven profile recovery: only a delivered frame
                     // on the replacement surface counts as rendering evidence.
-                    checkNotNull(surface).close();surface=BackgroundViewport(browser);surfaceResets++
+                    checkNotNull(surface).close();surface=BackgroundViewport(browser,observation);surfaceResets++
                     browser.setActive(true);browser.setFocused(true)
                     val freshUntil=android.os.SystemClock.elapsedRealtime()+5000
                     while(documentReady()&&checkNotNull(surface).renderedFrames==0&&android.os.SystemClock.elapsedRealtime()<freshUntil)delay(50)
@@ -106,8 +107,8 @@ class BackgroundWatcherScan(private val context:Context) {
                 val counts=channel.lastViewportCaptureCounts
                 val keys=listOf("groupCaptureAttempts","groupCaptureInactive","groupCaptureAspect","groupCaptureFrame","groupCaptureLate","groupCaptureError","groupCapturePending","groupCaptureCommitted")
                 SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,checkNotNull(result.reply).postTexts,
-                    checkNotNull(result.reply).stats+keys.mapIndexed{i,key->key to counts.getOrElse(i){0}}.toMap()+mapOf("groupRenderedFrames" to checkNotNull(surface).renderedFrames,"groupSurfaceResets" to surfaceResets))
-            }finally {
+                    checkNotNull(result.reply).stats+keys.mapIndexed{i,key->key to counts.getOrElse(i){0}}.toMap()+mapOf("groupRenderedFrames" to checkNotNull(surface).renderedFrames,"groupSurfaceResets" to surfaceResets)+(if(fixture&&observation!=null&&RenderDiagnostics.enabled(context))observation.snapshot()else emptyMap()))
+            }catch(e:Exception){throw RenderDiagnostics.failure(context,"GROUP",e,observation,surface,surfaceResets)}finally {
                 observer?.cancel()
                 runCatching{channel.close()};runCatching{surface?.close()};images.clear()
                 runCatching{browser.stop()};runCatching{browser.setActive(false)};runCatching{browser.close()}
@@ -117,16 +118,17 @@ class BackgroundWatcherScan(private val context:Context) {
 }
 
 /** Render target, never a screenshot of another app. Only exact-bound image crops leave RAM. */
-internal class BackgroundViewport(private val browser:GeckoSession):WatcherViewport,AutoCloseable {
+internal class BackgroundViewport(private val browser:GeckoSession,private val observation:RenderObservation?=null):WatcherViewport,AutoCloseable {
     override val width=1080
     override val height=1920
     private var closed=false
     @Volatile internal var renderedFrames:Int=0;private set
     private val thread=HandlerThread("watcher-render").apply{start()}
     private val reader=ImageReader.newInstance(width,height,PixelFormat.RGBX_8888,2).apply{
-        setOnImageAvailableListener({reader->runCatching{reader.acquireLatestImage()?.let{image->renderedFrames=(renderedFrames+1).coerceAtMost(100_000_000);image.close()}}},Handler(thread.looper))
+        setOnImageAvailableListener({reader->runCatching{observation?.available();reader.acquireLatestImage()?.let{image->renderedFrames=(renderedFrames+1).coerceAtMost(100_000_000);observation?.acquired();image.close()}}.onFailure{observation?.acquisitionFailed(when(it){is IllegalStateException->1;is UnsupportedOperationException->2;is RuntimeException->3;else->4})}},Handler(thread.looper))
     }
     private val display=browser.acquireDisplay().apply{surfaceChanged(GeckoDisplay.SurfaceInfo.Builder(reader.surface).size(width,height).build())}
+    internal val surfaceValid get()=!closed&&reader.surface.isValid
     override val isShown get()=!closed
     override fun hasWindowFocus()=!closed
     override fun onGenericMotionEvent(event:MotionEvent):Boolean {if(closed)return false;browser.panZoomController.onMotionEvent(event);return true}

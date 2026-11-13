@@ -1024,6 +1024,12 @@ class PocActivity : ComponentActivity() {
                         output.text="Automat włączony. Po opuszczeniu aplikacji może wykonać zaległe okno. Godziny i dziennik są w panelu automatu."
                     }
                 }.create()
+            actions.addView(android.widget.CheckBox(this@PocActivity).apply{
+                tag="automation.render.diagnostics";text="Diagnostyka obrazu — maks. 30 minut";isSaveEnabled=false
+                isChecked=RenderDiagnostics.enabled(this@PocActivity)
+                setOnCheckedChangeListener{_,checked->RenderDiagnostics.set(this@PocActivity,checked)}
+            })
+            actions.addView(android.widget.TextView(this).apply{text="Opcjonalne liczniki obrazu, czasy i stan pamięci. Bez treści ofert, zdjęć i danych logowania. Sposób skanowania pozostaje taki sam.";textSize=13f})
             actions.addView(android.widget.Button(this@PocActivity).apply{text="Podgląd postępu na żywo";tag="automation.live.open";setOnClickListener{dialog.dismiss();startActivity(Intent(this@PocActivity,ScanStatusActivity::class.java))}})
             actions.addView(android.widget.Button(this@PocActivity).apply{text="Usuń zapisane przed datą…";tag="automation.cleanup";setOnClickListener{dialog.dismiss();askSavedCleanup()}})
             actions.addView(android.widget.Button(this@PocActivity).apply{text="Godziny skanów";tag="automation.edit";setOnClickListener{dialog.dismiss();editAutomationSchedule()}})
