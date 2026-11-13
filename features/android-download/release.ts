@@ -154,3 +154,13 @@ export const androidRelease105 = {
   path: "/api/android/flip-watcher-0.5.105.apk",
 } as const;
 export const androidRelease: AndroidRelease = androidRelease104;
+
+/** Alternative transport for Chrome downloads that stall while finalizing APK files. */
+export const androidZip105 = {
+  version: "0.5.105",
+  filename: "flip-watcher-0.5.105-arm64.zip",
+  bytes: 112162953,
+  sha256: "211169e3ac63324800dc2772a6bb188725748fcf029e9741a38b20b1f925758d",
+  source: "https://github.com/jakubokruszek-wq/flip-manager-ai/releases/download/gecko-poc-0.5.105/flip-watcher-0.5.105-arm64.zip",
+  path: "/api/android/flip-watcher-0.5.105.zip",
+} as const;

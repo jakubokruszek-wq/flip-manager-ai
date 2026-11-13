@@ -1,6 +1,6 @@
 import { exactStream } from "./exact-stream";
 import { androidRelease, type AndroidRelease } from "./release";
-function headers(apk:AndroidRelease) { return new Headers({ "Content-Type": "application/vnd.android.package-archive", "Content-Disposition": `attachment; filename="${apk.filename}"`, "Accept-Ranges": "bytes", ETag: `"sha256-${apk.sha256}"`, "Cache-Control": "public, max-age=86400, immutable", "X-Content-Type-Options": "nosniff" }); }
+function headers(apk:AndroidRelease) { return new Headers({ "Content-Type": apk.filename.endsWith(".zip") ? "application/zip" : "application/vnd.android.package-archive", "Content-Disposition": `attachment; filename="${apk.filename}"`, "Accept-Ranges": "bytes", ETag: `"sha256-${apk.sha256}"`, "Cache-Control": "public, max-age=86400, immutable", "X-Content-Type-Options": "nosniff" }); }
 /** Stream opaque APK bytes; never allocate the full 214 MB in phone JS or function memory. */
 export async function downloadApk(request: Request, apk:AndroidRelease=androidRelease): Promise<Response> {
   const etag=`"sha256-${apk.sha256}"`;
