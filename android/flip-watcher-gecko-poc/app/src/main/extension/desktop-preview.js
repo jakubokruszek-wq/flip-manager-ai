@@ -569,7 +569,7 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
   // Reserve time for final extraction and native delivery within the original deadline.
   // Reserve delivery time inside the existing grant; slow reloads must
   // shorten automatic scrolling instead of losing the entire final result.
-  const deliveryReserve=automatic?Math.min(8000,Math.max(1500,Math.floor((end-w.performance.now())/3))):1500;
+  const deliveryReserve=automatic?Math.min(8000,Math.max(0,end-w.performance.now())):1500;
   contextStage=10;const scrollStart=w.performance.now(),scrollEnd=m.gestureScroll===true&&!gestureTarget?scrollStart:Math.min(scrollStart+scrollMs,end-deliveryReserve);
   let noTargetStreak=0,lastTailAt=-Infinity,nativeFailures=0,lastMoved=null;const photoSlots=new Map(),viewport=baseline?null:w.FlipDesktopViewport;let mediaBindings=[];const snapshots=new Map(),textExpansions=new Set();
   model.stats.viewportModule=Number(!!viewport);
