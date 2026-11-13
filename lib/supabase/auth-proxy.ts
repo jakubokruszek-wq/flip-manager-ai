@@ -4,7 +4,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { safeReturnTo } from "@/features/auth/return-to";
 import { hardenedAuthCookieOptions } from "@/lib/supabase/auth-server";
 
-const PUBLIC_PATHS = new Set(["/login", "/auth/callback", "/api/build-info", "/android", "/api/android/flip-watcher-0.5.87.apk", "/api/android/flip-watcher-0.5.88.apk", "/api/android/flip-watcher-0.5.89.apk", "/api/android/flip-watcher-0.5.90.apk", "/api/android/flip-watcher-0.5.91.apk", "/api/android/flip-watcher-0.5.92.apk", "/api/android/flip-watcher-0.5.93.apk", "/api/android/flip-watcher-0.5.94.apk", "/api/android/flip-watcher-0.5.95.apk", "/api/android/flip-watcher-0.5.96.apk", "/api/android/flip-watcher-0.5.97.apk"]);
+const PUBLIC_PATHS = new Set(["/login", "/auth/callback", "/api/build-info", "/android", "/api/android/flip-watcher-0.5.87.apk", "/api/android/flip-watcher-0.5.88.apk", "/api/android/flip-watcher-0.5.89.apk", "/api/android/flip-watcher-0.5.90.apk", "/api/android/flip-watcher-0.5.91.apk", "/api/android/flip-watcher-0.5.92.apk", "/api/android/flip-watcher-0.5.93.apk", "/api/android/flip-watcher-0.5.94.apk", "/api/android/flip-watcher-0.5.95.apk", "/api/android/flip-watcher-0.5.96.apk", "/api/android/flip-watcher-0.5.97.apk", "/api/android/flip-watcher-0.5.98.apk"]);
 const MACHINE_API_PREFIXES = ["/api/collector/", "/api/facebook-worker/", "/api/olx-worker/", "/api/jobs/"];
 
 function isMachinePath(pathname: string): boolean {
