@@ -79,6 +79,7 @@ class WatcherClockReceiver:BroadcastReceiver(){
 class WatcherAlarmService:Service(){
     private val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
     private var task:Job?=null
+    @Volatile private var manualHandoff=false
     private var wake:PowerManager.WakeLock?=null
     private var stopped=WorkInfo.STOP_REASON_UNKNOWN
     override fun onBind(intent:Intent?):IBinder?=null
@@ -93,7 +94,10 @@ class WatcherAlarmService:Service(){
             .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).build()
         try{if(Build.VERSION.SDK_INT>=29)startForeground(93,notification,ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)else startForeground(93,notification)}
         catch(_:Exception){WatcherScanStatus.checked(this,"ALARM_FGS_START_REFUSED");WatcherAutomation.retry(this);stopSelf();return START_NOT_STICKY}
-        if(task?.isActive==true)return START_NOT_STICKY
+        if(task?.isActive==true){
+            if(intent?.getStringExtra("trigger")=="manual")manualHandoff=true
+            return START_NOT_STICKY
+        }
         running=true
         val power=getSystemService(PowerManager::class.java)
         wake=power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"flipwatcher:automatic-scan").apply{setReferenceCounted(false);acquire(MAX_RUN_MS+30_000)}
@@ -109,6 +113,7 @@ class WatcherAlarmService:Service(){
                     while(WatcherAutomation.uiVisible&&WatcherAutomation.enabled(this@WatcherAlarmService)&&android.os.SystemClock.elapsedRealtime()<uiUntil)delay(100)
                     if(WatcherAutomation.uiVisible){WatcherScanStatus.checked(this@WatcherAlarmService,"WAITING_FOR_BACKGROUND");return@withTimeout}
                     do {
+                        manualHandoff=false
                         var continuation=false
                         val base=WatcherWake.runFactory(this@WatcherAlarmService)
                         val run=object:WatcherAutomationRun(applicationContext,base.id){
@@ -124,7 +129,7 @@ class WatcherAlarmService:Service(){
                         }
                         val result=run.run(waitForLock=true)
                         if(result==Result.retry()){WatcherWake.retry(this@WatcherAlarmService);break}
-                        if(!continuation||!WatcherAutomation.enabled(this@WatcherAlarmService)||WatcherAutomation.uiVisible)break
+                        if((!continuation&&!manualHandoff)||!WatcherAutomation.enabled(this@WatcherAlarmService)||WatcherAutomation.uiVisible)break
                         delay(250)
                     }while(isActive)
                 }

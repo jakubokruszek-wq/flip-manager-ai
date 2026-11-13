@@ -31,19 +31,21 @@ class WatcherWakeInstrumentedTest {
         val server=LoopbackFixtureServer(pages=mapOf(path to "desktop-viewport")){name->runCatching{context.assets.open(name).bufferedReader().use{it.readText()}}.getOrNull()}
         val read=CompletableDeferred<SavedResult>()
         val startReading=CompletableDeferred<Unit>()
+        val entered=CompletableDeferred<Unit>()
+        val runs=java.util.concurrent.atomic.AtomicInteger()
         try {
             WatcherAutomation.configure(context,false)
             context.deleteDatabase("watcher-outbox-v1.db")
             prefs.edit().clear().putBoolean("enabled",false).putLong("schedule_since",0).commit()
             WatcherAutomation.uiVisible=false
-            WatcherWake.runFactory={c->object:WatcherAutomationRun(c,UUID.randomUUID()){
+            WatcherWake.runFactory={c->runs.incrementAndGet();object:WatcherAutomationRun(c,UUID.randomUUID()){
                 override fun credentials(context:Context)=WatcherLink.Credentials("12345678-1234-1234-1234-123456789012","unused-local-fixture")
                 override fun groups(credentials:WatcherLink.Credentials)=listOf(group)
                 override fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)="fixture-receipt"
                 override fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item){}
                 override suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult {
                     try{
-                        if(manual)startReading.await()
+                        if(manual){entered.complete(Unit);startReading.await()}
                         val value=BackgroundWatcherScan(c).runFixture("http://127.0.0.1:${server.port}$path"){WatcherAutomation.enabled(c)}
                         read.complete(value);return value
                     }catch(e:Throwable){
@@ -79,6 +81,9 @@ class WatcherWakeInstrumentedTest {
                     scenario.onActivity{a->a.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.widget.Button>("scan.resume").performClick()}
                     withTimeout(5000){while(!WatcherAlarmService.running||prefs.getString("last_start_trigger",null)!="manual_service")delay(50)}
                     assertEquals("manual_service",prefs.getString("last_start_trigger",null))
+                    withTimeout(5000){entered.await()}
+                    scenario.onActivity{a->a.findViewById<android.view.ViewGroup>(android.R.id.content).findViewWithTag<android.widget.Button>("scan.resume").performClick()}
+                    InstrumentationRegistry.getInstrumentation().waitForIdleSync()
                     shell("input keyevent KEYCODE_HOME");shell("input keyevent KEYCODE_SLEEP")
                     withTimeout(5000){while(power.isInteractive)delay(50)}
                 }
@@ -99,6 +104,7 @@ class WatcherWakeInstrumentedTest {
             if(manual){
                 assertEquals("manual_service",prefs.getString("last_start_trigger",null))
                 assertTrue(prefs.getString("capture_cycle","")!!.contains("/manual/"))
+                assertTrue("A repeated manual tap must be handed off without replaying completed sources",runs.get()>=2)
             }else{
                 assertFalse(prefs.getBoolean("last_service_screen_on",true))
                 assertTrue("Alarm should execute while device is still in Doze",prefs.getBoolean("last_service_idle",false))
