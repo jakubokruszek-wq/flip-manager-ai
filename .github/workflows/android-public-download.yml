@@ -39,3 +39,8 @@ jobs:
         env:
           ANDROID_APK_PUBLIC_CHECK: '1'
         run: node --experimental-strip-types --test features/android-download/zip-public-download.test.mjs
+      - name: Verify 096 comparison ZIP finishes in Chrome and preserves the tested APK
+        if: ${{ !cancelled() }}
+        env:
+          ANDROID_APK_PUBLIC_CHECK: '1'
+        run: node --experimental-strip-types --test features/android-download/comparison-106-public-download.test.mjs

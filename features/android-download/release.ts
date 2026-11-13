@@ -164,3 +164,13 @@ export const androidZip105 = {
   source: "https://github.com/jakubokruszek-wq/flip-manager-ai/releases/download/gecko-poc-0.5.105/flip-watcher-0.5.105-arm64.zip",
   path: "/api/android/flip-watcher-0.5.105.zip",
 } as const;
+
+/** Controlled 096 worker comparison; public default remains 104. */
+export const androidZip106 = {
+  version: "0.5.106",
+  filename: "flip-watcher-0.5.106-arm64.zip",
+  bytes: 112162693,
+  sha256: "1a4a1077d39ecc5f745075f2bf44c6f7a30b1c7c39bc35dc1118f7c569ebd6bd",
+  source: "https://github.com/jakubokruszek-wq/flip-manager-ai/releases/download/gecko-poc-0.5.106/flip-watcher-0.5.106-arm64.zip",
+  path: "/api/android/flip-watcher-0.5.106.zip",
+} as const;
