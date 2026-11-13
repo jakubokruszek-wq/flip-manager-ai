@@ -41,15 +41,11 @@ object ScanStatusText {
         "WATCHER_DEVICE_MISMATCH"->"Dane połączonego urządzenia nie zgadzają się z odpowiedzią Managera. Połącz ponownie Watchera."
         "NO_ACTIVE_GROUPS"->"Brak aktywnych grup. Zsynchronizuj grupy z Managerem."
         "ANDROID_FOREGROUND_START_DENIED"->"Android odmówił uruchomienia usługi w tle."
-        "MANUAL_FGS_START_REFUSED"->"Android odmówił uruchomienia ręcznego skanu. Postęp zachowano; ponów przyciskiem z otwartego podglądu."
-        "ALARM_FGS_START_REFUSED"->"Alarm dotarł, ale Android odmówił uruchomienia skanu. Sprawdź uprawnienia alarmów i ustawienia baterii aplikacji."
-        "ALARM_SERVICE_BUDGET"->"Zapisano postęp po osiągnięciu limitu czasu usługi; zaplanowano dalszy odczyt."
         "ANDROID_PERMISSION_DENIED"->"Android odmówił uprawnienia potrzebnego do pracy."
         "BATCH_CONTINUE"->"Partia osiągnęła limit czasu. Zaplanowano kontynuację tej samej próby, z zachowaniem postępu źródeł."
         "SOURCE_TIMEOUT"->"Źródło przekroczyło budżet czasu. Nie potwierdzono odczytu; automat przechodzi do kolejnych źródeł."
         "NETWORK_DNS_UNAVAILABLE"->"Nie można odnaleźć serwera Facebooka (DNS). Skan czeka na ponowienie z narastającym odstępem; nie pomija kolejnych źródeł."
         "SLOT_PARTIAL"->"Cykl został wykonany z brakami odczytu. Szczegóły są zachowane w diagnostyce; następny termin ponowi odczyt."
-        "RENDERER_UNAVAILABLE"->"Wstrzymano po trzech kolejnych błędach obrazu strony. Pozostałe źródła nie zostały odczytane. Kolejka i wyniki są zachowane; nie uruchamiamy ponowień w pętli."
         "CAPTURE_PARTIAL"->"Cykl zakończony z brakami. Konkretne przyczyny i liczby dla źródeł są powyżej."
         "SALE_PHOTO_MISSING"->"Brakuje zdjęć części ofert. Wyniki zachowano; ten brak nie powoduje ponownego skanowania całego źródła."
         "PAGE_HIDDEN","NO_POST_EVIDENCE","SCROLL_NOT_CONFIRMED","CAPTURE_NOT_MEASURED"->"Odczyt źródła nie został potwierdzony ($code). Zaplanowano jedno ponowienie."
@@ -68,7 +64,6 @@ object ScanStatusText {
     fun title(s:ScanState,enabled:Boolean,now:Long,running:Boolean?):String=when {
         !enabled->"Automat wyłączony"
         s.active&&now-s.heartbeat>90_000->if(running==true)"Zadanie uruchomione — brak świeżego potwierdzenia"else"Brak potwierdzenia dalszej pracy"
-        s.active&&s.groupStarted>0&&s.phase in setOf("LOADING","READING","OCR")&&now-s.groupStarted>190_000->"Odczyt przekroczył limit — brak postępu"
         s.phase=="QUEUED"->"Skan zlecony — oczekuje na uruchomienie"
         s.phase=="PREPARING"->"Przygotowanie skanu"
         s.phase=="UPLOADING"->"Wysyłanie zapisanych ofert"
@@ -139,7 +134,7 @@ object WatcherScanStatus {
     fun resume(context:Context)=change(context){s->if(s.active&&System.currentTimeMillis()-s.heartbeat<90_000)s else s.copy(phase="QUEUED",reason="",changed=System.currentTimeMillis())}
     fun begin(context:Context,id:String)=change(context){s->val now=System.currentTimeMillis();ScanState(run=id,phase="PREPARING",started=now,changed=now,heartbeat=now,lastSuccess=s.lastSuccess,checked=now)}
     fun update(context:Context,id:String,f:(ScanState)->ScanState)=change(context){s->if(s.run!=id||s.ended>0)s else f(s).copy(changed=System.currentTimeMillis(),heartbeat=System.currentTimeMillis())}
-    fun beat(context:Context,id:String,refreshNotification:Boolean=false)=change(context,refreshNotification){s->if(s.run==id&&s.active)s.copy(heartbeat=System.currentTimeMillis())else s}
+    fun beat(context:Context,id:String)=change(context,false){s->if(s.run==id&&s.active)s.copy(heartbeat=System.currentTimeMillis())else s}
     fun finish(context:Context,id:String,phase:String,reason:String=""):ScanState { return change(context){s->if(s.run!=id)s else {if(phase in setOf("DONE","PARTIAL"))WatcherScanSummary.finish(context);val now=System.currentTimeMillis();s.copy(phase=phase,reason=reason,ended=now,changed=now,heartbeat=now,lastSuccess=if(phase=="DONE")now else s.lastSuccess)}} }
     fun checked(context:Context,reason:String)=change(context,false){it.copy(checked=System.currentTimeMillis(),skipped=reason)}
     fun quiet(context:Context){runCatching{context.getSystemService(NotificationManager::class.java).cancel(NOTICE)}}
@@ -151,7 +146,7 @@ object WatcherScanStatus {
         val intent=PendingIntent.getActivity(context,NOTICE,Intent(context,ScanStatusActivity::class.java),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val title=ScanStatusText.title(s,true,System.currentTimeMillis(),true)
         val text=if(s.reason.isNotEmpty())ScanStatusText.reason(s.reason)else if(s.total>0)"Źródła z próbą ${maxOf(s.attempted,s.done)}/${s.total} • do ponowienia: ${s.retrying} • posty ${s.posts} • zdjęcia ${s.photos}"else "Otwórz aplikację, aby zobaczyć szczegóły."
-        val notification=Notification.Builder(context,CHANNEL).setSmallIcon(android.R.drawable.ic_menu_search).setContentTitle(title).setContentText(text).setStyle(Notification.BigTextStyle().bigText(text+"\nPotwierdzenie pracy: "+ScanStatusText.time(s.heartbeat,ZoneId.systemDefault())+if(s.groupStarted>0&&s.active)" • źródło: "+((System.currentTimeMillis()-s.groupStarted).coerceAtLeast(0)/1000)+" s"else"")).setContentIntent(intent).setOnlyAlertOnce(true).setOngoing(s.active).setVisibility(Notification.VISIBILITY_PRIVATE).setWhen(s.heartbeat).setShowWhen(s.heartbeat>0)
+        val notification=Notification.Builder(context,CHANNEL).setSmallIcon(android.R.drawable.ic_menu_search).setContentTitle(title).setContentText(text).setStyle(Notification.BigTextStyle().bigText(text)).setContentIntent(intent).setOnlyAlertOnce(true).setOngoing(s.active).setVisibility(Notification.VISIBILITY_PRIVATE).setWhen(s.started).setShowWhen(s.started>0)
         if(s.active)notification.setProgress(s.total,maxOf(s.attempted,s.done),s.total==0)
         manager.notify(NOTICE,notification.build())
     }}
@@ -166,19 +161,14 @@ object WatcherScanStatus {
             val m=WorkManager.getInstance(context)
             (listOf("watcher-calendar-v1","watcher-retry-v1","watcher-background-kick-v2").flatMap{m.getWorkInfosForUniqueWork(it).get(2,TimeUnit.SECONDS)}+m.getWorkInfosByTag("watcher-window-v2").get(2,TimeUnit.SECONDS)+m.getWorkInfosByTag(WatcherAutomation.CONTINUATION_TAG).get(2,TimeUnit.SECONDS)).distinctBy{it.id}.filter{!it.state.isFinished}
         }.getOrNull()
-        val running=if(WatcherAlarmService.running)true else infos?.any{it.state==WorkInfo.State.RUNNING}
-        val work=when {WatcherAlarmService.running->"usługa skanu aktywna";infos==null->"nie udało się odczytać stanu";running==true->"zadanie uruchomione";infos.any{it.state==WorkInfo.State.ENQUEUED}->"zadanie oczekuje; dokładny powód opóźnienia nie jest udostępniany";infos.any{it.state==WorkInfo.State.BLOCKED}->"zadanie zablokowane zależnością";else->"brak oczekującego zadania"}
+        val running=infos?.any{it.state==WorkInfo.State.RUNNING}
+        val work=when {infos==null->"nie udało się odczytać stanu";running==true->"zadanie uruchomione";infos.any{it.state==WorkInfo.State.ENQUEUED}->"zadanie oczekuje; dokładny powód opóźnienia nie jest udostępniany";infos.any{it.state==WorkInfo.State.BLOCKED}->"zadanie zablokowane zależnością";else->"brak oczekującego zadania"}
         val next=AutomationPolicy.next(Instant.ofEpochMilli(now),ZoneId.systemDefault(),WatcherAutomation.schedule(context)).toEpochMilli()
         val window=AutomationPolicy.current(Instant.ofEpochMilli(now),ZoneId.systemDefault(),WatcherAutomation.schedule(context))
         val prefs=WatcherAutomation.preferences(context)
         val due=enabled&&window.at.toEpochMilli()>=prefs.getLong("schedule_since",0)&&prefs.getString("completed_slot",null)!=WatcherCaptureReport.cycle(window.key)
         val state=read(context);val continuation=prefs.getLong("continuation_at",0)
         val plan=if(enabled&&!state.active&&continuation>0)"\nPlan wznowienia tej samej próby: "+ScanStatusText.time(continuation,ZoneId.systemDefault())+". Android może opóźnić start; możesz użyć przycisku wznowienia."else ""
-        val wake=buildString{
-            append("\n"+WatcherWake.description(context))
-            if(prefs.getLong("last_alarm_received",0)>0)append("\nAlarm — plan: "+ScanStatusText.time(prefs.getLong("last_alarm_expected",0),ZoneId.systemDefault())+" • odebrano: "+ScanStatusText.time(prefs.getLong("last_alarm_received",0),ZoneId.systemDefault()))
-            if(prefs.getLong("last_service_started",0)>0)append("\nStart usługi: "+ScanStatusText.time(prefs.getLong("last_service_started",0),ZoneId.systemDefault())+" • ekran "+if(prefs.getBoolean("last_service_screen_on",true))"włączony"else"wygaszony")
-        }
-        return ScanStatusText.details(state,enabled,now,next,network,notifications,work,running,pendingWindow=if(due)window.at.toEpochMilli()else 0)+plan+wake+"\n\n"+WatcherScanSummary.text(context,includeSources=false)
+        return ScanStatusText.details(state,enabled,now,next,network,notifications,work,running,pendingWindow=if(due)window.at.toEpochMilli()else 0)+plan+"\n\n"+WatcherScanSummary.text(context,includeSources=false)
     }
 }

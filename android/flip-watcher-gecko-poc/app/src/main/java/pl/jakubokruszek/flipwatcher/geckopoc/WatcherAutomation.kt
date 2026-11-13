@@ -2,7 +2,6 @@ package pl.jakubokruszek.flipwatcher.geckopoc
 
 import android.content.Context
 import androidx.work.*
-import androidx.work.ListenableWorker.Result
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
@@ -49,12 +48,11 @@ object WatcherAutomation {
         enqueue(CONTINUATION_TAG,ExistingWorkPolicy.APPEND_OR_REPLACE,work)
         check(preferences(context).edit().putLong("continuation_at",System.currentTimeMillis()+CONTINUATION_DELAY_MS).commit())
     }
-    internal fun resume(context:Context,enqueue:(OneTimeWorkRequest)->Unit={WatcherWake.startManual(context);Unit}){
+    internal fun resume(context:Context,enqueue:(OneTimeWorkRequest)->Unit={WorkManager.getInstance(context).enqueue(it);Unit}){
         check(enabled(context)){"AUTOMATION_DISABLED"}
         val state=WatcherScanStatus.read(context)
         check(!(state.phase in setOf("DONE","PARTIAL")&&state.total>0&&state.done>=state.total)){"SCAN_ALREADY_FINISHED"}
         // Preserve the pending manual cycle and every durable source receipt.
-        check(preferences(context).edit().remove("renderer_paused_cycle").remove("renderer_paused_window").commit())
         enqueue(OneTimeWorkRequestBuilder<WatcherAutomationWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .addTag(CONTINUATION_TAG).build())
@@ -72,7 +70,6 @@ object WatcherAutomation {
     fun scheduleNext(context:Context){
         if(!enabled(context))return
         val now=Instant.now();val at=AutomationPolicy.next(now,ZoneId.systemDefault(),schedule(context))
-        WatcherWake.schedule(context,at.toEpochMilli())
         val work=OneTimeWorkRequestBuilder<WatcherAutomationWorker>()
             .setInitialDelay((at.toEpochMilli()-now.toEpochMilli()).coerceAtLeast(0),TimeUnit.MILLISECONDS)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
@@ -89,8 +86,6 @@ object WatcherAutomation {
             manager.enqueueUniquePeriodicWork("watcher-calendar-v1",ExistingPeriodicWorkPolicy.KEEP,work)
             scheduleNext(context);retry(context)
         }else{
-            WatcherWake.cancel(context)
-            context.stopService(android.content.Intent(context,WatcherAlarmService::class.java))
             WatcherScanStatus.quiet(context)
             manager.cancelUniqueWork("watcher-calendar-v1");manager.cancelUniqueWork("watcher-retry-v1")
             manager.cancelUniqueWork("watcher-background-kick-v2");manager.cancelAllWorkByTag(WINDOW_TAG)
@@ -114,7 +109,7 @@ object WatcherAutomation {
         check(enabled(context)){"AUTOMATION_DISABLED"}
         check(preferences(context).edit().putString("requested_scan",java.util.UUID.randomUUID().toString()).commit())
         WatcherScanStatus.request(context)
-        WatcherWake.startManual(context)
+        retry(context)
     }
     fun errorCode(error:Exception):String = when(error.javaClass.simpleName){
         "TimeoutCancellationException"->"SOURCE_TIMEOUT"
@@ -137,32 +132,9 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
     internal open fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=WatcherUpload.report(credentials,item)
     internal open fun groups(credentials:WatcherLink.Credentials)=WatcherLink.sources(credentials,verifyDevice=true)
     internal open suspend fun scan(group:WatcherGroup,progress:(String)->Unit)=if(group.type=="PROFILE")ProfileWatcherScan(applicationContext).run(group,{!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(applicationContext)},progress)else BackgroundWatcherScan(applicationContext).run(group,{!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(applicationContext)},progress)
-    override suspend fun doWork():Result = object:WatcherAutomationRun(applicationContext,id){
-        override fun interruptionReason()=this@WatcherAutomationWorker.interruptionReason()
-        override fun recoverInterrupted(context:Context)=this@WatcherAutomationWorker.recoverInterrupted(context)
-        override fun continueScan(context:Context)=this@WatcherAutomationWorker.continueScan(context)
-        override fun sourceTimeoutMs(remaining:Long)=this@WatcherAutomationWorker.sourceTimeoutMs(remaining)
-        override fun credentials(context:Context)=this@WatcherAutomationWorker.credentials(context)
-        override fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=this@WatcherAutomationWorker.send(credentials,item)
-        override fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=this@WatcherAutomationWorker.sendReport(credentials,item)
-        override fun groups(credentials:WatcherLink.Credentials)=this@WatcherAutomationWorker.groups(credentials)
-        override suspend fun scan(group:WatcherGroup,progress:(String)->Unit)=this@WatcherAutomationWorker.scan(group,progress)
-    }.run()
-}
-
-internal open class WatcherAutomationRun(val applicationContext:Context,val id:java.util.UUID) {
-    internal open fun interruptionReason()=WorkInfo.STOP_REASON_UNKNOWN
-    internal open fun recoverInterrupted(context:Context)=WatcherAutomation.recoverInterrupted(context)
-    internal open fun continueScan(context:Context)=WatcherAutomation.continuation(context)
-    internal open fun sourceTimeoutMs(remaining:Long)=minOf(175_000L,(remaining-30_000L).coerceAtLeast(1L))
-    internal open fun credentials(context:Context)=WatcherLink.load(context)
-    internal open fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=WatcherUpload.send(credentials,item)
-    internal open fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=WatcherUpload.report(credentials,item)
-    internal open fun groups(credentials:WatcherLink.Credentials)=WatcherLink.sources(credentials,verifyDevice=true)
-    internal open suspend fun scan(group:WatcherGroup,progress:(String)->Unit)=if(group.type=="PROFILE")ProfileWatcherScan(applicationContext).run(group,{!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(applicationContext)},progress)else BackgroundWatcherScan(applicationContext).run(group,{!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(applicationContext)},progress)
-    suspend fun run(waitForLock:Boolean=false):Result {
+    override suspend fun doWork():Result {
         // A duplicate calendar/kick must not spend its job budget waiting behind another scan.
-        if(waitForLock)WatcherAutomation.lock.lock() else if(!WatcherAutomation.lock.tryLock())return Result.success()
+        if(!WatcherAutomation.lock.tryLock())return Result.success()
         return try{runWork()}finally{WatcherAutomation.lock.unlock()}
     }
     private suspend fun runWork():Result {
@@ -171,8 +143,8 @@ internal open class WatcherAutomationRun(val applicationContext:Context,val id:j
         return withContext(Dispatchers.IO){
             WatcherOutbox(context).use { queue ->
                 val run=id.toString();var begun=false;var ticker:Job?=null
-                fun begin(){if(!begun){WatcherAutomation.preferences(context).edit().remove("continuation_at").apply();WatcherScanStatus.begin(context,run);begun=true;ticker=launch{var ticks=0;while(isActive){WatcherScanStatus.beat(context,run,++ticks%3==0);delay(5_000)}}}}
-                var budgetReached=false;var retryNeeded=false;var networkPaused=false;var rendererPaused=false;var renderFailures=0;var lastIssue=""
+                fun begin(){if(!begun){WatcherAutomation.preferences(context).edit().remove("continuation_at").apply();WatcherScanStatus.begin(context,run);begun=true;ticker=launch{while(isActive){WatcherScanStatus.beat(context,run);delay(5_000)}}}}
+                var budgetReached=false;var retryNeeded=false;var networkPaused=false;var lastIssue=""
                 try {
                     // Ordinary WorkManager jobs need no background-started foreground service.
                     // Stay below the ten-minute job limit and resume from durable group receipts.
@@ -239,12 +211,6 @@ internal open class WatcherAutomationRun(val applicationContext:Context,val id:j
                             WatcherScanStatus.update(context,run){change(it).copy(total=groups.size,done=counts.closed,attempted=counts.attempted,retrying=counts.retrying)}
                         }
                         updateCounts()
-                        // A queued watchdog/UI kick cannot immediately defeat the circuit breaker.
-                        // Explicit resume clears this latch; the next calendar window can try again.
-                        if(prefs.getString("renderer_paused_cycle",null)==slot&&prefs.getString("renderer_paused_window",null)==windowKey){
-                            WatcherScanStatus.finish(context,run,"PARTIAL","RENDERER_UNAVAILABLE")
-                            return@withTimeout
-                        }
                         for(group in ordered){
                             currentCoroutineContext().ensureActive()
                             if(WatcherAutomation.uiVisible||!WatcherAutomation.enabled(context))break
@@ -269,7 +235,6 @@ internal open class WatcherAutomationRun(val applicationContext:Context,val id:j
                                 queue.enqueue(credentials.deviceId,group,result)
                             }
                             val issue=WatcherCaptureReport.issue(scanned)
-                            renderFailures=0
                             WatcherScanSummary.source(context,slot,group,result.rows.size,issue)
                             val prior=queue.attemptedSources(slot).contains(group.key)
                             val evidence=WatcherCaptureReport.create(context,slot,run,group,scanned,issue,android.os.SystemClock.elapsedRealtime()-groupClock,queue.transferCounts())
@@ -294,14 +259,10 @@ internal open class WatcherAutomationRun(val applicationContext:Context,val id:j
                                 queue.log(lastIssue)
                                 WatcherScanSummary.source(context,slot,group,null,lastIssue)
                                 val hadAttempt=queue.attemptedSources(slot).contains(group.key)
-                                val evidence=WatcherCaptureReport.create(context,slot,run,group,null,lastIssue,android.os.SystemClock.elapsedRealtime()-groupClock,queue.transferCounts(),(e as? RenderEvidenceFailure)?.stats?:emptyMap())
+                                val evidence=WatcherCaptureReport.create(context,slot,run,group,null,lastIssue,android.os.SystemClock.elapsedRealtime()-groupClock,queue.transferCounts())
                                 runCatching{queue.report(credentials.deviceId,slot,group.key,evidence)}
-                                val renderFailure=lastIssue in setOf("GROUP_RENDER_RETRY_FAILED","PROFILE_RENDER_RETRY_FAILED")
-                                renderFailures=if(renderFailure)renderFailures+1 else 0
-                                rendererPaused=renderFailures>=3
-                                if(!rendererPaused&&SourceRetryPolicy.closeFailure(lastIssue,hadAttempt)){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
+                                if(SourceRetryPolicy.closeFailure(lastIssue,hadAttempt)){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
                                 updateCounts{it.copy(phase="PREPARING",reason=lastIssue)}
-                                if(rendererPaused){check(prefs.edit().putString("renderer_paused_cycle",slot).putString("renderer_paused_window",windowKey).commit());queue.log("RENDERER_UNAVAILABLE");break}
                                 if(SourceRetryPolicy.pauseForNetwork(lastIssue)){networkPaused=true;break}
                                 // A single unavailable group cannot starve every later source.
                                 if(e.message in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA"))break
@@ -315,8 +276,8 @@ internal open class WatcherAutomationRun(val applicationContext:Context,val id:j
                             if(allDone&&requested!=null&&prefs.getString("requested_scan",null)==requested)
                                 check(prefs.edit().remove("requested_scan").commit())
                         }
-                        retryNeeded=!rendererPaused&&!networkPaused&&!allDone&&!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(context)&&groups.isNotEmpty()&&lastIssue !in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA")
-                        val reason=when{!WatcherAutomation.enabled(context)->"AUTOMATION_DISABLED";WatcherAutomation.uiVisible->"WAITING_FOR_BACKGROUND";rendererPaused->"RENDERER_UNAVAILABLE";networkPaused->"NETWORK_DNS_UNAVAILABLE";budgetReached->"BATCH_CONTINUE";allDone&&!captureOk->"CAPTURE_PARTIAL";else->lastIssue}
+                        retryNeeded=!networkPaused&&!allDone&&!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(context)&&groups.isNotEmpty()&&lastIssue !in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA")
+                        val reason=when{!WatcherAutomation.enabled(context)->"AUTOMATION_DISABLED";WatcherAutomation.uiVisible->"WAITING_FOR_BACKGROUND";networkPaused->"NETWORK_DNS_UNAVAILABLE";budgetReached->"BATCH_CONTINUE";allDone&&!captureOk->"CAPTURE_PARTIAL";else->lastIssue}
                         val phase=when{!WatcherAutomation.enabled(context)->"ERROR";allDone&&captureOk->"DONE";allDone->"PARTIAL";WatcherAutomation.uiVisible->"WAITING_UI";networkPaused||budgetReached||retryNeeded->"RETRY";else->"PARTIAL"}
                         WatcherScanStatus.finish(context,run,phase,reason)
                     }

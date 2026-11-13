@@ -29,8 +29,7 @@ internal object BackgroundLoadRetry {
             }catch(e:Exception){
                 if(e is CancellationException)throw e
                 val reason=e.message.orEmpty()
-                val transientRead=prefix=="GROUP"&&reason in setOf("SCAN_PORT_LOST","SCAN_DEADLINE_READING")
-                val retryable=transientRead||reason=="${prefix}_NOT_READY"||reason=="${prefix}_RENDER_RETRY_FAILED"||reason=="${prefix}_LOAD_ERROR"||reason.startsWith("${prefix}_LOAD_ERROR_")
+                val retryable=reason=="${prefix}_NOT_READY"||reason=="${prefix}_RENDER_RETRY_FAILED"||reason=="${prefix}_LOAD_ERROR"||reason.startsWith("${prefix}_LOAD_ERROR_")
                 if(index==1||!retryable||!alive())throw e
                 progress("LOADING");pause()
                 if(!alive())throw e

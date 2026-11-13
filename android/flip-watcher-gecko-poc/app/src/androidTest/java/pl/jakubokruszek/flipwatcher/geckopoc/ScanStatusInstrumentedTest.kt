@@ -133,34 +133,6 @@ class ScanStatusInstrumentedTest {
         assertNull(WatcherAutomation.preferences(context).getString("requested_scan",null))
         assertEquals(2,calls.count{it==first.id});assertEquals(1,calls.count{it==second.id})
     }
-    @Test fun globalRendererFailureStopsBeforeWalkingEverySourceAndKeepsResumePoint()=runBlocking {
-        val sources=(1..52).map{WatcherGroup("12345$it","Źródło $it")}
-        val calls=mutableListOf<String>()
-        val result=worker(groups=sources){source,_->calls+=source.key;throw RenderEvidenceFailure("GROUP",0,1)}.doWork()
-        assertEquals(androidx.work.ListenableWorker.Result.success(),result)
-        assertEquals(sources.take(3).map{it.key},calls)
-        val status=WatcherScanStatus.read(context)
-        assertEquals("PARTIAL",status.phase);assertEquals("RENDERER_UNAVAILABLE",status.reason)
-        assertEquals(3,status.attempted);assertEquals(2,status.done);assertEquals(1,status.retrying)
-        assertEquals(0,continuations)
-        assertEquals("status-test",WatcherAutomation.preferences(context).getString("requested_scan",null))
-        worker(groups=sources){source,_->calls+=source.key;error("GROUP_RENDER_RETRY_FAILED")}.doWork()
-        assertEquals(3,calls.size) // A duplicate watchdog does not reopen the failed renderer.
-        WatcherAutomation.resume(context){}
-        worker(groups=sources){source,_->calls+=source.key;error("GROUP_RENDER_RETRY_FAILED")}.doWork()
-        assertEquals(sources[2].key,calls[3]) // Explicit resume keeps the unfinished source.
-    }
-    @Test fun pixelEvidenceRejectsBlankWrongSizeAndAcceptsVisibleContent(){
-        val frame=android.graphics.Bitmap.createBitmap(1080,1920,android.graphics.Bitmap.Config.ARGB_8888)
-        try{
-            frame.eraseColor(android.graphics.Color.BLACK);assertFalse(BackgroundViewport.hasContent(frame))
-            frame.eraseColor(android.graphics.Color.WHITE);assertFalse(BackgroundViewport.hasContent(frame))
-            android.graphics.Canvas(frame).drawRect(100f,100f,900f,1800f,android.graphics.Paint().apply{color=android.graphics.Color.BLACK})
-            assertTrue(BackgroundViewport.hasContent(frame))
-        }finally{frame.recycle()}
-        val wrong=android.graphics.Bitmap.createBitmap(10,10,android.graphics.Bitmap.Config.ARGB_8888)
-        try{assertFalse(BackgroundViewport.hasContent(wrong))}finally{wrong.recycle()}
-    }
     @Test fun exhaustedRenderingClosesWithWarningWithoutReplayingTheWholeSource()=runBlocking {
         val first=WatcherGroups.configured[0]
         val calls=mutableListOf<String>()

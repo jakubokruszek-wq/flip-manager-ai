@@ -171,15 +171,15 @@ jobs:
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.JoinedGroupsInstrumentedTest
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ProfileWatcherInstrumentedTest
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#compactPocLayoutGivesBrowserMostOfScreenAndKeepsToolsOutsideViewport || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; adb logcat -d -b crash > logcat-crash.txt; exit 1)
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.PhotoBindingInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.GroupArchiveInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherLinkInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherPairingUiInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; adb logcat -d -b crash > logcat-crash.txt; exit 1)
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.DesktopConsentInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; adb logcat -d -b crash > logcat-crash.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#compactPocLayoutGivesBrowserMostOfScreenAndKeepsToolsOutsideViewport || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.PhotoBindingInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.GroupArchiveInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherLinkInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherPairingUiInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.DesktopConsentInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ArchiveProcessInstrumentedTest#a_seed || (adb logcat -d -s AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             adb -e shell am force-stop pl.jakubokruszek.flipwatcher.geckopoc
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ArchiveProcessInstrumentedTest#b_restore || (adb logcat -d -s AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             adb -e shell svc wifi disable
             adb -e shell svc data disable
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.OcrInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SavedOcrInstrumentedTest -Pandroid.testInstrumentationRunnerArguments.offlineOcr=1 || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; adb logcat -d -b crash > logcat-crash.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.OcrInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SavedOcrInstrumentedTest -Pandroid.testInstrumentationRunnerArguments.offlineOcr=1 || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             adb logcat -d -s GeckoPocTest:I > logcat-offline-tests.txt || true
 
       - name: Upload offline OCR reports
@@ -196,6 +196,14 @@ jobs:
       - name: Release the offline emulator disk before creating the fresh device
         if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-source-retry-budget'
         run: avdmanager delete avd --name gecko-ocr-offline
+      - name: Build both versions for the in-place rollback compatibility test
+        if: github.ref == 'refs/heads/codex/android-source-retry-budget'
+        run: |
+          echo "ORG_GRADLE_PROJECT_GECKO_POC_VERSION_CODE=$((8000 + ${{ github.run_number }}))" >> "$GITHUB_ENV"
+          git fetch --depth=1 origin 0695d78f2ab09302d6798234ed298da95bfe9534
+          git worktree add ../watcher-upgrade-102 FETCH_HEAD
+          (cd ../watcher-upgrade-102/android/flip-watcher-gecko-poc && ./gradlew --no-daemon assembleDebug -PGECKO_POC_VERSION_CODE=8686)
+          (cd android/flip-watcher-gecko-poc && ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest -PGECKO_POC_VERSION_CODE=$((8000 + ${{ github.run_number }})))
       - name: Complete worker, own-message and image-binding regressions on API 36
         if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-source-retry-budget'
         uses: reactivecircus/android-emulator-runner@v2
@@ -209,13 +217,20 @@ jobs:
           avd-name: gecko-schema-recovery
           force-avd-creation: true
           script: |
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherWakeInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; adb logcat -d -b crash > logcat-crash.txt; exit 1)
-            adb shell appops set pl.jakubokruszek.flipwatcher.geckopoc SCHEDULE_EXACT_ALARM default
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherManualInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#groupRecreatesStalledSurfaceAndRequiresActualFrameBeforeReading,pl.jakubokruszek.flipwatcher.geckopoc.ProfileWatcherInstrumentedTest#renewedProfileSurfaceRequiresNewFramesAndKeepsActualOwnPhotos || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; adb logcat -d -b crash > logcat-crash.txt; exit 1)
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true '-Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#sourceTimeoutDoesNotStopLaterGroupsAndFailedGroupGetsOnlyOneRetry,pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#interruptionResumesSameCycleWithoutRescanningCompletedSource,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest#interruptionRecoveryIsUniqueDelayedNetworkConstrainedAndRespectsDisable' || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; adb logcat -d -b crash > logcat-crash.txt; exit 1)
-            if [ '${{ github.ref }}' = 'refs/heads/codex/android-source-retry-budget' ]; then ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#newSourceCountsIgnoreBodyVariantsRetriesAndHeldRows || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; adb logcat -d -b crash > logcat-crash.txt; exit 1); fi
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#calendarIgnoresOldRevisionAndManualCycleRechecksWhileDegradedReadGetsExactlyOneRetry,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherWakeInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; adb logcat -d -b crash > logcat-crash.txt; exit 1)
-            adb shell appops set pl.jakubokruszek.flipwatcher.geckopoc SCHEDULE_EXACT_ALARM default
+            if [ '${{ github.ref }}' = 'refs/heads/codex/android-source-retry-budget' ]; then
+              adb install -r ../../../watcher-upgrade-102/android/flip-watcher-gecko-poc/app/build/outputs/apk/debug/app-x86_64-debug.apk
+              adb install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+              adb shell am instrument -w -e class pl.jakubokruszek.flipwatcher.geckopoc.RollbackUpgradeInstrumentedTest#a_seedOn102 pl.jakubokruszek.flipwatcher.geckopoc.test/androidx.test.runner.AndroidJUnitRunner > rollback-seed.txt
+              cat rollback-seed.txt
+              grep -q 'OK (1 test)' rollback-seed.txt
+              adb install -r app/build/outputs/apk/debug/app-x86_64-debug.apk
+              adb shell am instrument -w -e class pl.jakubokruszek.flipwatcher.geckopoc.RollbackUpgradeInstrumentedTest#b_verifyAfterInPlaceUpdate pl.jakubokruszek.flipwatcher.geckopoc.test/androidx.test.runner.AndroidJUnitRunner > rollback-verify.txt
+              cat rollback-verify.txt
+              grep -q 'OK (1 test)' rollback-verify.txt
+            fi
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true '-Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#sourceTimeoutDoesNotStopLaterGroupsAndFailedGroupGetsOnlyOneRetry,pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#interruptionResumesSameCycleWithoutRescanningCompletedSource,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest#interruptionRecoveryIsUniqueDelayedNetworkConstrainedAndRespectsDisable' || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            if [ '${{ github.ref }}' = 'refs/heads/codex/android-source-retry-budget' ]; then ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#newSourceCountsIgnoreBodyVariantsRetriesAndHeldRows || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1); fi
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#calendarIgnoresOldRevisionAndManualCycleRechecksWhileDegradedReadGetsExactlyOneRetry,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
       - name: Online Gecko flow and full regression on API 36 (fresh device)
         if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-source-retry-budget'
         uses: reactivecircus/android-emulator-runner@v2
@@ -233,16 +248,16 @@ jobs:
             for network_attempt in $(seq 1 30); do if adb -e shell dumpsys connectivity | grep -Eq 'Active default network: [0-9]+'; then break; fi; sleep 1; done
             adb -e shell dumpsys connectivity | grep -Eq 'Active default network: [0-9]+'
             # Regression: session cleanup must not reenter Gecko's native port teardown.
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#integratedMainTransportUsesNativeConsentPrivateApiAndNestedFeedWithStopAndCleanRetry || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; adb logcat -d -b crash > logcat-crash.txt; exit 1)
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#integratedMainTransportUsesNativeConsentPrivateApiAndNestedFeedWithStopAndCleanRetry || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; adb logcat -d -b crash > logcat-crash.txt; exit 1)
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#integratedMainTransportUsesNativeConsentPrivateApiAndNestedFeedWithStopAndCleanRetry || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; adb logcat -d -b crash > logcat-crash.txt; exit 1)
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.FeedMessageInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ReviewDataInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ReviewReportInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SinglePhotoInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.PhotoBindingInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; adb logcat -d -b crash > logcat-crash.txt; exit 1)
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#loadMeasurementCountsTheWholeApprovedGroupLoad || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; adb logcat -d -b crash > logcat-crash.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#integratedMainTransportUsesNativeConsentPrivateApiAndNestedFeedWithStopAndCleanRetry || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#integratedMainTransportUsesNativeConsentPrivateApiAndNestedFeedWithStopAndCleanRetry || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#integratedMainTransportUsesNativeConsentPrivateApiAndNestedFeedWithStopAndCleanRetry || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.FeedMessageInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ReviewDataInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ReviewReportInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.SinglePhotoInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.PhotoBindingInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.GeckoFixtureTest#loadMeasurementCountsTheWholeApprovedGroupLoad || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             # Test persistence across pause/recreate inside each case, with a clean
             # disposable profile between independent instrumentation invocations.
             adb -e shell am force-stop pl.jakubokruszek.flipwatcher.geckopoc
             adb -e shell pm clear pl.jakubokruszek.flipwatcher.geckopoc | grep -q Success
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; adb logcat -d -b crash > logcat-crash.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             adb logcat -d -s GeckoPocTest:I > logcat-tests.txt || true
             adb exec-out run-as pl.jakubokruszek.flipwatcher.geckopoc cat files/consent-ui-compact-large.png > app/build/reports/androidTests/consent-ui-compact-large.png || true
             adb exec-out run-as pl.jakubokruszek.flipwatcher.geckopoc cat files/consent-ui-compact-expanded.png > app/build/reports/androidTests/consent-ui-compact-expanded.png || true
@@ -252,9 +267,7 @@ jobs:
 
       - name: Measurements from the run
         if: always()
-        run: |
-          cat android/flip-watcher-gecko-poc/logcat-tests.txt 2>/dev/null | tail -40 || true
-          cat android/flip-watcher-gecko-poc/logcat-crash.txt 2>/dev/null | tail -80 || true
+        run: cat android/flip-watcher-gecko-poc/logcat-tests.txt 2>/dev/null | tail -40 || true
 
       - name: Upload instrumented test reports
         if: always()
@@ -266,7 +279,6 @@ jobs:
           path: |
             android/flip-watcher-gecko-poc/app/build/reports/androidTests/
             android/flip-watcher-gecko-poc/logcat-tests.txt
-            android/flip-watcher-gecko-poc/logcat-crash.txt
           if-no-files-found: ignore
           retention-days: 14
 
@@ -611,8 +623,8 @@ jobs:
           NOTES
           gh release create gecko-poc-0.5.87 flip-watcher-0.5.87-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.87 — opisy i zdjęcia w automacie' --prerelease --notes-file release-notes.md
 
-  publish-tested-05101:
-    name: Publish tested Android 0.5.102
+  publish-tested-0597:
+    name: Publish tested Android 0.5.103
     if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-source-retry-budget'
     needs: [guard, build, instrumented, verified-apk]
     runs-on: ubuntu-24.04
@@ -631,19 +643,15 @@ jobs:
           test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-source-retry-budget --jq .object.sha)" = '${{ github.sha }}'
           apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
           test -n "$apk_path" && test -f "$apk_path"
-          cp "$apk_path" flip-watcher-0.5.102-arm64.apk
-          unzip -p flip-watcher-0.5.102-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.102")process.exit(1)})'
-          unzip -p flip-watcher-0.5.102-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
-          sha256sum flip-watcher-0.5.102-arm64.apk > SHA256SUMS
+          cp "$apk_path" flip-watcher-0.5.103-arm64.apk
+          unzip -p flip-watcher-0.5.103-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.103")process.exit(1)})'
+          unzip -p flip-watcher-0.5.103-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
+          sha256sum flip-watcher-0.5.103-arm64.apk > SHA256SUMS
           cat > release-notes.md <<'NOTES'
-          Android 0.5.102 — niezależna weryfikacja obrazu i przerwanie serii awarii.
-          Gdy ImageReader nie zgłasza klatek, sprawdza rzeczywiste piksele z Gecko capturePixels na tym samym potwierdzonym dokumencie. Pusty obraz nie otwiera odczytu. Po trzech kolejnych błędach obrazu zatrzymuje cykl i zachowuje kolejkę zamiast przechodzić pusto przez wszystkie źródła.
-          Przy braku klatki odnawia cel renderowania z rzeczywistym zatrzymaniem i wznowieniem kompozytora przed zgodą na odczyt; wymaga nowej klatki z nowej powierzchni. Automatyczne przewijanie pozostawia czas na odebranie wyniku w istniejącym limicie. Zerwanie portu i przekroczenie czasu odczytu dostają najwyżej jedną świeżą sesję w budżecie źródła. Kontrole grupy, dokumentu i powiązania zdjęć pozostają wymagane.
-          Powiadomienie odświeża potwierdzenie pracy co 15 sekund i ostrzega o przekroczeniu budżetu źródła. Test ręcznego wznowienia używa rzeczywistego odczytu Gecko ze zdjęciami przy zgaszonym ekranie, bez zgody na dokładne alarmy i bez zwolnienia z optymalizacji baterii.
-          Pierwszy odczyt czeka na potwierdzone połączenie natywne rozszerzenia, zanim otworzy zgodę na przeładowanie strony; rozłączenie przy inicjalizacji nie przerywa rozpoczętego odczytu.
-          Właściwy harmonogram korzysta z alarmu dokładnego (po zgodzie Alarmy i przypomnienia), uruchamia widoczną usługę skanu i zachowuje WorkManager jako mechanizm zapasowy. Wyświetla czas planowanego i odebranego alarmu oraz start usługi przy wygaszonym ekranie. Alarmy odtwarzają się po restarcie telefonu, zmianie czasu i aktualizacji. Test obejmuje rzeczywisty alarm, usługę i Gecko przy wymuszonym Doze.
+          Android 0.5.103 — powrót do kodu 0.5.97.
+          Wydanie odtwarza kod aplikacji 0.5.97 z wyższym numerem instalacyjnym, aby umożliwić aktualizację bez odinstalowania. Wraca również poprzedni harmonogram WorkManager; późniejsze dokładne alarmy i usługa skanu nie są częścią tej wersji.
           Nowy cykl zaczyna od źródła 1; kontynuacja wybiera pierwsze niedokończone źródło na podstawie zapisanych potwierdzeń. Błąd DNS wstrzymuje cykl bez zamykania nieodczytanych grup. Ponowienie korzysta z narastającego odstępu WorkManager. Wcześniejsze błędne potwierdzenia DNS są przywracane do oczekujących bez usuwania ofert.
           Brak zdjęć części ofert nie uruchamia ponownego skanu całej grupy. Wyczerpane dwie próby otwarcia strony nie uruchamiają kolejnej pary sesji. Pozostałe braki potwierdzenia odczytu mają najwyżej jedno ponowienie w cyklu. Ostrzeżenia i niepełny wynik są zachowane; zamknięcie źródła nie oznacza kompletnego odczytu.
           Dane, kolejka, klucze szyfrowania i sesja Facebooka pozostają zachowane. Instaluj jako aktualizację.
           NOTES
-          gh release create gecko-poc-0.5.102 flip-watcher-0.5.102-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.102 — weryfikacja obrazu i seria awarii' --prerelease --notes-file release-notes.md
+          gh release create gecko-poc-0.5.103 flip-watcher-0.5.103-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.103 — powrót do kodu 0.5.97' --prerelease --notes-file release-notes.md

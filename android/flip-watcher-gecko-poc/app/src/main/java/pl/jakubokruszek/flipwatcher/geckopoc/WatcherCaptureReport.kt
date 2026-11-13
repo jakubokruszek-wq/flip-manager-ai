@@ -18,14 +18,14 @@ object WatcherCaptureReport {
         if(value.rows.any{(DesktopSummary.eligible(it)||DesktopPresentation.reviewable(it))&&value.photos.none{p->p.postId==it.postId}})return "SALE_PHOTO_MISSING"
         return ""
     }
-    fun create(context:Context,cycle:String,run:String,group:WatcherGroup,value:SavedResult?,issue:String,elapsedMs:Long=0,queueStats:Map<String,Int> = emptyMap(),failureStats:Map<String,Int> = emptyMap()):JSONObject {
+    fun create(context:Context,cycle:String,run:String,group:WatcherGroup,value:SavedResult?,issue:String,elapsedMs:Long=0,queueStats:Map<String,Int> = emptyMap()):JSONObject {
         val power=context.getSystemService(PowerManager::class.java)
         return JSONObject().put("version",if(group.type=="PROFILE")2 else 1).apply{if(group.type=="PROFILE"){put("sourceType","PROFILE");put("sourceId",group.id)}}.put("batchId",UUID.randomUUID().toString()).put("scanId",run)
             .put("cycle",cycle).put("groupId",group.key).put("appVersion",BuildConfig.VERSION_NAME)
             .put("versionCode",BuildConfig.VERSION_CODE).put("issue",issue)
             .put("interactive",power.isInteractive).put("idle",power.isDeviceIdleMode)
             .put("batteryExempt",power.isIgnoringBatteryOptimizations(context.packageName))
-            .put("stats",JSONObject(value?.captureStats?:failureStats).apply{
+            .put("stats",JSONObject(value?.captureStats?:emptyMap<String,Int>()).apply{
                 if(elapsedMs>0)put("groupElapsedMs",elapsedMs.coerceAtMost(100_000_000L))
                 for((key,count)in queueStats)if(key in setOf("queuePending","queueBlocked","queueQualityHeld","queueSent")&&count in 0..100_000_000)put(key,count)
             })

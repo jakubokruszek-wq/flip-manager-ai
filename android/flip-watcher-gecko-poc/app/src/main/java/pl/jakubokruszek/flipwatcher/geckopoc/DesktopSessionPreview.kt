@@ -79,10 +79,6 @@ object DesktopSessionPreview {
                 if(currentUrl()!=expected||generation!=channel.connectionGeneration)return@withContext failure("NAVIGATION")
                 if(reply==null)return@withContext failure(if(channel.isConnected)"PROTOCOL" else "PORT_LOST")
                 if(reply.status=="WAIT_FRESH"){gate.waitFor(DesktopTrial.Phase.FRESHNESS);delay(200);continue}
-                if(fixture&&reply.reason=="CONTEXT"){
-                    val diagnosis=channel.structureDiagnosis(group,0)
-                    error("WAKE_CONTEXT status=${diagnosis?.status} counts=${diagnosis?.counts?.filterKeys{it.startsWith("ctx")}}")
-                }
                 if(reply.status!="OK")return@withContext failure(reply.reason.takeIf{it in DesktopTrial.reasons}?:"PROTOCOL",reply.takeIf{it.reason=="NOTICE_BLOCKED"})
                 if(reply.stats.getValue("desktop")!=1)return@withContext failure("DESKTOP_NOT_APPLIED")
                 if(!gate.complete())return@withContext failure(gate.reason)

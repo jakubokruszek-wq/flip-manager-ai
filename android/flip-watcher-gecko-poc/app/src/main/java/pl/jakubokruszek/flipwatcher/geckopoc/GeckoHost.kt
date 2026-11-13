@@ -2,12 +2,6 @@ package pl.jakubokruszek.flipwatcher.geckopoc
 
 import android.content.Context
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.async
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.mozilla.geckoview.GeckoResult
@@ -26,8 +20,6 @@ object GeckoHost {
     @Volatile private var runtime: GeckoRuntime? = null
     @Volatile private var extension: WebExtension? = null
     private val extensionLock = Mutex()
-    private val initializationScope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
-    private var installation:Deferred<WebExtension>?=null
     /** Port to the extension's background script (page-load measurement). */
     val background = BackgroundChannel()
 
@@ -52,20 +44,12 @@ object GeckoHost {
      */
     suspend fun collectorExtension(context: Context): WebExtension = extensionLock.withLock {
         extension?.let { return@withLock it }
-        // Activity recreation can cancel an awaiter while installBuiltIn still
-        // runs in Gecko. Keep that operation owned by the process: a second
-        // caller must await it, not reinstall and revoke another scan's grant.
-        val pending=installation?:initializationScope.async {
-            val installed=runtime(context.applicationContext).webExtensionController
-                .installBuiltIn(PocPolicy.EXTENSION_LOCATION).await()
-                ?:error("Rozszerzenie nie zostało zainstalowane")
-            extension=installed
-            background.attach(installed)
-            installed
-        }.also{installation=it}
-        try{pending.await()}
-        catch(e:CancellationException){if(installation===pending&&pending.isCancelled)installation=null;throw e}
-        catch(e:Exception){if(installation===pending&&pending.isCompleted)installation=null;throw e}
+        val installed = runtime(context).webExtensionController
+            .installBuiltIn(PocPolicy.EXTENSION_LOCATION)
+            .await() ?: error("Rozszerzenie nie zostało zainstalowane")
+        extension = installed
+        background.attach(installed)
+        installed
     }
 }
 

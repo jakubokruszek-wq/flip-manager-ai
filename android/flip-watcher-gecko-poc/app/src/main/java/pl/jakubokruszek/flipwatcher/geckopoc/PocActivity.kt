@@ -255,7 +255,7 @@ class PocActivity : ComponentActivity() {
             }
         }
     }
-    override fun onResume(){super.onResume();automationStatusDialog?.window?.decorView?.findViewWithTag<android.widget.TextView>("automation.wake.status")?.text=WatcherWake.description(this);if(WatcherAutomation.enabled(this))runCatching{WatcherAutomation.scheduleNext(this)};monitorAutomation();WatcherAutomation.uiVisible=true;if(!reviewWorking())runCatching{session?.setActive(true)};window.decorView.post{showSavedResult();showPendingPhotosReport();showPendingReviewReport();showPendingOcrReport();showPendingWatcherResult()}}
+    override fun onResume(){super.onResume();monitorAutomation();WatcherAutomation.uiVisible=true;if(!reviewWorking())runCatching{session?.setActive(true)};window.decorView.post{showSavedResult();showPendingPhotosReport();showPendingReviewReport();showPendingOcrReport();showPendingWatcherResult()}}
 
     override fun onPause() {
         automationLiveJob?.cancel();automationLiveJob=null
@@ -1030,11 +1030,6 @@ class PocActivity : ComponentActivity() {
             actions.addView(android.widget.Button(this@PocActivity).apply{
                 text="Skan teraz w tle";tag="automation.scan.now";isEnabled=enabled
                 setOnClickListener{closeSession();WatcherAutomation.requestScan(this@PocActivity);dialog.dismiss();output.text="Skan zlecony. Postęp jest w podglądzie na żywo i powiadomieniu.";startActivity(Intent(this@PocActivity,ScanStatusActivity::class.java))}
-            })
-            actions.addView(android.widget.TextView(this).apply{tag="automation.wake.status";text=WatcherWake.description(this@PocActivity)})
-            actions.addView(android.widget.Button(this@PocActivity).apply{
-                text="Alarmy i przypomnienia";tag="automation.wake.permission"
-                setOnClickListener{if(Build.VERSION.SDK_INT>=31)startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,Uri.parse("package:$packageName")))}
             })
             actions.addView(android.widget.Button(this@PocActivity).apply{
                 text="Ustawienia Androida";setOnClickListener{startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:$packageName")))}
