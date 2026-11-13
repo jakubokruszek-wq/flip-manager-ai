@@ -40,8 +40,13 @@ class WatcherWakeInstrumentedTest {
                 override fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)="fixture-receipt"
                 override fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item){}
                 override suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult {
-                    val value=BackgroundWatcherScan(c).runFixture("http://127.0.0.1:${server.port}$path"){WatcherAutomation.enabled(c)}
-                    read.complete(value);return value
+                    try{
+                        val value=BackgroundWatcherScan(c).runFixture("http://127.0.0.1:${server.port}$path"){WatcherAutomation.enabled(c)}
+                        read.complete(value);return value
+                    }catch(e:Throwable){
+                        android.util.Log.e("GeckoPocTest","WAKE_READ_FAILURE",e)
+                        read.completeExceptionally(e);throw e
+                    }
                 }
             }}
             shell("appops set ${context.packageName} SCHEDULE_EXACT_ALARM allow")
@@ -79,6 +84,7 @@ class WatcherWakeInstrumentedTest {
             val keys=setOf("enabled","scan_minutes","schedule_since","wake_alarm_at","wake_retry_at","last_alarm_expected","last_alarm_received","last_service_started","last_service_screen_on","last_service_idle","last_start_trigger")
             android.util.Log.e("GeckoPocTest","WAKE_DIAGNOSTIC "+org.json.JSONObject(prefs.all.filterKeys{it in keys}).toString()+" status="+WatcherScanStatus.read(context).toString())
             android.util.Log.e("GeckoPocTest","WAKE_ALARMS "+shell("dumpsys alarm").lines().filter{it.contains(context.packageName)||it.contains("WatcherAlarm")}.take(30).joinToString(" | "))
+            android.util.Log.e("GeckoPocTest","WAKE_REPORTS "+WatcherOutbox(context).use{it.cycleReports(prefs.getString("capture_cycle","")!!).map{r->r.optString("issue")}}.joinToString(","))
             throw e
         }finally{
             WatcherAutomation.configure(context,false);context.stopService(Intent(context,WatcherAlarmService::class.java))
