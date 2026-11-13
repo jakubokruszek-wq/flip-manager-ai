@@ -166,7 +166,7 @@ object WatcherScanStatus {
             (listOf("watcher-calendar-v1","watcher-retry-v1","watcher-background-kick-v2").flatMap{m.getWorkInfosForUniqueWork(it).get(2,TimeUnit.SECONDS)}+m.getWorkInfosByTag("watcher-window-v2").get(2,TimeUnit.SECONDS)+m.getWorkInfosByTag(WatcherAutomation.CONTINUATION_TAG).get(2,TimeUnit.SECONDS)).distinctBy{it.id}.filter{!it.state.isFinished}
         }.getOrNull()
         val running=if(WatcherAlarmService.running)true else infos?.any{it.state==WorkInfo.State.RUNNING}
-        val work=when {WatcherAlarmService.running->"skan uruchomiony z alarmu — usługa aktywna";infos==null->"nie udało się odczytać stanu";running==true->"zadanie uruchomione";infos.any{it.state==WorkInfo.State.ENQUEUED}->"zadanie oczekuje; dokładny powód opóźnienia nie jest udostępniany";infos.any{it.state==WorkInfo.State.BLOCKED}->"zadanie zablokowane zależnością";else->"brak oczekującego zadania"}
+        val work=when {WatcherAlarmService.running->"usługa skanu aktywna";infos==null->"nie udało się odczytać stanu";running==true->"zadanie uruchomione";infos.any{it.state==WorkInfo.State.ENQUEUED}->"zadanie oczekuje; dokładny powód opóźnienia nie jest udostępniany";infos.any{it.state==WorkInfo.State.BLOCKED}->"zadanie zablokowane zależnością";else->"brak oczekującego zadania"}
         val next=AutomationPolicy.next(Instant.ofEpochMilli(now),ZoneId.systemDefault(),WatcherAutomation.schedule(context)).toEpochMilli()
         val window=AutomationPolicy.current(Instant.ofEpochMilli(now),ZoneId.systemDefault(),WatcherAutomation.schedule(context))
         val prefs=WatcherAutomation.preferences(context)
