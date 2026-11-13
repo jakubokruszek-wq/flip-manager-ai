@@ -612,7 +612,7 @@ jobs:
           gh release create gecko-poc-0.5.87 flip-watcher-0.5.87-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.87 — opisy i zdjęcia w automacie' --prerelease --notes-file release-notes.md
 
   publish-tested-05101:
-    name: Publish tested Android 0.5.101
+    name: Publish tested Android 0.5.102
     if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-source-retry-budget'
     needs: [guard, build, instrumented, verified-apk]
     runs-on: ubuntu-24.04
@@ -631,12 +631,13 @@ jobs:
           test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-source-retry-budget --jq .object.sha)" = '${{ github.sha }}'
           apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
           test -n "$apk_path" && test -f "$apk_path"
-          cp "$apk_path" flip-watcher-0.5.101-arm64.apk
-          unzip -p flip-watcher-0.5.101-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.101")process.exit(1)})'
-          unzip -p flip-watcher-0.5.101-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
-          sha256sum flip-watcher-0.5.101-arm64.apk > SHA256SUMS
+          cp "$apk_path" flip-watcher-0.5.102-arm64.apk
+          unzip -p flip-watcher-0.5.102-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.102")process.exit(1)})'
+          unzip -p flip-watcher-0.5.102-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
+          sha256sum flip-watcher-0.5.102-arm64.apk > SHA256SUMS
           cat > release-notes.md <<'NOTES'
-          Android 0.5.101 — odzyskiwanie renderera i zakończenia odczytu.
+          Android 0.5.102 — niezależna weryfikacja obrazu i przerwanie serii awarii.
+          Gdy ImageReader nie zgłasza klatek, sprawdza rzeczywiste piksele z Gecko capturePixels na tym samym potwierdzonym dokumencie. Pusty obraz nie otwiera odczytu. Po trzech kolejnych błędach obrazu zatrzymuje cykl i zachowuje kolejkę zamiast przechodzić pusto przez wszystkie źródła.
           Przy braku klatki odnawia cel renderowania z rzeczywistym zatrzymaniem i wznowieniem kompozytora przed zgodą na odczyt; wymaga nowej klatki z nowej powierzchni. Automatyczne przewijanie pozostawia czas na odebranie wyniku w istniejącym limicie. Zerwanie portu i przekroczenie czasu odczytu dostają najwyżej jedną świeżą sesję w budżecie źródła. Kontrole grupy, dokumentu i powiązania zdjęć pozostają wymagane.
           Powiadomienie odświeża potwierdzenie pracy co 15 sekund i ostrzega o przekroczeniu budżetu źródła. Test ręcznego wznowienia używa rzeczywistego odczytu Gecko ze zdjęciami przy zgaszonym ekranie, bez zgody na dokładne alarmy i bez zwolnienia z optymalizacji baterii.
           Pierwszy odczyt czeka na potwierdzone połączenie natywne rozszerzenia, zanim otworzy zgodę na przeładowanie strony; rozłączenie przy inicjalizacji nie przerywa rozpoczętego odczytu.
@@ -645,4 +646,4 @@ jobs:
           Brak zdjęć części ofert nie uruchamia ponownego skanu całej grupy. Wyczerpane dwie próby otwarcia strony nie uruchamiają kolejnej pary sesji. Pozostałe braki potwierdzenia odczytu mają najwyżej jedno ponowienie w cyklu. Ostrzeżenia i niepełny wynik są zachowane; zamknięcie źródła nie oznacza kompletnego odczytu.
           Dane, kolejka, klucze szyfrowania i sesja Facebooka pozostają zachowane. Instaluj jako aktualizację.
           NOTES
-          gh release create gecko-poc-0.5.101 flip-watcher-0.5.101-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.101 — start skanu przy wygaszonym ekranie' --prerelease --notes-file release-notes.md
+          gh release create gecko-poc-0.5.102 flip-watcher-0.5.102-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.102 — weryfikacja obrazu i seria awarii' --prerelease --notes-file release-notes.md

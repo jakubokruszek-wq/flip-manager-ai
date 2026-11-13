@@ -15,8 +15,8 @@ import java.util.UUID
 /** Independent PROFILE reader. It cannot arm group-network grants or infer owner from a name. */
 class ProfileWatcherScan(private val context:Context){
     suspend fun run(source:WatcherGroup,alive:()->Boolean,progress:(String)->Unit={}):SavedResult=BackgroundLoadRetry.run("PROFILE",alive,progress){runTarget(source,source.url,false,alive,progress)}
-    internal suspend fun runFixture(source:WatcherGroup,target:String,forceSurfaceRefresh:Boolean=false,alive:()->Boolean):SavedResult{require(URI(target).host=="127.0.0.1");return runTarget(source,target,true,alive,forceSurfaceRefresh=forceSurfaceRefresh)}
-    private suspend fun runTarget(source:WatcherGroup,target:String,fixture:Boolean,alive:()->Boolean,progress:(String)->Unit={},forceSurfaceRefresh:Boolean=false):SavedResult=withContext(Dispatchers.Main){
+    internal suspend fun runFixture(source:WatcherGroup,target:String,forceSurfaceRefresh:Boolean=false,forceSnapshotProbe:Boolean=false,alive:()->Boolean):SavedResult{require(URI(target).host=="127.0.0.1");return runTarget(source,target,true,alive,forceSurfaceRefresh=forceSurfaceRefresh,forceSnapshotProbe=forceSnapshotProbe)}
+    private suspend fun runTarget(source:WatcherGroup,target:String,fixture:Boolean,alive:()->Boolean,progress:(String)->Unit={},forceSurfaceRefresh:Boolean=false,forceSnapshotProbe:Boolean=false):SavedResult=withContext(Dispatchers.Main){
         require(source.type=="PROFILE")
         withTimeout(if(fixture)300_000 else 180_000){
             val browser=GeckoSession();val channel=CollectorChannel(browser,fixtureMode=fixture);val images=DesktopThumbnails(50,profile=true)
@@ -51,7 +51,7 @@ class ProfileWatcherScan(private val context:Context){
             try{
                 progress("LOADING");check(live())
                 channel.attach(GeckoHost.collectorExtension(context));DesktopSessionPreview.applyDesktop(browser)
-                browser.open(GeckoHost.runtime(context));surface=BackgroundViewport(browser);browser.setActive(true);browser.setFocused(true);browser.loadUri(target)
+                browser.open(GeckoHost.runtime(context));surface=BackgroundViewport(browser,ignoreReaderEvidence=forceSnapshotProbe);browser.setActive(true);browser.setFocused(true);browser.loadUri(target)
                 suspend fun awaitDocument(afterGeneration:Long?=null){
                     val until=android.os.SystemClock.elapsedRealtime()+if(fixture)90_000 else 35_000
                     while(live()&&android.os.SystemClock.elapsedRealtime()<until){
@@ -88,7 +88,9 @@ class ProfileWatcherScan(private val context:Context){
                     rendered=checkNotNull(surface).renderedFrames>0
                 }
                 check(bound()){load.reason?:"PROFILE_CONTEXT_REJECTED"}
-                check(rendered){"PROFILE_RENDER_RETRY_FAILED"}
+                if(!rendered&&bound())rendered=checkNotNull(surface).probeRenderedPixels(::bound)
+                check(bound()){load.reason?:"PROFILE_CONTEXT_REJECTED"}
+                if(!rendered)throw RenderEvidenceFailure("PROFILE",checkNotNull(surface).renderedFrames,surfaceResets)
                 browser.setActive(true);browser.setFocused(true);val nonce=UUID.randomUUID().toString();reading=true
                 channel.viewportBridge=DesktopViewportBridge(checkNotNull(surface),nonce,images,::bound,background=true,profile=true)
                 progress("READING");val reply=checkNotNull(channel.profilePreview(nonce,source,expected)){"PROFILE_PROTOCOL"};check(bound()){load.reason?:"PROFILE_CONTEXT_REJECTED"}
@@ -102,7 +104,7 @@ class ProfileWatcherScan(private val context:Context){
                 check(bound()){load.reason?:"PROFILE_CONTEXT_REJECTED"}
                 val counters=checkNotNull(channel.viewportBridge).captureCounts
                 val keys=listOf("profileCaptureAttempts","profileCaptureInactive","profileCaptureAspect","profileCaptureFrame","profileCaptureLate","profileCaptureError","profileCapturePending","profileCaptureCommitted")
-                SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,reply.postTexts,reply.stats+keys.mapIndexed{i,key->key to counters[i]}.toMap()+mapOf("profileRenderedFrames" to checkNotNull(surface).renderedFrames,"profileSurfaceResets" to surfaceResets))
+                SavedResult(System.currentTimeMillis(),rows,emptyList(),photos,reply.postTexts,reply.stats+keys.mapIndexed{i,key->key to counters[i]}.toMap()+mapOf("profileRenderedFrames" to checkNotNull(surface).renderedFrames,"profileSurfaceResets" to surfaceResets)+(if(fixture)mapOf("fixtureSnapshotFrames" to checkNotNull(surface).snapshotFrames)else emptyMap()))
             }finally{runCatching{channel.close()};runCatching{surface?.close()};images.clear();runCatching{browser.stop()};runCatching{browser.setActive(false)};runCatching{browser.close()}}
         }
     }

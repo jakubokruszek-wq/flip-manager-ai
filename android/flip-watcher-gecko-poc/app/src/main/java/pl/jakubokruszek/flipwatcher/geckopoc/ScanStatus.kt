@@ -49,6 +49,7 @@ object ScanStatusText {
         "SOURCE_TIMEOUT"->"Źródło przekroczyło budżet czasu. Nie potwierdzono odczytu; automat przechodzi do kolejnych źródeł."
         "NETWORK_DNS_UNAVAILABLE"->"Nie można odnaleźć serwera Facebooka (DNS). Skan czeka na ponowienie z narastającym odstępem; nie pomija kolejnych źródeł."
         "SLOT_PARTIAL"->"Cykl został wykonany z brakami odczytu. Szczegóły są zachowane w diagnostyce; następny termin ponowi odczyt."
+        "RENDERER_UNAVAILABLE"->"Wstrzymano po trzech kolejnych błędach obrazu strony. Pozostałe źródła nie zostały odczytane. Kolejka i wyniki są zachowane; nie uruchamiamy ponowień w pętli."
         "CAPTURE_PARTIAL"->"Cykl zakończony z brakami. Konkretne przyczyny i liczby dla źródeł są powyżej."
         "SALE_PHOTO_MISSING"->"Brakuje zdjęć części ofert. Wyniki zachowano; ten brak nie powoduje ponownego skanowania całego źródła."
         "PAGE_HIDDEN","NO_POST_EVIDENCE","SCROLL_NOT_CONFIRMED","CAPTURE_NOT_MEASURED"->"Odczyt źródła nie został potwierdzony ($code). Zaplanowano jedno ponowienie."

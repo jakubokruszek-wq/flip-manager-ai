@@ -171,7 +171,7 @@ internal open class WatcherAutomationRun(val applicationContext:Context,val id:j
             WatcherOutbox(context).use { queue ->
                 val run=id.toString();var begun=false;var ticker:Job?=null
                 fun begin(){if(!begun){WatcherAutomation.preferences(context).edit().remove("continuation_at").apply();WatcherScanStatus.begin(context,run);begun=true;ticker=launch{var ticks=0;while(isActive){WatcherScanStatus.beat(context,run,++ticks%3==0);delay(5_000)}}}}
-                var budgetReached=false;var retryNeeded=false;var networkPaused=false;var lastIssue=""
+                var budgetReached=false;var retryNeeded=false;var networkPaused=false;var rendererPaused=false;var renderFailures=0;var lastIssue=""
                 try {
                     // Ordinary WorkManager jobs need no background-started foreground service.
                     // Stay below the ten-minute job limit and resume from durable group receipts.
@@ -262,6 +262,7 @@ internal open class WatcherAutomationRun(val applicationContext:Context,val id:j
                                 queue.enqueue(credentials.deviceId,group,result)
                             }
                             val issue=WatcherCaptureReport.issue(scanned)
+                            renderFailures=0
                             WatcherScanSummary.source(context,slot,group,result.rows.size,issue)
                             val prior=queue.attemptedSources(slot).contains(group.key)
                             val evidence=WatcherCaptureReport.create(context,slot,run,group,scanned,issue,android.os.SystemClock.elapsedRealtime()-groupClock,queue.transferCounts())
@@ -286,10 +287,14 @@ internal open class WatcherAutomationRun(val applicationContext:Context,val id:j
                                 queue.log(lastIssue)
                                 WatcherScanSummary.source(context,slot,group,null,lastIssue)
                                 val hadAttempt=queue.attemptedSources(slot).contains(group.key)
-                                val evidence=WatcherCaptureReport.create(context,slot,run,group,null,lastIssue,android.os.SystemClock.elapsedRealtime()-groupClock,queue.transferCounts())
+                                val evidence=WatcherCaptureReport.create(context,slot,run,group,null,lastIssue,android.os.SystemClock.elapsedRealtime()-groupClock,queue.transferCounts(),(e as? RenderEvidenceFailure)?.stats?:emptyMap())
                                 runCatching{queue.report(credentials.deviceId,slot,group.key,evidence)}
-                                if(SourceRetryPolicy.closeFailure(lastIssue,hadAttempt)){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
+                                val renderFailure=lastIssue in setOf("GROUP_RENDER_RETRY_FAILED","PROFILE_RENDER_RETRY_FAILED")
+                                renderFailures=if(renderFailure)renderFailures+1 else 0
+                                rendererPaused=renderFailures>=3
+                                if(!rendererPaused&&SourceRetryPolicy.closeFailure(lastIssue,hadAttempt)){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
                                 updateCounts{it.copy(phase="PREPARING",reason=lastIssue)}
+                                if(rendererPaused){queue.log("RENDERER_UNAVAILABLE");break}
                                 if(SourceRetryPolicy.pauseForNetwork(lastIssue)){networkPaused=true;break}
                                 // A single unavailable group cannot starve every later source.
                                 if(e.message in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA"))break
@@ -303,8 +308,8 @@ internal open class WatcherAutomationRun(val applicationContext:Context,val id:j
                             if(allDone&&requested!=null&&prefs.getString("requested_scan",null)==requested)
                                 check(prefs.edit().remove("requested_scan").commit())
                         }
-                        retryNeeded=!networkPaused&&!allDone&&!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(context)&&groups.isNotEmpty()&&lastIssue !in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA")
-                        val reason=when{!WatcherAutomation.enabled(context)->"AUTOMATION_DISABLED";WatcherAutomation.uiVisible->"WAITING_FOR_BACKGROUND";networkPaused->"NETWORK_DNS_UNAVAILABLE";budgetReached->"BATCH_CONTINUE";allDone&&!captureOk->"CAPTURE_PARTIAL";else->lastIssue}
+                        retryNeeded=!rendererPaused&&!networkPaused&&!allDone&&!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(context)&&groups.isNotEmpty()&&lastIssue !in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA")
+                        val reason=when{!WatcherAutomation.enabled(context)->"AUTOMATION_DISABLED";WatcherAutomation.uiVisible->"WAITING_FOR_BACKGROUND";rendererPaused->"RENDERER_UNAVAILABLE";networkPaused->"NETWORK_DNS_UNAVAILABLE";budgetReached->"BATCH_CONTINUE";allDone&&!captureOk->"CAPTURE_PARTIAL";else->lastIssue}
                         val phase=when{!WatcherAutomation.enabled(context)->"ERROR";allDone&&captureOk->"DONE";allDone->"PARTIAL";WatcherAutomation.uiVisible->"WAITING_UI";networkPaused||budgetReached||retryNeeded->"RETRY";else->"PARTIAL"}
                         WatcherScanStatus.finish(context,run,phase,reason)
                     }
