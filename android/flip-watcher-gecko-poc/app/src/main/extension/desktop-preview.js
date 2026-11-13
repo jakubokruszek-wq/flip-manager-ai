@@ -102,6 +102,9 @@ function cssPhotoLoaded(node,raw){
 }
 // An opaque photo route is only a wrapper, never an ID or post association.
 function opaquePhotoLink(raw){try{const u=new URL(raw);return u.protocol==='https:'&&!u.port&&!u.username&&!u.password&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&(/^\/photo(?:\.php)?\/?$/.test(u.pathname)||/^\/(?:[^/]+\/)?photos\//.test(u.pathname));}catch{return false;}}
+// A Marketplace item link is only an attachment wrapper. It never identifies
+// the group post: capture still requires an independent unique network owner.
+function marketplacePhotoLink(raw){try{const u=new URL(raw);return u.protocol==='https:'&&!u.port&&!u.username&&!u.password&&['facebook.com','www.facebook.com','m.facebook.com'].includes(u.hostname)&&/^\/marketplace\/item\/\d{5,30}\/?$/.test(u.pathname);}catch{return false;}}
 function photoSvgRoot(n){
  if(String(n.tagName).toLowerCase()!=='image')return null;
  const svg=n.closest?.('svg');
@@ -122,17 +125,21 @@ function textPosterNodes(card,postId){
  if(!/^\d{5,30}$/.test(postId||''))return[];
  const doc=card.ownerDocument,w=doc?.defaultView,result=[];
  if(!w?.getComputedStyle)return result;
- for(const n of Array.from(card.querySelectorAll('[style*="background"],[data-ad-preview="message"],[data-ad-comet-preview="message"]')).slice(0,100)){
+ const described=String(card.getAttribute?.('aria-describedby')||'').trim().split(/\s+/u);
+ const messages=ownMessageNodes(card).filter(n=>n.matches?.(messageSelector)||described.includes(n.id));
+ const candidates=[...new Set([...Array.from(card.querySelectorAll('[style*="background"],'+messageSelector)),...messages])].slice(0,100);
+ for(const n of candidates){
   const own=()=>containers.owner(n)===card&&!n.closest('[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],video,form,header,nav');
   if(!own())continue;
-  const message=n.matches?.('[data-ad-preview="message"],[data-ad-comet-preview="message"]')?n:n.querySelector?.('[data-ad-preview="message"],[data-ad-comet-preview="message"]')||n.closest('[data-ad-preview="message"],[data-ad-comet-preview="message"]');
+  const nested=n.querySelector?.(messageSelector);
+  const message=messages.find(m=>m===n||n.contains?.(m)||m.contains?.(n))||(messages.includes(nested)?nested:null);
   if(!message||containers.owner(message)!==card)continue;
   const source=()=>n.innerText?.trim()||'',text=source(),style=w.getComputedStyle(n),rect=n.getBoundingClientRect();
   const largeText=()=>[message,...Array.from(message.querySelectorAll?.('span,div,p')||[]).slice(0,32)].some(e=>e.innerText?.trim()&&Number.parseFloat(w.getComputedStyle(e).fontSize)>=18);
   const painted=()=>{const s=w.getComputedStyle(n);return s.backgroundImage&&s.backgroundImage!=='none'||s.backgroundColor&&!['transparent','rgba(0, 0, 0, 0)'].includes(s.backgroundColor);};
   if(!painted()||rect.width<200||rect.height<120||!largeText()||text.length<25||text.length>2000||text!==(message.innerText?.trim()||'')||!/\d+(?:[.,]\d+)?\s*m\s*[²2]/iu.test(text))continue;
   if(result.some(p=>p.node.contains(n)||n.contains(p.node)))continue;
-  result.push({node:n,source,ready:()=>n.isConnected!==false&&own()&&painted()&&source()===text,item:{posterKey:'poster:'+postId,exactPostId:postId,exactAssociation:true,domPhoto:true,networkRequired:false}});
+  result.push({node:n,source,ready:()=>n.isConnected!==false&&own()&&ownMessageNodes(card).includes(message)&&painted()&&source()===text,item:{posterKey:'poster:'+postId,exactPostId:postId,exactAssociation:true,domPhoto:true,networkRequired:false}});
  }
  return result;
 }
@@ -148,7 +155,7 @@ function photoNodes(card,postId,group,core,audit=null){
   const svg=photoSvgRoot(n),renderNode=svg||n;const rect=renderNode.getBoundingClientRect();const a=n.closest('a[href]'),anchorHref=photoAnchorHref(a);const mediaId=photoLinkId(anchorHref);let linkedPostId=null,networkAnchor=false;
   if(a&&!mediaId){const p=core.parsePostLink(anchorHref);
    if(p){if(p.sourceType!=='GROUP'||p.sourceId!==group||(postId!==null&&p.postId!==postId)){count('photoAnchorRejected');continue;}linkedPostId=p.postId;}
-   else if(opaquePhotoLink(anchorHref))networkAnchor=true;
+   else if(opaquePhotoLink(anchorHref)||marketplacePhotoLink(anchorHref))networkAnchor=true;
    else{count('photoAnchorRejected');continue;}
   }
   if(rect.width<60||rect.height<60){count('photoSizeRejected');continue;}
@@ -691,5 +698,5 @@ async function run(w,m,core,fields,safe,send,setAbort,notify=()=>{},documentId=n
  }catch{return empty('ERROR');}
  finally{noticeDispose?.();gestureWatch?.stop();setAbort(null);if(dispose)dispose();model.clear();void send({type:'stopDesktop',nonce:m.nonce}).catch(()=>{});}
 }
-const api={hydrationScripts,ownMessageNodeText,messageSelector,textForbidden,posterSaleFields,negotiableSaleFields,textPosterNodes,disclosureBinding,disclosureLabel,expandOwnMessage,ownCardId,messageText,networkMedia,imageURL,photoAnchorHref,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,mergeSnapshot,viewportMetrics,scrollDistance,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
+const api={hydrationScripts,ownMessageNodeText,messageSelector,textForbidden,posterSaleFields,negotiableSaleFields,textPosterNodes,disclosureBinding,disclosureLabel,expandOwnMessage,ownCardId,messageText,networkMedia,imageURL,photoAnchorHref,photoLinkId,cssPhotoSource,cssPhotoLoaded,opaquePhotoLink,marketplacePhotoLink,photoSvgRoot,photoNodes,domPhotos,recoveryContainer,baselineTailTarget,tailTarget,scrollTrace,scrollContainer,ownMessageText,groupURL,exact,explicitIds,createModel,mergeSnapshot,viewportMetrics,scrollDistance,readDOM,run,statKeys,zero};if(typeof module!=='undefined')module.exports=api;root.FlipDesktopPreview=api;
 })(globalThis);

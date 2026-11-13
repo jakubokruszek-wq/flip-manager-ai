@@ -8,7 +8,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 
-/** CI installs the test APK against 0.5.102, seeds real encrypted state,
+/** CI installs the test APK against 0.5.103, seeds real encrypted state,
  * then uses adb install -r for this release before running b_verify. */
 @RunWith(AndroidJUnit4::class)
 class RollbackUpgradeInstrumentedTest {
@@ -16,8 +16,8 @@ class RollbackUpgradeInstrumentedTest {
     private val device="12345678-1234-1234-1234-123456789012"
     private val token="x".repeat(40)
     private val proof get()=context.getSharedPreferences("rollback-upgrade-proof-v1",Context.MODE_PRIVATE)
-    @Test fun a_seedOn102(){
-        assertEquals("0.5.102-gecko-poc",context.packageManager.getPackageInfo(context.packageName,0).versionName)
+    @Test fun a_seedOn103(){
+        assertEquals("0.5.103-gecko-poc",context.packageManager.getPackageInfo(context.packageName,0).versionName)
         WatcherAutomation.configure(context,false)
         WatcherLink.save(context,WatcherLink.Credentials(device,token))
         val group=WatcherGroups.configured.first()
@@ -36,7 +36,7 @@ class RollbackUpgradeInstrumentedTest {
     }
     @Test fun b_verifyAfterInPlaceUpdate(){
         val installed=context.packageManager.getPackageInfo(context.packageName,0)
-        assertEquals("0.5.103-gecko-poc",installed.versionName)
+        assertEquals("0.5.104-gecko-poc",installed.versionName)
         assertTrue(installed.longVersionCode>proof.getLong("beforeCode",Long.MAX_VALUE))
         val pairing=checkNotNull(WatcherLink.load(context));assertEquals(device,pairing.deviceId);assertEquals(token,pairing.token)
         WatcherOutbox(context).use{q->

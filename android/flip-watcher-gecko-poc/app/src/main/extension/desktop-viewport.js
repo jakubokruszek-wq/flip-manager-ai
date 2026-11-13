@@ -143,7 +143,7 @@ function documentImages(w,core,group,helpers,owners,allowedIds,audit){
   let linkedPostId=null;
   if(anchor&&!mediaId){const p=core.parsePostLink(href);
    if(p){if(p.sourceType!=='GROUP'||p.sourceId!==group)continue;linkedPostId=p.postId;}
-   else if(!helpers.opaquePhotoLink(href))continue;
+   else if(!helpers.opaquePhotoLink(href)&&!helpers.marketplacePhotoLink?.(href))continue;
   }
   const source=()=>node.currentSrc||node.src||node.getAttribute?.('src');const raw=source();
   if(typeof raw!=='string'||raw.length>8192)continue;

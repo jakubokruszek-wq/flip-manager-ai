@@ -200,9 +200,9 @@ jobs:
         if: github.ref == 'refs/heads/codex/android-source-retry-budget'
         run: |
           echo "ORG_GRADLE_PROJECT_GECKO_POC_VERSION_CODE=$((8000 + ${{ github.run_number }}))" >> "$GITHUB_ENV"
-          git fetch --depth=1 origin 0695d78f2ab09302d6798234ed298da95bfe9534
-          git worktree add ../watcher-upgrade-102 FETCH_HEAD
-          (cd ../watcher-upgrade-102/android/flip-watcher-gecko-poc && ./gradlew --no-daemon assembleDebug -PGECKO_POC_VERSION_CODE=8686)
+          git fetch --depth=1 origin 18c206e9652cb93db5d10018f1a7491d46d46776
+          git worktree add ../watcher-upgrade-103 FETCH_HEAD
+          (cd ../watcher-upgrade-103/android/flip-watcher-gecko-poc && ./gradlew --no-daemon assembleDebug -PGECKO_POC_VERSION_CODE=8689)
           (cd android/flip-watcher-gecko-poc && ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest -PGECKO_POC_VERSION_CODE=$((8000 + ${{ github.run_number }})))
       - name: Complete worker, own-message and image-binding regressions on API 36
         if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-source-retry-budget'
@@ -218,6 +218,7 @@ jobs:
           force-avd-creation: true
           script: |
             if [ '${{ github.ref }}' = 'refs/heads/codex/android-source-retry-budget' ]; then sh scripts/rollback-upgrade.sh; fi
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.TextPosterInstrumentedTest
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true '-Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#sourceTimeoutDoesNotStopLaterGroupsAndFailedGroupGetsOnlyOneRetry,pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#interruptionResumesSameCycleWithoutRescanningCompletedSource,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest#interruptionRecoveryIsUniqueDelayedNetworkConstrainedAndRespectsDisable' || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             if [ '${{ github.ref }}' = 'refs/heads/codex/android-source-retry-budget' ]; then ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#newSourceCountsIgnoreBodyVariantsRetriesAndHeldRows || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1); fi
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#calendarIgnoresOldRevisionAndManualCycleRechecksWhileDegradedReadGetsExactlyOneRetry,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
@@ -614,7 +615,7 @@ jobs:
           gh release create gecko-poc-0.5.87 flip-watcher-0.5.87-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.87 — opisy i zdjęcia w automacie' --prerelease --notes-file release-notes.md
 
   publish-tested-0597:
-    name: Publish tested Android 0.5.103
+    name: Publish tested Android 0.5.104
     if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-source-retry-budget'
     needs: [guard, build, instrumented, verified-apk]
     runs-on: ubuntu-24.04
@@ -633,15 +634,15 @@ jobs:
           test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-source-retry-budget --jq .object.sha)" = '${{ github.sha }}'
           apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
           test -n "$apk_path" && test -f "$apk_path"
-          cp "$apk_path" flip-watcher-0.5.103-arm64.apk
-          unzip -p flip-watcher-0.5.103-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.103")process.exit(1)})'
-          unzip -p flip-watcher-0.5.103-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
-          sha256sum flip-watcher-0.5.103-arm64.apk > SHA256SUMS
+          cp "$apk_path" flip-watcher-0.5.104-arm64.apk
+          unzip -p flip-watcher-0.5.104-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.104")process.exit(1)})'
+          unzip -p flip-watcher-0.5.104-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
+          sha256sum flip-watcher-0.5.104-arm64.apk > SHA256SUMS
           cat > release-notes.md <<'NOTES'
-          Android 0.5.103 — powrót do kodu 0.5.97.
-          Wydanie odtwarza kod aplikacji 0.5.97 z wyższym numerem instalacyjnym, aby umożliwić aktualizację bez odinstalowania. Wraca również poprzedni harmonogram WorkManager; późniejsze dokładne alarmy i usługa skanu nie są częścią tej wersji.
+          Android 0.5.104 — podgląd zielonych postów tekstowych i zdjęcia kart Marketplace.
+          Pozostawia mechanizm skanowania z 0.5.97. Kolorowe posty z własną treścią oznaczoną story_message lub dokładnym ARIA otrzymują rzeczywisty podgląd i zachowane parametry oferty. Zdjęcia za linkiem Marketplace można przechwycić wyłącznie po niezależnym potwierdzeniu ich właściciela w danych tego samego posta; nie pobiera dodatkowych stron ani cudzych zdjęć.
           Nowy cykl zaczyna od źródła 1; kontynuacja wybiera pierwsze niedokończone źródło na podstawie zapisanych potwierdzeń. Błąd DNS wstrzymuje cykl bez zamykania nieodczytanych grup. Ponowienie korzysta z narastającego odstępu WorkManager. Wcześniejsze błędne potwierdzenia DNS są przywracane do oczekujących bez usuwania ofert.
           Brak zdjęć części ofert nie uruchamia ponownego skanu całej grupy. Wyczerpane dwie próby otwarcia strony nie uruchamiają kolejnej pary sesji. Pozostałe braki potwierdzenia odczytu mają najwyżej jedno ponowienie w cyklu. Ostrzeżenia i niepełny wynik są zachowane; zamknięcie źródła nie oznacza kompletnego odczytu.
           Dane, kolejka, klucze szyfrowania i sesja Facebooka pozostają zachowane. Instaluj jako aktualizację.
           NOTES
-          gh release create gecko-poc-0.5.103 flip-watcher-0.5.103-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.103 — powrót do kodu 0.5.97' --prerelease --notes-file release-notes.md
+          gh release create gecko-poc-0.5.104 flip-watcher-0.5.104-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.104 — posty tekstowe i zdjęcia Marketplace' --prerelease --notes-file release-notes.md

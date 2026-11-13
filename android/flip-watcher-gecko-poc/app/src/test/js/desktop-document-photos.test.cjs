@@ -37,3 +37,7 @@ test('data image needs independently known numeric media route andenumeration is
  const h=env();h.image.currentSrc='data:image/svg+xml,%3Csvg/%3E';assert(h.shot());h.anchor.href='https://www.facebook.com/photo/?fbid=pfbidUNKNOWN';assert.equal(h.shot(),null);
  const many=env();many.state.images=Array(1000).fill(many.image);assert(many.shot());assert.equal(many.audit.photoDocumentNodes,500);
 });
+test('document Marketplace image uses the same exact unique network ownership gate',()=>{
+ const h=env();h.anchor.href='https://www.facebook.com/marketplace/item/123456789012345/';const shot=h.shot();assert(shot);assert.equal(shot.tiles[0].postId,id);assert(shot.valid());assert.equal(h.shot([]),null);
+ h.anchor.href='https://www.facebook.com/marketplace/item/999999999999999/';assert.equal(shot.valid(),false);
+});
