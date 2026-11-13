@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-gecko-poc-${{ github.ref }}${{ github.ref == 'refs/heads/codex/android-render-diagnostics-105' && '-release-094' || '' }}
+  group: android-gecko-poc-${{ github.ref }}${{ github.ref == 'refs/heads/codex/android-096-comparison-106' && '-release-094' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -117,7 +117,7 @@ jobs:
 
       - name: Upload unit test reports
         if: always()
-        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-render-diagnostics-105' }}
+        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-096-comparison-106' }}
         timeout-minutes: 3
         uses: actions/upload-artifact@v4
         with:
@@ -155,7 +155,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Offline OCR and consent on API 36 (dedicated device)
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-render-diagnostics-105'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-096-comparison-106'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -194,18 +194,18 @@ jobs:
           retention-days: 14
 
       - name: Release the offline emulator disk before creating the fresh device
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-render-diagnostics-105'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-096-comparison-106'
         run: avdmanager delete avd --name gecko-ocr-offline
       - name: Build both versions for the in-place rollback compatibility test
-        if: github.ref == 'refs/heads/codex/android-render-diagnostics-105'
+        if: github.ref == 'refs/heads/codex/android-096-comparison-106'
         run: |
           echo "ORG_GRADLE_PROJECT_GECKO_POC_VERSION_CODE=$((8000 + ${{ github.run_number }}))" >> "$GITHUB_ENV"
-          git fetch --depth=1 origin 159266c2ed1353a052afd9afd708aa4789a24709
-          git worktree add ../watcher-upgrade-104 FETCH_HEAD
-          (cd ../watcher-upgrade-104/android/flip-watcher-gecko-poc && ./gradlew --no-daemon assembleDebug -PGECKO_POC_VERSION_CODE=8691)
+          git fetch --depth=1 origin a7cb3ff566af4ab4be2ca9dc21a7e89c31707692
+          git worktree add ../watcher-upgrade-105 FETCH_HEAD
+          (cd ../watcher-upgrade-105/android/flip-watcher-gecko-poc && ./gradlew --no-daemon assembleDebug -PGECKO_POC_VERSION_CODE=8693)
           (cd android/flip-watcher-gecko-poc && ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest -PGECKO_POC_VERSION_CODE=$((8000 + ${{ github.run_number }})))
       - name: Complete worker, own-message and image-binding regressions on API 36
-        if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-render-diagnostics-105'
+        if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-096-comparison-106'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -217,13 +217,13 @@ jobs:
           avd-name: gecko-schema-recovery
           force-avd-creation: true
           script: |
-            if [ '${{ github.ref }}' = 'refs/heads/codex/android-render-diagnostics-105' ]; then sh scripts/rollback-upgrade.sh; fi
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.TextPosterInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.RenderDiagnosticsInstrumentedTest
+            if [ '${{ github.ref }}' = 'refs/heads/codex/android-096-comparison-106' ]; then sh scripts/rollback-upgrade.sh; fi
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.TextPosterInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.RenderDiagnosticsInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.Comparison096InstrumentedTest
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true '-Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#sourceTimeoutDoesNotStopLaterGroupsAndFailedGroupGetsOnlyOneRetry,pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#interruptionResumesSameCycleWithoutRescanningCompletedSource,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest#interruptionRecoveryIsUniqueDelayedNetworkConstrainedAndRespectsDisable' || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
-            if [ '${{ github.ref }}' = 'refs/heads/codex/android-render-diagnostics-105' ]; then ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#newSourceCountsIgnoreBodyVariantsRetriesAndHeldRows || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1); fi
+            if [ '${{ github.ref }}' = 'refs/heads/codex/android-096-comparison-106' ]; then ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#newSourceCountsIgnoreBodyVariantsRetriesAndHeldRows || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1); fi
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#calendarIgnoresOldRevisionAndManualCycleRechecksWhileDegradedReadGetsExactlyOneRetry,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
       - name: Online Gecko flow and full regression on API 36 (fresh device)
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-render-diagnostics-105'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-096-comparison-106'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -262,7 +262,7 @@ jobs:
 
       - name: Upload instrumented test reports
         if: always()
-        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-render-diagnostics-105' }}
+        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-096-comparison-106' }}
         timeout-minutes: 3
         uses: actions/upload-artifact@v4
         with:
@@ -615,8 +615,8 @@ jobs:
           gh release create gecko-poc-0.5.87 flip-watcher-0.5.87-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.87 — opisy i zdjęcia w automacie' --prerelease --notes-file release-notes.md
 
   publish-tested-0597:
-    name: Publish tested Android 0.5.105
-    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-render-diagnostics-105'
+    name: Publish tested Android 0.5.106
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-096-comparison-106'
     needs: [guard, build, instrumented, verified-apk]
     runs-on: ubuntu-24.04
     permissions:
@@ -631,17 +631,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-render-diagnostics-105 --jq .object.sha)" = '${{ github.sha }}'
+          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-096-comparison-106 --jq .object.sha)" = '${{ github.sha }}'
           apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
           test -n "$apk_path" && test -f "$apk_path"
-          cp "$apk_path" flip-watcher-0.5.105-arm64.apk
-          unzip -p flip-watcher-0.5.105-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.105")process.exit(1)})'
-          unzip -p flip-watcher-0.5.105-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
-          sha256sum flip-watcher-0.5.105-arm64.apk > SHA256SUMS
+          cp "$apk_path" flip-watcher-0.5.106-arm64.apk
+          unzip -p flip-watcher-0.5.106-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.106")process.exit(1)})'
+          unzip -p flip-watcher-0.5.106-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
+          sha256sum flip-watcher-0.5.106-arm64.apk > SHA256SUMS
           cat > release-notes.md <<'NOTES'
-          Android 0.5.105 — opcjonalna diagnostyka obrazu, domyślnie wyłączona.
-          W Automacie można włączyć liczniki renderowania i pamięci na maksymalnie 30 minut. Zapisuje rzeczywisty czas utworzenia raportu i priorytetowo wysyła najnowszy raport bieżącego cyklu bez usuwania zaległych raportów. Brak treści ofert, zdjęć i danych logowania w dodatkowej diagnostyce.
-          Mechanizm skanowania, limity, ponowienia i warunki potwierdzenia odczytu pozostają z wersji 0.5.104. To narzędzie do ustalenia przyczyny błędu, nie potwierdzona naprawa renderowania. Wyłączenie diagnostyki przywraca dotychczasowy sposób raportowania.
-          Publiczny domyślny instalator pozostaje w wersji 0.5.104. Instaluj wyłącznie jako aktualizację; zachowuje dane, kolejkę i sesję Facebooka.
+          Android 0.5.106 — test porównawczy wykonywania skanu z wersji 0.5.96.
+          Przywraca kolejność źródeł i sterowanie zadaniem z wydanej wersji 0.5.96. Kolejność może zaczynać od zapisanego miejsca, a następnie obejmuje pozostałe źródła. Przywraca też dawną obsługę błędów sieci; błędy nadal pozostają widoczne i nie oznaczają poprawnego odczytu.
+          Zachowuje bieżącą bazę, kolejkę, klucze, logowanie, obsługę ofert tekstowych i zdjęć oraz opcjonalną diagnostykę. Nie wyłącza kontroli rzeczywistych klatek obrazu. To kontrolowane porównanie zachowania, nie deklaracja usunięcia przyczyny renderowania.
+          Instaluj jako aktualizację, bez odinstalowywania. Domyślny publiczny instalator pozostaje 0.5.104.
           NOTES
-          gh release create gecko-poc-0.5.105 flip-watcher-0.5.105-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.105 — opcjonalna diagnostyka obrazu' --prerelease --notes-file release-notes.md
+          gh release create gecko-poc-0.5.106 flip-watcher-0.5.106-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.106 — test skanowania z 0.5.96' --prerelease --notes-file release-notes.md
+          python3 - <<'PYZIP'
+          import zipfile,pathlib,hashlib,json
+          apk=pathlib.Path('flip-watcher-0.5.106-arm64.apk')
+          output=pathlib.Path('flip-watcher-0.5.106-arm64.zip')
+          info=zipfile.ZipInfo(apk.name,date_time=(2026,11,13,0,0,0));info.compress_type=zipfile.ZIP_STORED;info.external_attr=0o100644 << 16
+          with zipfile.ZipFile(output,'w') as z:z.writestr(info,apk.read_bytes())
+          with zipfile.ZipFile(output) as z:
+              assert z.namelist()==[apk.name]
+              assert hashlib.sha256(z.read(apk.name)).digest()==hashlib.sha256(apk.read_bytes()).digest()
+          print(json.dumps({'zip_bytes':output.stat().st_size,'zip_sha256':hashlib.sha256(output.read_bytes()).hexdigest()}))
+          PYZIP
+          gh release upload gecko-poc-0.5.106 flip-watcher-0.5.106-arm64.zip --repo jakubokruszek-wq/flip-manager-ai

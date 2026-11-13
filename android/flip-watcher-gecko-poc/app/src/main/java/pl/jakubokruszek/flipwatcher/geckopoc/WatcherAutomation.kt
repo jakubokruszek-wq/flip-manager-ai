@@ -144,7 +144,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
             WatcherOutbox(context).use { queue ->
                 val run=id.toString();var begun=false;var ticker:Job?=null
                 fun begin(){if(!begun){WatcherAutomation.preferences(context).edit().remove("continuation_at").apply();WatcherScanStatus.begin(context,run);begun=true;ticker=launch{while(isActive){WatcherScanStatus.beat(context,run);delay(5_000)}}}}
-                var budgetReached=false;var retryNeeded=false;var networkPaused=false;var lastIssue=""
+                var budgetReached=false;var retryNeeded=false;var lastIssue=""
                 try {
                     // Ordinary WorkManager jobs need no background-started foreground service.
                     // Stay below the ten-minute job limit and resume from durable group receipts.
@@ -159,10 +159,6 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                         val slot=if(requested==null)windowKey else WatcherCaptureReport.cycle("manual/"+requested)
                         check(prefs.edit().putString("capture_cycle",slot).commit())
                         val scheduleDue=requested!=null||window.at.toEpochMilli()>=prefs.getLong("schedule_since",0)
-                        val reopened=queue.reopenNetworkFailures(slot)
-                        val windowReopened=if(slot==windowKey)reopened else queue.reopenNetworkFailures(windowKey)
-                        if(windowReopened>0&&prefs.getString("completed_slot",null)==windowKey)
-                            check(prefs.edit().remove("completed_slot").putBoolean("completed_capture_ok",false).commit())
                         // Diagnostics retry independently and never prevent business queue delivery.
                         for(attempt in 0 until 3){val diagnostic=queue.nextReport(credentials.deviceId,if(RenderDiagnostics.enabled(context))slot else null)?:break
                             try{sendReport(credentials,diagnostic);queue.reportSent(diagnostic.id)}catch(_:Exception){break}}
@@ -201,9 +197,9 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                         WatcherScanSummary.start(context,slot,groups)
                         val groupCache=org.json.JSONObject().put("version",1).put("groups",org.json.JSONArray(groups.filter{it.type=="GROUP"}.map{org.json.JSONObject().put("groupId",it.id).put("url",it.url).put("name",it.name)})).toString()
                         check(context.getSharedPreferences("gecko_poc",Context.MODE_PRIVATE).edit().putString("watcher_active_groups",groupCache).commit())
-                        // Start every new cycle at source 1. Durable receipts alone
-                        // select the first unfinished source on continuation.
-                        val ordered=groups
+                        // Resume after the last attempted source if a slow group exhausted the worker budget.
+                        val cursor=groups.indexOfFirst{it.key==prefs.getString("last_attempted_source",null)}
+                        val ordered=if(cursor<0)groups else groups.drop(cursor+1)+groups.take(cursor+1)
                         val activeKeys=groups.map{it.key}.toSet()
                         fun progressCounts()=ScanSourceProgress.count(activeKeys,queue.scannedSources(slot),queue.attemptedSources(slot))
                         fun updateCounts(change:(ScanState)->ScanState={it}){
@@ -263,7 +259,6 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                 runCatching{queue.report(credentials.deviceId,slot,group.key,evidence)}
                                 if(SourceRetryPolicy.closeFailure(lastIssue,hadAttempt)){queue.completeScan(slot,group.key);if(requested!=null)queue.completeScan(windowKey,group.key)}
                                 updateCounts{it.copy(phase="PREPARING",reason=lastIssue)}
-                                if(SourceRetryPolicy.pauseForNetwork(lastIssue)){networkPaused=true;break}
                                 // A single unavailable group cannot starve every later source.
                                 if(e.message in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA"))break
                             }
@@ -276,16 +271,16 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             if(allDone&&requested!=null&&prefs.getString("requested_scan",null)==requested)
                                 check(prefs.edit().remove("requested_scan").commit())
                         }
-                        retryNeeded=!networkPaused&&!allDone&&!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(context)&&groups.isNotEmpty()&&lastIssue !in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA")
-                        val reason=when{!WatcherAutomation.enabled(context)->"AUTOMATION_DISABLED";WatcherAutomation.uiVisible->"WAITING_FOR_BACKGROUND";networkPaused->"NETWORK_DNS_UNAVAILABLE";budgetReached->"BATCH_CONTINUE";allDone&&!captureOk->"CAPTURE_PARTIAL";else->lastIssue}
-                        val phase=when{!WatcherAutomation.enabled(context)->"ERROR";allDone&&captureOk->"DONE";allDone->"PARTIAL";WatcherAutomation.uiVisible->"WAITING_UI";networkPaused||budgetReached||retryNeeded->"RETRY";else->"PARTIAL"}
+                        retryNeeded=!allDone&&!WatcherAutomation.uiVisible&&WatcherAutomation.enabled(context)&&groups.isNotEmpty()&&lastIssue !in setOf("LOGIN_REQUIRED","CHECKPOINT","CAPTCHA")
+                        val reason=when{!WatcherAutomation.enabled(context)->"AUTOMATION_DISABLED";WatcherAutomation.uiVisible->"WAITING_FOR_BACKGROUND";budgetReached->"BATCH_CONTINUE";allDone&&!captureOk->"CAPTURE_PARTIAL";else->lastIssue}
+                        val phase=when{!WatcherAutomation.enabled(context)->"ERROR";allDone&&captureOk->"DONE";allDone->"PARTIAL";WatcherAutomation.uiVisible->"WAITING_UI";budgetReached||retryNeeded->"RETRY";else->"PARTIAL"}
                         WatcherScanStatus.finish(context,run,phase,reason)
                     }
                     if(budgetReached||retryNeeded){
                         if(budgetReached)queue.log("BATCH_CONTINUE")
                         continueScan(context)
                     }
-                    if(networkPaused)Result.retry()else Result.success()
+                    Result.success()
                 }catch(e:TimeoutCancellationException){
                     currentCoroutineContext().ensureActive()
                     queue.log("BATCH_CONTINUE")
