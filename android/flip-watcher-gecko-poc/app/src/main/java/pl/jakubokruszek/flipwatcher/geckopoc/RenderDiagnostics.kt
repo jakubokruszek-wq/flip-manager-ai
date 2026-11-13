@@ -35,7 +35,7 @@ internal object RenderDiagnostics {
             val memory=ActivityManager.MemoryInfo();context.getSystemService(ActivityManager::class.java).getMemoryInfo(memory)
             stats["renderLowMemory"]=if(memory.lowMemory)1 else 0
             stats["renderAvailableRamMb"]=(memory.availMem/1048576).coerceIn(0,100_000_000).toInt()
-            stats["renderPssKb"]=Debug.getPss().coerceIn(0,100_000_000)
+            stats["renderPssKb"]=Debug.getPss().coerceIn(0,100_000_000).toInt()
             val runtime=Runtime.getRuntime();stats["renderHeapMb"]=((runtime.totalMemory()-runtime.freeMemory())/1048576).coerceIn(0,100_000_000).toInt()
         }
         return RenderObservationFailure(checkNotNull(e.message),stats.toMap(),e)
