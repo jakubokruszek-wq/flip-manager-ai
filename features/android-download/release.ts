@@ -101,7 +101,7 @@ export const androidRelease099 = {
   version: "0.5.99",
   filename: "flip-watcher-0.5.99-arm64.apk",
   bytes: 112163626,
-  sha256: "30e74b5daca969f48fe8d2c2184760301a7437638851fe3814fd8f3655697d60",
+  sha256: "a69fd9e4313ec9ee42fd8d4c776e81c6f238b78b8781c31a6586d1b528fe1c5b",
   source: "https://github.com/jakubokruszek-wq/flip-manager-ai/releases/download/gecko-poc-0.5.99/flip-watcher-0.5.99-arm64.apk",
   path: "/api/android/flip-watcher-0.5.99.apk",
 } as const;
