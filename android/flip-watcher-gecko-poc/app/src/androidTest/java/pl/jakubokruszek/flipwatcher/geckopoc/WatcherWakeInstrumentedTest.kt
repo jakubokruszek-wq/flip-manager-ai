@@ -33,6 +33,7 @@ class WatcherWakeInstrumentedTest {
         val startReading=CompletableDeferred<Unit>()
         val entered=CompletableDeferred<Unit>()
         val runs=java.util.concurrent.atomic.AtomicInteger()
+        val manualId=UUID.randomUUID().toString()
         try {
             WatcherAutomation.configure(context,false)
             context.deleteDatabase("watcher-outbox-v1.db")
@@ -73,8 +74,7 @@ class WatcherWakeInstrumentedTest {
             val times=AutomationPolicy.validate(listOf(minute,(minute+480)%1440,(minute+960)%1440))
             prefs.edit().putBoolean("enabled",true).putString("scan_minutes",AutomationPolicy.encode(times)).commit()
             if(manual){
-                val cycle=UUID.randomUUID().toString()
-                prefs.edit().putString("requested_scan",cycle).commit()
+                prefs.edit().putString("requested_scan",manualId).commit()
                 WatcherScanStatus.begin(context,"manual-fixture")
                 WatcherScanStatus.finish(context,"manual-fixture","RETRY","INTERRUPTED")
                 androidx.test.core.app.ActivityScenario.launch(ScanStatusActivity::class.java).use{scenario->
@@ -103,7 +103,7 @@ class WatcherWakeInstrumentedTest {
             assertTrue(value.rows.isNotEmpty());assertTrue("Actual background Gecko must retain bound pixels",value.photos.isNotEmpty())
             if(manual){
                 assertEquals("manual_service",prefs.getString("last_start_trigger",null))
-                assertTrue(prefs.getString("capture_cycle","")!!.contains("/manual/"))
+                WatcherOutbox(context).use{assertTrue("The original manual cycle receipt must survive a coalesced resume",it.scanned(WatcherCaptureReport.cycle("manual/"+manualId),group.key))}
                 assertTrue("A repeated manual tap must be handed off without replaying completed sources",runs.get()>=2)
             }else{
                 assertFalse(prefs.getBoolean("last_service_screen_on",true))
