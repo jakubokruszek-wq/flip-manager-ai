@@ -1,0 +1,33 @@
+name: Verified existing APK ZIP delivery
+on:
+  push:
+    branches: [codex/android-105-zip-delivery]
+    paths: ['.github/workflows/android-105-zip-delivery.yml']
+permissions:
+  contents: write
+jobs:
+  zip:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Package the exact already tested APK without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download gecko-poc-0.5.105 --repo jakubokruszek-wq/flip-manager-ai --pattern flip-watcher-0.5.105-arm64.apk
+          echo 'b96065326061c6d301397a140da82412b2e459179d16add18b7d55a8c51be4cf  flip-watcher-0.5.105-arm64.apk' | sha256sum -c -
+          python3 - <<'PY'
+          import zipfile,hashlib,pathlib,json
+          apk=pathlib.Path('flip-watcher-0.5.105-arm64.apk')
+          assert apk.stat().st_size==112162795
+          output=pathlib.Path('flip-watcher-0.5.105-arm64.zip')
+          info=zipfile.ZipInfo(apk.name,date_time=(2026,11,13,0,0,0));info.compress_type=zipfile.ZIP_STORED;info.external_attr=0o100644 << 16
+          with zipfile.ZipFile(output,'w') as z:z.writestr(info,apk.read_bytes())
+          with zipfile.ZipFile(output) as z:
+              assert z.namelist()==[apk.name]
+              assert hashlib.sha256(z.read(apk.name)).hexdigest()=='b96065326061c6d301397a140da82412b2e459179d16add18b7d55a8c51be4cf'
+              assert z.testzip() is None
+          print(json.dumps({'filename':output.name,'bytes':output.stat().st_size,'sha256':hashlib.sha256(output.read_bytes()).hexdigest()}))
+          PY
+          gh release upload gecko-poc-0.5.105 flip-watcher-0.5.105-arm64.zip --repo jakubokruszek-wq/flip-manager-ai
