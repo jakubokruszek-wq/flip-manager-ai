@@ -81,7 +81,7 @@ object DesktopSessionPreview {
                 if(reply.status=="WAIT_FRESH"){gate.waitFor(DesktopTrial.Phase.FRESHNESS);delay(200);continue}
                 if(fixture&&reply.reason=="CONTEXT"){
                     val diagnosis=channel.structureDiagnosis(group,0)
-                    android.util.Log.e("WAKE_CONTEXT","status=${diagnosis?.status} counts=${diagnosis?.counts?.filterKeys{it.startsWith("ctx")}}")
+                    error("WAKE_CONTEXT status=${diagnosis?.status} counts=${diagnosis?.counts?.filterKeys{it.startsWith("ctx")}}")
                 }
                 if(reply.status!="OK")return@withContext failure(reply.reason.takeIf{it in DesktopTrial.reasons}?:"PROTOCOL",reply.takeIf{it.reason=="NOTICE_BLOCKED"})
                 if(reply.stats.getValue("desktop")!=1)return@withContext failure("DESKTOP_NOT_APPLIED")
