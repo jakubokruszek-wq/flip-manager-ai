@@ -4,6 +4,14 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SourceRetryPolicyTest {
+    @Test fun dnsFailureNeverConsumesCompletionAndOnlyKnownHostErrorsPauseTheCycle(){
+        for(issue in listOf("GROUP_LOAD_ERROR_C5_E37","PROFILE_LOAD_ERROR_C5_E37")){
+            assertTrue(SourceRetryPolicy.pauseForNetwork(issue))
+            assertFalse(SourceRetryPolicy.closeFailure(issue,false))
+            assertFalse(SourceRetryPolicy.closeFailure(issue,true))
+        }
+        for(issue in listOf("GROUP_RENDER_RETRY_FAILED","GROUP_LOAD_ERROR_C7_E55","GROUP_LOAD_ERROR_C5_E38"))assertFalse(SourceRetryPolicy.pauseForNetwork(issue))
+    }
     @Test fun missingPhotoDoesNotReplayTheWholeGroupButOtherEvidenceGetsOneRetry(){
         assertTrue(SourceRetryPolicy.closeCapture("",false))
         assertTrue(SourceRetryPolicy.closeCapture("SALE_PHOTO_MISSING",false))

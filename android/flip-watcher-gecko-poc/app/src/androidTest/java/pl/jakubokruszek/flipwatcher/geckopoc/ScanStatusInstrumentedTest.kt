@@ -149,6 +149,41 @@ class ScanStatusInstrumentedTest {
         assertEquals(0L,partial.lastSuccess)
         worker(scan=::scan).doWork();assertEquals(2,calls.size)
     }
+    @Test fun newCycleStartsAtOneAndDnsPauseResumesWithoutSkippingSources()=runBlocking {
+        val groups=WatcherGroups.configured.take(2)
+        val calls=mutableListOf<String>();var dns=true
+        WatcherAutomation.preferences(context).edit().putString("last_attempted_source",groups[0].key).commit()
+        suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult {
+            calls+=group.key;progress("READING")
+            if(dns)error("GROUP_LOAD_ERROR_C5_E37")
+            val row=DesktopRow("550000000000099",group.url+"posts/550000000000099/","DOM",null,"NONE",null,null,null,null,null,"OTHER",false,0,"INTENT")
+            return SavedResult(System.currentTimeMillis(),listOf(row),emptyList(),emptyList(),captureStats=DesktopProtocol.emptyStats()+mapOf("pageVisible" to 1,"scrollMoves" to 1))
+        }
+        assertEquals(androidx.work.ListenableWorker.Result.retry(),worker(scan=::scan).doWork())
+        assertEquals(listOf(groups[0].key),calls)
+        val paused=WatcherScanStatus.read(context)
+        assertEquals("NETWORK_DNS_UNAVAILABLE",paused.reason);assertEquals("RETRY",paused.phase)
+        assertEquals(0,paused.done);assertEquals(0,continuations)
+        val slot=WatcherCaptureReport.cycle("manual/status-test")
+        WatcherOutbox(context).use{assertFalse(it.scanned(slot,groups[0].key))}
+        dns=false
+        assertEquals(androidx.work.ListenableWorker.Result.success(),worker(scan=::scan).doWork())
+        assertEquals(listOf(groups[0].key,groups[0].key,groups[1].key),calls)
+        assertEquals("DONE",WatcherScanStatus.read(context).phase);assertEquals(2,WatcherScanStatus.read(context).done)
+    }
+    @Test fun dnsCompletionRepairPreservesSuccessfulSourcesAndTheirOtherCycles(){
+        val groups=WatcherGroups.configured.take(2);val slot="dns-repair-cycle"
+        WatcherOutbox(context).use{q->
+            for(group in groups){
+                q.completeScan(slot,group.key);q.completeScan("other-cycle",group.key)
+                q.report(credentials.deviceId,slot,group.key,WatcherCaptureReport.create(context,slot,"fixture",group,null,if(group==groups[0])"GROUP_LOAD_ERROR_C5_E37"else""))
+            }
+            assertEquals(1,q.reopenNetworkFailures(slot));assertEquals(0,q.reopenNetworkFailures(slot))
+            assertFalse(q.scanned(slot,groups[0].key));assertTrue(q.scanned(slot,groups[1].key))
+            assertTrue(q.scanned("other-cycle",groups[0].key));assertTrue(q.scanned("other-cycle",groups[1].key))
+            assertEquals(2,q.cycleReports(slot).size)
+        }
+    }
     @Test fun missingPairingAndVisibleBrowserHaveDistinctPersistentReasons()=runBlocking {
         val unused:suspend (WatcherGroup,(String)->Unit)->SavedResult={_,_->error("Browser must not start")}
         assertEquals(androidx.work.ListenableWorker.Result.retry(),worker(missingCredentials=true,scan=unused).doWork())

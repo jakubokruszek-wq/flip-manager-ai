@@ -44,6 +44,7 @@ object ScanStatusText {
         "ANDROID_PERMISSION_DENIED"->"Android odmówił uprawnienia potrzebnego do pracy."
         "BATCH_CONTINUE"->"Partia osiągnęła limit czasu. Zaplanowano kontynuację tej samej próby, z zachowaniem postępu źródeł."
         "SOURCE_TIMEOUT"->"Źródło przekroczyło budżet czasu. Nie potwierdzono odczytu; automat przechodzi do kolejnych źródeł."
+        "NETWORK_DNS_UNAVAILABLE"->"Nie można odnaleźć serwera Facebooka (DNS). Skan czeka na ponowienie z narastającym odstępem; nie pomija kolejnych źródeł."
         "SLOT_PARTIAL"->"Cykl został wykonany z brakami odczytu. Szczegóły są zachowane w diagnostyce; następny termin ponowi odczyt."
         "CAPTURE_PARTIAL"->"Cykl zakończony z brakami. Konkretne przyczyny i liczby dla źródeł są powyżej."
         "SALE_PHOTO_MISSING"->"Brakuje zdjęć części ofert. Wyniki zachowano; ten brak nie powoduje ponownego skanowania całego źródła."

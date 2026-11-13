@@ -139,6 +139,15 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
     fun scannedSources(slot:String):Set<String> = readableDatabase.rawQuery("SELECT source FROM scans WHERE slot=?",arrayOf(slot)).use{c->buildSet{while(c.moveToNext())add(c.getString(0))}}
     fun attemptedSources(slot:String):Set<String> = readableDatabase.rawQuery("SELECT DISTINCT source FROM capture_reports WHERE slot=?",arrayOf(slot)).use{c->buildSet{while(c.moveToNext())add(c.getString(0))}}
     fun completeScan(slot:String,group:String){writableDatabase.execSQL("INSERT OR IGNORE INTO scans(slot,source) VALUES(?,?)",arrayOf(slot,group))}
+    /** Repair only completion receipts contradicted by the latest own DNS failure. Offers stay untouched. */
+    fun reopenNetworkFailures(slot:String):Int {
+        val failed=cycleReports(slot).filter{SourceRetryPolicy.pauseForNetwork(it.optString("issue"))}.map{it.optString("groupId")}.filter{it.isNotEmpty()}
+        val db=writableDatabase;var reopened=0
+        db.beginTransaction()
+        try{for(source in failed)reopened+=db.delete("scans","slot=? AND source=?",arrayOf(slot,source));db.setTransactionSuccessful()}
+        finally{db.endTransaction()}
+        return reopened
+    }
     /** Bounded encrypted diagnostics; never contains post bodies, photos or credentials. */
     fun report(device:String,slot:String,source:String,report:JSONObject){
         val id=report.getString("batchId");val bytes=report.toString().toByteArray(Charsets.UTF_8)
