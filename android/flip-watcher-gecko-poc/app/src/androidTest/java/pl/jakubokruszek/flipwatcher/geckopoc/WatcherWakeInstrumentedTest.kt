@@ -21,7 +21,7 @@ class WatcherWakeInstrumentedTest {
     @Test fun actualExactAlarmStartsForegroundScanInDozeWithoutWakingDisplay()=runBlocking {
         val prefs=WatcherAutomation.preferences(context);val backup=prefs.all.toMap()
         val power=context.getSystemService(PowerManager::class.java)
-        val exactBefore=WatcherWake.exact(context);val exemptBefore=power.isIgnoringBatteryOptimizations(context.packageName)
+        val exemptBefore=power.isIgnoringBatteryOptimizations(context.packageName)
         val visible=WatcherAutomation.uiVisible;val factory=WatcherWake.runFactory
         val oldSources=WatcherSources.active.toList();val oldGroups=WatcherGroups.active.toList()
         val catalog=context.getSharedPreferences("gecko_poc",Context.MODE_PRIVATE);val oldCatalog=catalog.getString("watcher_active_groups",null)
@@ -94,7 +94,9 @@ class WatcherWakeInstrumentedTest {
             shell("dumpsys deviceidle unforce");shell("dumpsys battery reset")
             shell("input keyevent KEYCODE_WAKEUP");shell("wm dismiss-keyguard")
             if(!exemptBefore)shell("dumpsys deviceidle whitelist -${context.packageName}")
-            if(!exactBefore)shell("appops set ${context.packageName} SCHEDULE_EXACT_ALARM default")
+            // Android kills the app when exact-alarm access is revoked. CI
+            // restores this app-op AFTER instrumentation returns, outside this
+            // process; revoking here races delivery of the final test result.
             val edit=prefs.edit().clear();for((k,v)in backup)when(v){is String->edit.putString(k,v);is Boolean->edit.putBoolean(k,v);is Long->edit.putLong(k,v);is Int->edit.putInt(k,v)};edit.commit()
             context.deleteDatabase("watcher-outbox-v1.db");server.close()
         }
