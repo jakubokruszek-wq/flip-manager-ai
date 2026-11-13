@@ -14,7 +14,7 @@ import java.io.File
 class RollbackUpgradeInstrumentedTest {
     private val context:Context=ApplicationProvider.getApplicationContext()
     private val device="12345678-1234-1234-1234-123456789012"
-    private val token="synthetic_rollback_upgrade_token_12345678"
+    private val token="x".repeat(40)
     private val proof get()=context.getSharedPreferences("rollback-upgrade-proof-v1",Context.MODE_PRIVATE)
     @Test fun a_seedOn102(){
         assertEquals("0.5.102-gecko-poc",context.packageManager.getPackageInfo(context.packageName,0).versionName)
