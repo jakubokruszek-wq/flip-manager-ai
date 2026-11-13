@@ -33,7 +33,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
         if(view is ViewGroup)for(i in 0 until view.childCount)erase(view.getChildAt(i))
     }
     private fun numberFormat(value:Number?)=value?.let{NumberFormat.getNumberInstance(Locale.forLanguageTag("pl-PL")).apply{maximumFractionDigits=2}.format(it)}?:"—"
-    fun showRows(rows:List<DesktopRow>,notice:String?=null,thumbnails:(String)->List<Bitmap> = {emptyList()},archived:Boolean=false){
+    fun showRows(rows:List<DesktopRow>,notice:String?=null,thumbnails:(String)->List<Bitmap> = {emptyList()},archived:Boolean=false,postTexts:Map<String,String> = emptyMap()){
         filterDialog?.dismiss();filterDialog=null
         if(rows.isEmpty())filter=OfferFilter()
         erase(content);content.removeAllViews()
@@ -41,16 +41,16 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
         content.setPadding((12*dp).toInt(),(8*dp).toInt(),(12*dp).toInt(),(12*dp).toInt())
         fun label(text:String,size:Float=16f)=TextView(context).apply{this.text=text;textSize=size;isSaveEnabled=false;setPadding(0,6,0,6)}
         val visible=rows.filter{filter.matches(it)}
-        fun ready(row:DesktopRow)=OfferQuality.reason(row,thumbnails(row.postId).count{!it.isRecycled})==null
+        fun ready(row:DesktopRow)=OfferQuality.reason(row,thumbnails(row.postId).count{!it.isRecycled},postTexts[row.postId])==null
         val offers=visible.filter(::ready)
         content.addView(label("Oferty (${offers.size})",22f).apply{setTypeface(null,Typeface.BOLD)})
         content.addView(Button(context).apply{
             tag="poc.offers.filters";text="Filtry: ${visible.size}/${rows.size} postów • ${filter.section.label}";isAllCaps=false;isSaveEnabled=false
-            setOnClickListener{showFilters{showRows(rows,notice,thumbnails,archived)}}
+            setOnClickListener{showFilters{showRows(rows,notice,thumbnails,archived,postTexts)}}
         })
         if(filter!=OfferFilter())content.addView(Button(context).apply{
             text="Wyczyść filtry";isAllCaps=false;isSaveEnabled=false
-            setOnClickListener{filter=OfferFilter();showRows(rows,notice,thumbnails,archived)}
+            setOnClickListener{filter=OfferFilter();showRows(rows,notice,thumbnails,archived,postTexts)}
         })
         content.addView(label("Filtry zmieniają tylko widok. Uzupełnianie i OCR obejmują całą zachowaną listę. Sugestie OCR nie są używane do filtrowania.",13f))
         if(visible.isEmpty()&&rows.isNotEmpty())content.addView(label("Żaden post nie pasuje do filtrów. Zmień lub wyczyść filtry; zachowane posty nie zostały usunięte."))
@@ -86,7 +86,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
             parent.addView(label("Heurystyki; porównaj ze zdjęciem. ${DesktopPresentation.explanation(r)}",13f))
         }}
         if(notice!=null)content.addView(label(notice,14f))
-        content.addView(label("Oferty: potwierdzona sprzedaż i co najmniej jedno zapisane zdjęcie, także grafika z tekstem. Wynik jest zapisywany lokalnie; opuszczenie aplikacji nie kasuje bazy.",14f))
+        content.addView(label("Oferty: potwierdzona sprzedaż z zachowaną treścią lub zapisanym zdjęciem, także grafiką z tekstem. Wynik jest zapisywany lokalnie; opuszczenie aplikacji nie kasuje bazy.",14f))
         if(offers.isEmpty())content.addView(label(notice?:if(rows.any{DesktopPresentation.reviewable(it)})"Brak automatycznie rozpoznanych ofert. Posty do ręcznego sprawdzenia znajdują się poniżej." else "Brak zachowanych ofert. Uruchom nowe wyszukiwanie z nową zgodą."))
         val format=NumberFormat.getNumberInstance(Locale.forLanguageTag("pl-PL")).apply{maximumFractionDigits=2}
         fun number(n:Number?)=n?.let{format.format(it)}?:"—"
@@ -102,6 +102,7 @@ class OffersPanel(context:Context,private val onOpen:(DesktopRow)->Unit,private 
             card.addView(label(listOfNotNull(row.district,row.neighborhood,row.street).joinToString(" / ").ifEmpty{"Lokalizacja: —"}))
             card.addView(label(DesktopPresentation.completeness(row),14f).apply{tag="poc.offer.missing.${row.postId}"})
             card.addView(label(DesktopPresentation.source(row),12f))
+            postTexts[row.postId]?.let{body->card.addView(label(body,15f).apply{tag="poc.offer.text.${row.postId}"})}
             card.addView(label(DesktopPresentation.photos(row.photos),14f))
             val pictures=thumbnails(row.postId).filter{!it.isRecycled}.take(3)
             if(pictures.isEmpty())card.addView(label("Brak lokalnej miniatury — zdjęcie mogło nie być widoczne podczas próby.",13f))

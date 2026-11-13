@@ -37,10 +37,10 @@ object WatcherCaptureReport {
         appendLine("Ostatni odczyt każdego źródła w cyklu: źródła ${reports.size} • posty ${reports.sumOf{it.getJSONArray("posts").length()}} • zapisane zdjęcia ${reports.sumOf{r->val p=r.getJSONArray("posts");(0 until p.length()).sumOf{p.getJSONObject(it).getInt("photos")}}}")
         val gaps=reports.filter{it.optString("issue").isNotEmpty()}
         if(gaps.isNotEmpty()){
-            val names=mapOf("PAGE_HIDDEN" to "strona nie była widoczna", "NO_POST_EVIDENCE" to "brak potwierdzonych postów", "SCROLL_NOT_CONFIRMED" to "brak potwierdzenia przewijania", "SALE_PHOTO_MISSING" to "brak zdjęć części kandydatów ofert", "CAPTURE_NOT_MEASURED" to "brak pomiaru odczytu")
+            val names=mapOf("PAGE_HIDDEN" to "strona nie była widoczna", "NO_POST_EVIDENCE" to "brak potwierdzonych postów", "SCROLL_NOT_CONFIRMED" to "brak potwierdzenia przewijania", "SALE_PHOTO_MISSING" to "nie zapisano zdjęć części ofert", "CAPTURE_NOT_MEASURED" to "brak pomiaru odczytu")
             for((reason,items)in gaps.groupBy{it.optString("issue")})appendLine("${names[reason]?:reason}: ${items.size} źródeł")
             val missing=gaps.filter{it.optString("issue")=="SALE_PHOTO_MISSING"}.sumOf{r->val p=r.getJSONArray("posts");(0 until p.length()).count{val post=p.getJSONObject(it);post.optInt("photos")==0&&post.optString("intent")=="SELL_PROPERTY"}}
-            if(missing>0)appendLine("Posty oznaczone jako sprzedaż bez zdjęcia: $missing. Ten brak nie oznacza problemu z przewijaniem.")
+            if(missing>0)appendLine("Posty sprzedaży bez zapisanego zdjęcia: $missing. Ten brak nie oznacza problemu z przewijaniem.")
         }
         if(includeSources)for(r in reports){
             val source=r.optString("groupId");val name=WatcherSources.find(source)?.name?:source

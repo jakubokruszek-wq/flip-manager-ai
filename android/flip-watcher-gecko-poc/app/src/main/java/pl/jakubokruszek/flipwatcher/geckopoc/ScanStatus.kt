@@ -47,7 +47,7 @@ object ScanStatusText {
         "NETWORK_DNS_UNAVAILABLE"->"Nie można odnaleźć serwera Facebooka (DNS). Skan czeka na ponowienie z narastającym odstępem; nie pomija kolejnych źródeł."
         "SLOT_PARTIAL"->"Cykl został wykonany z brakami odczytu. Szczegóły są zachowane w diagnostyce; następny termin ponowi odczyt."
         "CAPTURE_PARTIAL"->"Cykl zakończony z brakami. Konkretne przyczyny i liczby dla źródeł są powyżej."
-        "SALE_PHOTO_MISSING"->"Brakuje zdjęć części ofert. Wyniki zachowano; ten brak nie powoduje ponownego skanowania całego źródła."
+        "SALE_PHOTO_MISSING"->"Nie zapisano zdjęć przy części ofert; posty na Facebooku mogą je zawierać. Wyniki zachowano; ten brak nie powoduje ponownego skanowania całego źródła."
         "PAGE_HIDDEN","NO_POST_EVIDENCE","SCROLL_NOT_CONFIRMED","CAPTURE_NOT_MEASURED"->"Odczyt źródła nie został potwierdzony ($code). Zaplanowano jedno ponowienie."
         "SLOT_COMPLETED"->"To okno zostało już wykonane. Automat czeka na następny termin."
         "WINDOW_NOT_DUE"->"Nowy termin skanu jeszcze nie nastąpił."

@@ -53,7 +53,7 @@ export function parseMobilePost(raw: string, deviceId: string, key: string): Mob
   const location = [district, text(r.neighborhood, 40), text(r.street, 80)].filter(Boolean).join(", ") || null;
   check(Array.isArray(j.photos) && j.photos.length <= 3);
   if (r.intent !== "SELL_PROPERTY" || r.usable !== true || !["CLASSIFIER", "CANDIDATE", "MISSING_FIELDS"].includes(String(r.qualification))) throw new MobileQualityError("SALE_NOT_CONFIRMED");
-  if (j.photos.length < 1) throw new MobileQualityError("PHOTO_REQUIRED");
+  if (j.photos.length < 1 && !(typeof postText === "string" && postText.trim().length >= 25)) throw new MobileQualityError("PHOTO_REQUIRED");
   const seen = new Set<number>();
   const photos = j.photos.map(p => {
     check(record(p)); fields(p, ["slot", "jpeg"]);

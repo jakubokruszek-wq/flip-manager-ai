@@ -106,3 +106,15 @@ test("profile v3 accepts true profile permalinks including opaque IDs; legacy gr
  }
  const j=snapshot();j.row.postId="pfbidAbCdEf0123456789";j.row.permalink=`https://www.facebook.com/groups/${j.groupId}/posts/${j.row.postId}/`;const f=frozen(j);assert.throws(()=>parseMobilePost(f.raw,device,f.key));
 });
+
+
+test("confirmed text sale remains importable without a captured image",async()=>{
+ const text="OFF-MARKET! sprzedam mieszkanie 37,64m2 Łódź Tatrzańska 66/68 260000zł";
+ const body={...snapshot(),version:2,postText:text,photos:[]};body.row.price=260000;body.row.area=37.64;
+ const packet=frozen(body);const parsed=parseMobilePost(packet.raw,device,packet.key);
+ assert.equal(parsed.postText,text);assert.equal(parsed.photos.length,0);assert.equal(parsed.price,260000);assert.equal(parsed.area,37.64);
+ let imported=0;const handler=createMobilePost({authenticate:async()=>({id:device}),allowed:async()=>true,authStatus:()=>null,upload:async()=>[],importPost:async(_device,_key,post,images)=>{imported++;assert.equal(post.postText,text);assert.deepEqual(images,[]);return{listingId:listing,status:"created"};}});
+ assert.equal((await handler(request(packet))).status,201);assert.equal(imported,1);
+ for(const short of ['x',' '.repeat(30)]){const invalid=frozen({...body,postText:short});assert.throws(()=>parseMobilePost(invalid.raw,device,invalid.key));}
+ for(const qualification of ['FOREIGN_CITY','CONFLICT','NOT_PROPERTY']){const invalid=frozen({...body,row:{...body.row,qualification}});assert.throws(()=>parseMobilePost(invalid.raw,device,invalid.key));}
+});

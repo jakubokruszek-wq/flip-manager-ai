@@ -179,7 +179,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                                 val held=runCatching {
                                     val body=org.json.JSONObject(item.body);val group=body.getString("groupId")
                                     val row=SavedResultCodec.rows(org.json.JSONArray().put(body.getJSONObject("row")),group,true,body.optString("sourceType")=="PROFILE")?.singleOrNull()?:error("QUALITY_INVALID")
-                                    OfferQuality.reason(row,body.getJSONArray("photos").length())
+                                    OfferQuality.reason(row,body.getJSONArray("photos").length(),body.optString("postText").takeIf{body.opt("postText") is String})
                                 }.getOrElse{"QUALITY_INVALID"}
                                 if(held!=null){queue.hold(item,held);return@repeat}
                                 WatcherScanStatus.update(context,run){it.copy(phase="UPLOADING")}

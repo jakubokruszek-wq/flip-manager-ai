@@ -35,7 +35,7 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
             runCatching{val body=JSONObject(open(c.getString(0),c.getBlob(1)))
                 val group=body.getString("groupId")
                 val row=SavedResultCodec.rows(JSONArray().put(body.getJSONObject("row")),group)?.singleOrNull()
-                val ready=row!=null&&OfferQuality.reason(row,body.getJSONArray("photos").length())==null
+                val ready=row!=null&&OfferQuality.reason(row,body.getJSONArray("photos").length(),body.optString("postText").takeIf{body.opt("postText") is String})==null
                 db.update("outbox",ContentValues().apply{
                     put("source",group);put("post",body.getJSONObject("row").getString("postId"))
                     // One migration-only replay of the SAME key/body refreshes truthful sale
@@ -86,8 +86,14 @@ class WatcherOutbox(context:Context):SQLiteOpenHelper(context,"watcher-outbox-v1
                 require(body.size<=512*1024)
                 val id="mobile-v1:"+AutomationPolicy.digest((device+"/"+group.id+"/"+row.postId+"/").toByteArray()+body)
                 val exists=db.rawQuery("SELECT 1 FROM outbox WHERE id=?",arrayOf(id)).use{it.moveToFirst()}
+                val ready=OfferQuality.reason(row,photos.size,text)==null
+                if(exists&&ready&&pending<1000){
+                    // Repeated observation can release this same previously held
+                    // frozen text offer. Never retry blocked/sent/deleted rows.
+                    val promoted=db.update("outbox",ContentValues().apply{put("state","pending");put("next_at",0L);put("attempt",0)},"id=? AND state='quality_hold'",arrayOf(id))
+                    if(promoted>0){pending+=promoted;held-=promoted}
+                }
                 if(!exists){
-                    val ready=OfferQuality.reason(row,photos.size)==null
                     // Incomplete candidates must never consume the delivery capacity.
                     // Keep existing held evidence intact; skip only NEW held snapshots at its own cap.
                     if(!ready&&held>=1000){skippedHeld++;continue}

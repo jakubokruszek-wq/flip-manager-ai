@@ -24,4 +24,25 @@ class TextPosterInstrumentedTest {
             }
         }finally{server.close()}
     }
+    @Test fun textOnlyOfferIsVisibleAndOldHeldSnapshotCanBeReleasedWithoutChangingIt()=runBlocking {
+        val device="11111111-1111-4111-8111-111111111104"
+        val group=WatcherGroups.configured.first();val id="550000000000104"
+        val body="OFF-MARKET! sprzedam mieszkanie 37,64m2 Łódź Tatrzańska 66/68 260000zł"
+        val row=DesktopRow(id,group.url+"posts/$id/","DOM",260000.0,"EXPLICIT_TOTAL",37.64,null,null,null,null,"SELL_PROPERTY",true,0)
+        val saved=SavedResult(System.currentTimeMillis(),listOf(row),emptyList(),emptyList(),mapOf(id to body))
+        WatcherOutbox(context).use{q->
+            q.enqueue(device,group,saved);val first=checkNotNull(q.next(device,Long.MAX_VALUE))
+            assertEquals(body,org.json.JSONObject(first.body).getString("postText"));assertEquals(0,org.json.JSONObject(first.body).getJSONArray("photos").length())
+            q.writableDatabase.execSQL("UPDATE outbox SET state='quality_hold' WHERE id=?",arrayOf(first.id))
+            assertNull(q.next(device,Long.MAX_VALUE))
+            q.enqueue(device,group,saved);val resumed=checkNotNull(q.next(device,Long.MAX_VALUE))
+            assertEquals(first.id,resumed.id);assertEquals(first.body,resumed.body)
+        }
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main){
+            val panel=OffersPanel(context,onOpen={},onReport={})
+            panel.showRows(listOf(row),postTexts=mapOf(id to body))
+            assertEquals(body,panel.findViewWithTag<android.widget.TextView>("poc.offer.text.$id")?.text?.toString())
+        }
+    }
+
 }

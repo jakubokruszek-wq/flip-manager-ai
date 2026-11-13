@@ -127,7 +127,7 @@ class PocActivity : ComponentActivity() {
     private fun savedNotice()=savedResult?.let{"Zachowany wynik: "+java.text.DateFormat.getDateTimeInstance().format(java.util.Date(it.savedAt))+". Dane historyczne; nowy odczyt wymaga nowej zgody."}
     private fun showSavedResult(){
         if(!::offersPanel.isInitialized||desktopRows.isNotEmpty())return
-        offersPanel.showRows(savedResult?.rows.orEmpty(),archiveError?:savedNotice(),thumbnails={savedThumbnails.rows(it)},archived=true)
+        offersPanel.showRows(savedResult?.rows.orEmpty(),archiveError?:savedNotice(),thumbnails={savedThumbnails.rows(it)},archived=true,postTexts=savedResult?.postTexts.orEmpty())
     }
     private fun readSavedResult(){
         val revision=archiveRevision
@@ -369,7 +369,7 @@ class PocActivity : ComponentActivity() {
         if(::offersPanel.isInitialized)offersPanel.showRows(emptyList())
         desktopThumbnails.clear()
         showSavedResult()
-        if(::offersTab.isInitialized)offersTab.text="Oferty (${displayedRows().count{OfferQuality.reason(it,offerPictures(it.postId).count{b->!b.isRecycled})==null}})"
+        if(::offersTab.isInitialized)offersTab.text="Oferty (${displayedRows().count{OfferQuality.reason(it,offerPictures(it.postId).count{b->!b.isRecycled},savedResult?.postTexts?.get(it.postId))==null}})"
     }
     private fun busyForTabs()=WatcherAutomation.lock.isLocked||watcherBusy||deletingResults||ocrBusy||reviewWorking()||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad
     private fun selectContentTab(offers:Boolean){
@@ -1670,7 +1670,7 @@ class PocActivity : ComponentActivity() {
         if(::offersTab.isInitialized){
             val enabled=!busyForTabs()
             facebookTab.isEnabled=enabled;offersTab.isEnabled=enabled
-            offersTab.text="Oferty (${displayedRows().count{OfferQuality.reason(it,offerPictures(it.postId).count{b->!b.isRecycled})==null}})"
+            offersTab.text="Oferty (${displayedRows().count{OfferQuality.reason(it,offerPictures(it.postId).count{b->!b.isRecycled},savedResult?.postTexts?.get(it.postId))==null}})"
         }
         listOf("desktopResult","reviewResult","ocrResult","deleteResults","savedOcr","photoDiagnosis","watcherGroups","watcherConnect").forEach{buttons[it]?.isEnabled=!busyForTabs()}
         buttons["savedOcr"]?.isEnabled=!busyForTabs()&&!archiveWritePending&&savedResult?.photos?.any{it.crop}==true

@@ -59,7 +59,7 @@ object WatcherScanSummary {
         val sources=j.optJSONObject("sources")?:JSONObject()
         val entries=sources.keys().asSequence().map{sources.getJSONObject(it)}.toList()
         if(!includeSources){
-            appendLine("Nowe posty sprzedaży ze zdjęciem: ${entries.sumOf{it.optInt("new")}}")
+            appendLine("Nowe oferty sprzedaży (także tekstowe): ${entries.sumOf{it.optInt("new")}}")
             append("Źródła z brakami odczytu: ${entries.count{it.optBoolean("attempted")&&it.optString("issue").isNotEmpty()}}. Szczegóły pod przyciskiem „Pokaż grupy i profile”.")
             return@buildString
         }
@@ -72,6 +72,6 @@ object WatcherScanSummary {
             val duration=if(ms>0)" • czas: ${ms/60000} min ${ms/1000%60} s"else""
             appendLine("$prefix: ${s.optString("name")} — $count"+(if(s.optString("issue").isNotEmpty())" • odczyt częściowy"else"")+duration)
         }
-        append("Liczniki nowych ofert odświeżamy najwyżej co 10 sekund oraz po zakończeniu odczytu źródła. Nowe = posty sprzedaży ze zdjęciem po raz pierwszy zapisane w kolejce tego źródła. Ponowienia nie zwiększają wyniku; to nie jest liczba różnych mieszkań ani potwierdzenie wysyłki do Managera.")
+        append("Liczniki nowych ofert odświeżamy najwyżej co 10 sekund oraz po zakończeniu odczytu źródła. Nowe = potwierdzone oferty z treścią lub zdjęciem po raz pierwszy zapisane w kolejce tego źródła. Ponowienia nie zwiększają wyniku; to nie jest liczba różnych mieszkań ani potwierdzenie wysyłki do Managera.")
     }
 }

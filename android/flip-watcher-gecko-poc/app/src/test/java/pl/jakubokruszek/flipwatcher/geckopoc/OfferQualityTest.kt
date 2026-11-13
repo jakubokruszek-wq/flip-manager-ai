@@ -9,6 +9,12 @@ class OfferQualityTest {
         assertEquals("PHOTO_REQUIRED",OfferQuality.reason(row().copy(photos=20),0))
         assertNull(OfferQuality.reason(row(),1)) // The actual stored image can contain text.
     }
+    @Test fun confirmedTextSaleDoesNotRequireCapturedPicture(){
+        val body="OFF-MARKET! sprzedam mieszkanie 37,64m2 Łódź Tatrzańska 66/68 260000zł"
+        assertNull(OfferQuality.reason(row(),0,body))
+        for(text in listOf(null,"","x"," ".repeat(30)))assertEquals("PHOTO_REQUIRED",OfferQuality.reason(row(),0,text))
+        assertEquals("SALE_NOT_CONFIRMED",OfferQuality.reason(row().copy(qualification="FOREIGN_CITY"),0,body))
+    }
     @Test fun nonSaleAndUncertainPostsCannotBecomeOffersByHavingPictures(){
         for(intent in listOf("UNKNOWN","BUY_PROPERTY","RENT_OFFER","RENT_WANTED","SERVICE","OTHER"))assertEquals("SALE_NOT_CONFIRMED",OfferQuality.reason(row().copy(intent=intent),1))
         for(qualification in listOf("NO_TEXT","FOREIGN_CITY","NOT_PROPERTY","INTENT","CONFLICT"))assertEquals("SALE_NOT_CONFIRMED",OfferQuality.reason(row().copy(qualification=qualification),1))
