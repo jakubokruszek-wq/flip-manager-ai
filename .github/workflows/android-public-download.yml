@@ -8,7 +8,7 @@ permissions:
 jobs:
   public-download:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,3 +31,7 @@ jobs:
         env:
           ANDROID_APK_PUBLIC_CHECK: '1'
         run: node --experimental-strip-types --test features/android-download/chrome-download.test.cjs
+      - name: Verify separate optional diagnostic APK without changing the public default
+        env:
+          ANDROID_APK_PUBLIC_CHECK: '1'
+        run: node --experimental-strip-types --test features/android-download/diagnostic-public-download.test.mjs
