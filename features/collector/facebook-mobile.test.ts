@@ -114,7 +114,7 @@ test("confirmed text sale remains importable without a captured image",async()=>
  assert.equal(parsed.postText,text);assert.equal(parsed.photos.length,0);assert.equal(parsed.price,260000);assert.equal(parsed.area,37.64);
  let imported=0;const handler=createMobilePost({authenticate:async()=>({id:device}),allowed:async()=>true,authStatus:()=>null,upload:async()=>[],importPost:async(_device,_key,post,images)=>{imported++;assert.equal(post.postText,text);assert.deepEqual(images,[]);return{listingId:listing,status:"created"};}});
  assert.equal((await handler(request(packet))).status,201);assert.equal(imported,1);
- for(const short of ['x',' '.repeat(30)]){const invalid=frozen({...body,postText:short});assert.throws(()=>parseMobilePost(invalid.raw,device,invalid.key));}
+ for(const short of ['x',' '.repeat(30)]){const changed={...body,postText:short};const invalid=frozen(changed);assert.throws(()=>parseMobilePost(invalid.raw,device,invalid.key));}
  for(const qualification of ['FOREIGN_CITY','CONFLICT','NOT_PROPERTY']){const invalid=frozen({...body,row:{...body.row,qualification}});assert.throws(()=>parseMobilePost(invalid.raw,device,invalid.key));}
 });
 
