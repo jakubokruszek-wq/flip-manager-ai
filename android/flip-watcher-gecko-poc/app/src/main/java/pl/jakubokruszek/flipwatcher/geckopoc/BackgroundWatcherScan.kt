@@ -59,6 +59,10 @@ class BackgroundWatcherScan(private val context:Context) {
             }
             try {
                 channel.attach(GeckoHost.collectorExtension(context));check(live())
+                // A cold extension can connect before its native delegate exists.
+                // Its watchdog reconnects and revokes desktop grants on disconnect;
+                // finish that handshake before granting a freshly reloaded page.
+                check(GeckoHost.background.awaitPort(8_000)&&live()){load.reason?:"GROUP_BACKGROUND_NOT_READY"}
                 DesktopSessionPreview.applyDesktop(browser)
                 browser.open(GeckoHost.runtime(context));surface=BackgroundViewport(browser)
                 browser.setActive(true);browser.setFocused(true);browser.loadUri(target)
