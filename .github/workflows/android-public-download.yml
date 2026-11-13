@@ -8,7 +8,7 @@ permissions:
 jobs:
   public-download:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -35,3 +35,7 @@ jobs:
         env:
           ANDROID_APK_PUBLIC_CHECK: '1'
         run: node --experimental-strip-types --test features/android-download/diagnostic-public-download.test.mjs
+      - name: Verify ZIP alternative finishes in Chrome and contains the identical signed APK
+        env:
+          ANDROID_APK_PUBLIC_CHECK: '1'
+        run: node --experimental-strip-types --test features/android-download/zip-public-download.test.mjs
