@@ -29,12 +29,13 @@ class RenderComparisonWorker(context:Context,parameters:WorkerParameters):Corout
             return Result.failure()
         }
         if(isStopped)return Result.failure()
-        if(WatcherAutomation.uiVisible)return blocked("COMPARE_WAIT_UI")
+        if(WatcherAutomation.uiVisible||RenderComparisonVisibility.hasStartedActivity)return blocked("COMPARE_WAIT_UI")
         if(!WatcherAutomation.lock.tryLock())return blocked("COMPARE_BUSY")
         return try {
-            if(WatcherAutomation.uiVisible)return blocked("COMPARE_WAIT_UI")
+            if(WatcherAutomation.uiVisible||RenderComparisonVisibility.hasStartedActivity)return blocked("COMPARE_WAIT_UI")
+            val epoch=RenderComparisonVisibility.foregroundEpoch
             val result=withTimeoutOrNull(90_000){
-                RenderComparisonProbe.run(applicationContext,group,null,width,height,{!isStopped&&!WatcherAutomation.uiVisible})
+                RenderComparisonProbe.run(applicationContext,group,null,width,height,{!isStopped&&!WatcherAutomation.uiVisible&&!RenderComparisonVisibility.hasStartedActivity&&RenderComparisonVisibility.foregroundEpoch==epoch})
             }?:RenderComparisonResult("COMPARE_TIMEOUT",emptyMap())
             RenderComparisonStore.record(applicationContext,run,group,3,result)
             Result.success()

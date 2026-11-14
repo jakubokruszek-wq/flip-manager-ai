@@ -25,6 +25,7 @@ class RenderComparisonInstrumentedTest {
     var width=0;var height=0;var focused=false
     kotlinx.coroutines.withTimeout(5000){while(width<128||height<128||!focused){scenario.onActivity{width=it.geckoView.width;height=it.geckoView.height;focused=it.geckoView.hasWindowFocus()};kotlinx.coroutines.delay(50)}}
     assertTrue(width in 128..2160&&height in 128..2160)
+    assertTrue(RenderComparisonVisibility.hasStartedActivity)
     val target="http://127.0.0.1:${server.port}$path"
     fun ready()=view.windowVisibility==android.view.View.VISIBLE&&view.isShown&&view.hasWindowFocus()
     val visible=RenderComparisonProbe.run(context,group,view,width,height,::ready,target)
@@ -37,7 +38,7 @@ class RenderComparisonInstrumentedTest {
     assertEquals(1,headless.stats["comparisonCapture"]);assertTrue((headless.stats["groupAcquiredFrames"]?:0)>0)
     scenario.moveToState(Lifecycle.State.CREATED)
     assertEquals(Lifecycle.State.CREATED,scenario.state)
-    kotlinx.coroutines.withTimeout(5000){while(kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main){view.windowVisibility==android.view.View.VISIBLE})kotlinx.coroutines.delay(50)}
+    kotlinx.coroutines.withTimeout(5000){while(kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main){view.windowVisibility==android.view.View.VISIBLE||RenderComparisonVisibility.hasStartedActivity})kotlinx.coroutines.delay(50)}
     val background=RenderComparisonProbe.run(context,group,null,width,height,{view.windowVisibility!=android.view.View.VISIBLE},target)
     assertEquals("background stats="+background.stats,"RENDER_COMPARE_OBSERVED",background.issue);assertEquals(1,background.stats["comparisonDocument"])
     assertEquals(1,background.stats["comparisonCapture"]);assertTrue((background.stats["groupRenderedFrames"]?:0)>0)
@@ -45,6 +46,16 @@ class RenderComparisonInstrumentedTest {
     assertEquals(visible.stats["comparisonHeight"],background.stats["comparisonHeight"])
    }
   }finally{server.close()}
+ }
+ @Test fun notificationStatusWindowIsVisibleEvenWhenNormalScannerUiFlagIsFalse(){
+  val previous=WatcherAutomation.uiVisible
+  val epoch=RenderComparisonVisibility.foregroundEpoch
+  WatcherAutomation.uiVisible=false
+  try{ActivityScenario.launch(ScanStatusActivity::class.java).use{
+   assertFalse(WatcherAutomation.uiVisible)
+   assertTrue("Diagnostic background arm must reject the visible progress window",RenderComparisonVisibility.hasStartedActivity)
+   assertTrue(RenderComparisonVisibility.foregroundEpoch>epoch)
+  }}finally{WatcherAutomation.uiVisible=previous}
  }
  @Test fun navigationToAnotherGroupIsRejectedWithoutCapturedDocument()=runBlocking {
   val path="/groups/$FIXTURE_GROUP_ID/"
@@ -56,4 +67,3 @@ class RenderComparisonInstrumentedTest {
   }finally{server.close()}
  }
 }
-
