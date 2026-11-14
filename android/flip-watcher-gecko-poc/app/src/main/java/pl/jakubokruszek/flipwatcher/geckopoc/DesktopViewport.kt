@@ -9,7 +9,7 @@ import kotlin.math.*
 
 /** Strict metadata only. No image URL, cookies, text or media IDs cross this boundary. */
 object DesktopViewportProtocol {
-    data class Tile(val postId:String,val slot:Int,val x:Double,val y:Double,val width:Double,val height:Double)
+    data class Tile(val postId:String,val slot:Int,val x:Double,val y:Double,val width:Double,val height:Double,val textPoster:Boolean=false)
     data class Request(val requestId:String,val action:String,val width:Double=0.0,val height:Double=0.0,val tiles:List<Tile> = emptyList(),val x:Double=0.0,val y:Double=0.0,val frameId:String?=null)
     fun parse(j:JSONObject,nonce:String,profile:Boolean=false):Request?=runCatching {
         val base=setOf("type","nonce","requestId","action")
@@ -27,11 +27,12 @@ object DesktopViewportProtocol {
                 val w=num(j,"width",100.0,10000.0);val h=num(j,"height",100.0,10000.0)
                 val a=j.getJSONArray("tiles");if(a.length() !in 1..3)return null
                 val seen=HashSet<String>();val tiles=(0 until a.length()).map{i->val t=a.getJSONObject(i)
-                    if(t.keys().asSequence().toSet()!=setOf("postId","slot","x","y","width","height"))return null
+                    val keys=t.keys().asSequence().toSet();val tileKeys=setOf("postId","slot","x","y","width","height")
+                    if(keys!=tileKeys&&keys!=tileKeys+"textPoster"||t.has("textPoster")&&t.opt("textPoster") !is Boolean)return null
                     val post=t.getString("postId");if(!ProfileIdentity.postId(post,profile)||t.opt("slot") !is Int||t.getInt("slot") !in 0..2||!seen.add("$post:${t.getInt("slot")}"))return null
                     val x=num(t,"x",0.0,w);val y=num(t,"y",0.0,h);val tw=num(t,"width",60.0,w);val th=num(t,"height",60.0,h)
                     if(x+tw>w+0.01||y+th>h+0.01)return null
-                    Tile(post,t.getInt("slot"),x,y,tw,th)
+                    Tile(post,t.getInt("slot"),x,y,tw,th,t.optBoolean("textPoster",false))
                 };Request(id,"photos",w,h,tiles)
             }
             else->null
@@ -156,7 +157,8 @@ class DesktopViewportBridge(private val view:WatcherViewport,private val nonce:S
                         if(x<0||y<0||right<=x||bottom<=y)throw IllegalArgumentException("crop")
                         val crop=Bitmap.createBitmap(frame,x,y,right-x,bottom-y);val factor=min(192.0/crop.width,144.0/crop.height).coerceAtMost(1.0)
                         val small=Bitmap.createScaledBitmap(crop,max(1,(crop.width*factor).toInt()),max(1,(crop.height*factor).toInt()),true)
-                        val owned=if(small===frame||small===crop)requireNotNull(small.copy(Bitmap.Config.ARGB_8888,false)) else small
+                        val original=if(small===frame||small===crop)requireNotNull(small.copy(Bitmap.Config.ARGB_8888,false)) else small
+                        val owned=if(t.textPoster)TextPosterPreview.label(original).also{original.recycle()}else original
                         val ocrFactor=min(1024.0/crop.width,1024.0/crop.height).coerceAtMost(1.0)
                         val ocrScaled=Bitmap.createScaledBitmap(crop,max(1,(crop.width*ocrFactor).toInt()),max(1,(crop.height*ocrFactor).toInt()),true)
                         val ocrOwned=if(ocrScaled===crop||ocrScaled===frame||ocrScaled===owned)requireNotNull(ocrScaled.copy(Bitmap.Config.ARGB_8888,false)) else ocrScaled

@@ -73,4 +73,11 @@ class DesktopViewportTest {
         assertNull(DesktopProtocol.gestureHint(JSONObject(hint.toString()).put("stage","SCRIPT"),nonce))
         assertNull(DesktopProtocol.gestureHint(JSONObject(hint.toString()).put("target","PRIVATE"),nonce))
     }
+    @Test fun optionalPosterFlagIsBooleanOnlyAndOldPhotoRequestsRemainValid(){
+        val p=photos();assertFalse(DesktopViewportProtocol.parse(p,nonce)!!.tiles[0].textPoster)
+        p.getJSONArray("tiles").getJSONObject(0).put("textPoster",true)
+        assertTrue(DesktopViewportProtocol.parse(p,nonce)!!.tiles[0].textPoster)
+        p.getJSONArray("tiles").getJSONObject(0).put("textPoster","true")
+        assertNull(DesktopViewportProtocol.parse(p,nonce))
+    }
 }

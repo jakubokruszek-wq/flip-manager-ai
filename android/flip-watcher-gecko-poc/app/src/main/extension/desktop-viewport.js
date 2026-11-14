@@ -212,7 +212,7 @@ function photos(w,core,group,photoNodes,slots,allowedIds,bindings=[],audit=null,
    if(!media.has(key)){if(media.size===3)continue;media.set(key,{slot:media.size,done:false});}const mark=media.get(key);
    const sourceValue=()=>readSource?readSource():node.currentSrc||node.getAttribute?.('href')||node.getAttribute?.('src');const source=sourceValue();
    checks.push(lookup=>{const after=node.getBoundingClientRect();return node.isConnected!==false&&node.ownerDocument===w.document&&(documentSource?identity(item,lookup)===id:needsNetwork?scrollCards(w,core,group).some(p=>p.card===card)&&identity(photoNodes(card,id,group,core).find(p=>p.node===node)?.item||{},lookup)===id:cards(w,core,group).some(p=>p.card===card&&p.id===id))&&["left","top","right","bottom"].every(k=>Math.abs(after[k]-r[k])<1)&&source===sourceValue()&&(!ready||ready())&&uncovered();});
-   count('photoSelected');if(documentSource)count('photoDocumentSelected');network=network||needsNetwork;tiles.push({postId:id,slot:mark.slot,x,y,width:right-x,height:bottom-y});keys.push(mark);
+   count('photoSelected');if(documentSource)count('photoDocumentSelected');network=network||needsNetwork;tiles.push({postId:id,slot:mark.slot,x,y,width:right-x,height:bottom-y,...(item.posterKey?{textPoster:true}:{})});keys.push(mark);
    if(tiles.length===3)return result();
    if(preferredIds)break;
   }

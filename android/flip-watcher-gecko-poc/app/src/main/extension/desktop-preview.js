@@ -126,8 +126,9 @@ function textPosterNodes(card,postId){
  const doc=card.ownerDocument,w=doc?.defaultView,result=[];
  if(!w?.getComputedStyle)return result;
  const described=String(card.getAttribute?.('aria-describedby')||'').trim().split(/\s+/u);
- const messages=ownMessageNodes(card).filter(n=>n.matches?.(messageSelector)||described.includes(n.id));
- const candidates=[...new Set([...Array.from(card.querySelectorAll('[style*="background"],'+messageSelector)),...messages])].slice(0,100);
+ const messages=ownMessageNodes(card).filter(n=>n.matches?.(messageSelector)||described.includes(n.id)||paintedOwnMessageNodes(card).includes(n));
+ const ancestors=messages.flatMap(message=>{const out=[];for(let n=message.parentElement,depth=0;n&&n!==card&&depth<4;n=n.parentElement,depth++)out.push(n);return out;});
+ const candidates=[...new Set([...Array.from(card.querySelectorAll('[style*="background"],'+messageSelector)),...messages,...ancestors])].slice(0,100);
  for(const n of candidates){
   const own=()=>containers.owner(n)===card&&!n.closest('[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],video,form,header,nav');
   if(!own())continue;
@@ -248,7 +249,8 @@ function createModel(core,fields,group,collectPostText=false){
   const path=r.__structuredDiagnostics?.structuredTextPath;
   const borrowed=layer!=='DOM'&&typeof path==='string'&&/(?:^|\.)(?:[^.]*shared[^.]*|[^.]*quoted[^.]*|crosspost[^.]*|reshare[^.]*|original_story|attached_story)(?:\.|$)/i.test(path);
   const ownText=!borrowed&&typeof r.text==='string'?r.text.slice(0,12000):'';
-  const f=posterSaleFields(negotiableSaleFields(fields.previewFields({postText:ownText}),ownText),ownText);
+  let f=posterSaleFields(negotiableSaleFields(fields.previewFields({postText:ownText}),ownText),ownText);
+  if(layer==='DOM'&&(r.media||[]).some(p=>p.posterKey==='poster:'+r.postId&&p.exactPostId===r.postId))f=posterAddressFields(f,ownText);
   const row={postId:r.postId,permalink:'https://www.facebook.com/groups/'+group+'/posts/'+r.postId+'/',layer,
    price:bounded(f.price,1,20000000),priceSource:bounded(f.price,1,20000000)!==null?f.priceSource:'NONE',area:bounded(f.area,1,9999),rooms:bounded(f.rooms,1,20),
    district:f.district,neighborhood:f.neighborhood,street:typeof f.street==='string'?f.street.slice(0,80):null,intent:f.intent,usable:f.usable===true,
@@ -424,6 +426,41 @@ function scrollTrace(w,card){
 const messageSelector='[data-ad-preview="message"],[data-ad-comet-preview="message"],[data-testid="post_message"],[data-ad-rendering-role="message"],[data-ad-rendering-role="story_message"]';
 const textForbidden='[role="dialog"],[role="alertdialog"],[role="comment"],[data-testid*="comment"]:not([data-testid="commentable_feed_story"]),[data-ad-rendering-role*="comment"],[data-ad-rendering-role*="shared"],[data-testid*="shared"],blockquote,form,input,textarea,[contenteditable="true"]';
 function messageText(value){return typeof value==='string'?value.replace(/\r\n?/g,'\n').replace(/[^\S\n]+/gu,' ').replace(/ *\n */g,'\n').trim():'';}
+// An unmarked coloured message is accepted only as a unique, visible,
+// standalone painted sale panel inside a card with one exact group-post link.
+// This is not a fallback to arbitrary card text, comments, link previews or OCR.
+function paintedOwnMessageNodes(card){
+ const doc=card.ownerDocument,w=doc?.defaultView,core=root.FlipFacebookCollectorCore,fields=root.FlipDesktopFields;
+ if(!w?.getComputedStyle||!core?.parsePostLink||!fields?.previewFields)return[];
+ const anchors=card.querySelectorAll('a[href]');if(anchors.length>100)return[];
+ const links=Array.from(anchors).filter(a=>containers.owner(a)===card).map(a=>core.parsePostLink(a.href)).filter(Boolean);
+ if(!links.length||links.some(p=>p.sourceType!=='GROUP')||new Set(links.map(p=>p.sourceId+'/'+p.postId)).size!==1)return[];
+ const nodes=card.querySelectorAll('[dir="auto"]');if(nodes.length>100)return[];
+ const found=[];
+ for(const message of nodes){
+  const messageValue=messageText(message.innerText);
+  if(messageValue.length<25||messageValue.length>2000||!/[0-9]+(?:[.,][0-9]+)?\s*m\s*[²2]/iu.test(messageValue)||!/(?:zł|PLN)/iu.test(messageValue))continue;
+  const f=fields.previewFields({postText:messageValue});if(f.intent!=='SELL_PROPERTY'||f.usable!==true||!(f.price>=50000&&f.area>=10&&f.area<=500))continue;
+  for(let n=message,depth=0;n&&n!==card&&depth<5;n=n.parentElement,depth++){
+   if(n.isConnected===false||n.ownerDocument!==doc||containers.owner(n)!==card||n.closest(textForbidden+',header,nav,footer,a,button,[hidden],[aria-hidden="true"]'))continue;
+   if(n.querySelector?.('a,button,[role="button"],img,svg,video,iframe,article,[role="article"],'+textForbidden))continue;
+   const style=w.getComputedStyle(n),r=n.getBoundingClientRect();
+   if(style.display==='none'||/hidden|collapse/.test(style.visibility)||Number(style.opacity??1)<=0||r.width<200||r.height<120)continue;
+   const painted=style.backgroundImage&&style.backgroundImage!=='none'||style.backgroundColor&&!['transparent','rgba(0, 0, 0, 0)'].includes(style.backgroundColor);
+   const text=messageText(n.innerText);
+   if(!painted||text!==messageValue)continue;
+   if(![n,...Array.from(n.querySelectorAll('span,div,p')).slice(0,32)].some(e=>e.innerText?.trim()&&Number.parseFloat(w.getComputedStyle(e).fontSize)>=18))continue;
+   if(!found.includes(n))found.push(n);
+  }
+ }
+ const outer=found.filter(n=>!found.some(other=>other!==n&&other.contains?.(n)));
+ return outer.length===1?outer:[];
+}
+function posterAddressFields(f,text){
+ if(f.street||f.intent!=='SELL_PROPERTY'||!(f.price>=50000&&f.area>=10))return f;
+ const matches=[...text.matchAll(/(?:^|[\s,])Łódź[ ,–-]+([A-ZĄĆĘŁŃÓŚŹŻ][A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż .-]{1,60})\s+(\d{1,4}[A-Za-z]?(?:\/\d{1,4}[A-Za-z]?)?)(?=\s*(?:\n|$))/gu)];
+ const streets=[...new Set(matches.map(m=>m[1].trim()+' '+m[2]))];return streets.length===1?{...f,street:streets[0]}:f;
+}
 function ownMessageNodes(card){
  const nodes=card.querySelectorAll(messageSelector);if(nodes.length>30)return[];
  const marked=Array.from(nodes).filter(n=>containers.owner(n)===card&&!n.closest(textForbidden));
@@ -431,7 +468,8 @@ function ownMessageNodes(card){
  // An article's explicit accessibility description is an own-message binding,
  // not permission to scan arbitrary dir=auto nodes or the surrounding feed.
  const raw=card.getAttribute?.('aria-describedby');
- if(typeof raw!=='string'||raw.length>1100)return[];
+ if(typeof raw!=='string'||!raw.trim())return paintedOwnMessageNodes(card);
+ if(raw.length>1100)return[];
  const ids=raw.trim().split(/\s+/u);if(!ids.length||ids.length>10||ids.some(id=>!/[A-Za-z0-9_:.-]/u.test(id)||!/^[A-Za-z0-9_:.-]{1,100}$/u.test(id)))return[];
  const doc=card.ownerDocument;if(!doc?.getElementById)return[];
  return [...new Set(ids.map(id=>doc.getElementById(id)))].filter(n=>n&&n!==card&&n.ownerDocument===doc&&n.isConnected!==false&&card.contains?.(n)===true&&containers.owner(n)===card&&!n.closest(textForbidden+',header,nav,footer,h1,h2,h3,a,button,[role="button"],[hidden],[aria-hidden="true"]'));
