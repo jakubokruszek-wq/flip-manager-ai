@@ -40,3 +40,19 @@ jobs:
               javap -p -classpath classes.jar "$cls" || true
             done
           fi
+      - name: Check settings for supported background lifecycle controls
+        run: |
+          if [ -f sources.jar ]; then
+            python3 - <<'PYSETTINGS'
+          import zipfile,re
+          z=zipfile.ZipFile('sources.jar')
+          for suffix in ['GeckoRuntimeSettings.java','GeckoSessionSettings.java','GeckoRuntime.java','GeckoSession.java']:
+              names=[n for n in z.namelist() if n.endswith('/'+suffix)]
+              for name in names:
+                  lines=z.read(name).decode('utf8','replace').splitlines()
+                  matches=[(i+1,line) for i,line in enumerate(lines) if re.search(r'pause|lifecycle|background|foreground|priorityhint|priorityHint|setPriority|PriorityHint',line,re.I)]
+                  print('API_SEARCH '+name+' matched '+str(len(matches)))
+                  for i,line in matches[:160]:print(str(i)+': '+line)
+          PYSETTINGS
+          fi
+
