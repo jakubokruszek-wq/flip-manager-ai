@@ -31,7 +31,7 @@ internal object RenderComparisonProbe {
   val channel=CollectorChannel(browser,fixtureMode=fixtureTarget!=null)
   val load=BackgroundDocumentLoad("GROUP")
   var current:String?=null;var initial=true;var surface:BackgroundViewport?=null
-  val stats=mutableMapOf("comparisonStage" to 1,"comparisonWidth" to width,"comparisonHeight" to height,"comparisonReady" to 0,"comparisonDocument" to 0,"comparisonCapture" to 0,"comparisonVaried" to 0,"renderDiagEnabled" to 1,"renderSdk" to Build.VERSION.SDK_INT)
+  val stats=mutableMapOf("comparisonStage" to 1,"comparisonWidth" to width,"comparisonHeight" to height,"comparisonReady" to 0,"comparisonDocument" to 0,"comparisonCapture" to 0,"comparisonVaried" to 0,"renderDiagEnabled" to 1,"renderSdk" to Build.VERSION.SDK_INT,"comparisonScreenAtStart" to if(context.getSystemService(android.os.PowerManager::class.java).isInteractive)1 else 0)
   fun live()=alive()&&load.reason==null
   fun accepted(u:String)=BackgroundNavigationPolicy.rejection(u,group.id,fixtureTarget)==null
   browser.navigationDelegate=object:GeckoSession.NavigationDelegate {
@@ -97,6 +97,8 @@ internal object RenderComparisonProbe {
     if(view!=null)check(view.isShown&&view.hasWindowFocus()){ "COMPARE_VIEW_HIDDEN" }
     stats["comparisonDocument"]=1
     stats["comparisonStage"]=7
+    surface?.let{stats["comparisonFramesBeforeCapture"]=it.renderedFrames}
+    stats["comparisonCallbacksBeforeCapture"]=observation.snapshot()["groupImageCallbacks"]?:0
     try {
      val bitmap=withTimeout(8000){ownedBitmap(if(view!=null)view.capturePixels() else checkNotNull(surface).capturePixels())}
      try {
@@ -112,6 +114,7 @@ internal object RenderComparisonProbe {
     check(alive()){"COMPARE_INTERRUPTED"}
     check(sameDocument()){load.reason?:"COMPARE_DOCUMENT_CHANGED"}
     stats["comparisonDocument"]=1
+    stats["comparisonScreenAtEnd"]=if(context.getSystemService(android.os.PowerManager::class.java).isInteractive)1 else 0
     stats["comparisonStage"]=8
    }
    RenderComparisonResult("RENDER_COMPARE_OBSERVED",stats.toMap()+observation.snapshot()+mapOf("groupElapsedMs" to (SystemClock.elapsedRealtime()-started).toInt())+(surface?.let{mapOf("groupRenderedFrames" to it.renderedFrames)}?:emptyMap()))
@@ -135,3 +138,4 @@ internal object RenderComparisonProbe {
   return false
  }
 }
+
