@@ -41,7 +41,7 @@ class RollbackUpgradeInstrumentedTest {
     }
     @Test fun b_verifyAfterInPlaceUpdate(){
         val installed=context.packageManager.getPackageInfo(context.packageName,0)
-        assertEquals("0.5.108-gecko-poc",installed.versionName)
+        assertEquals("0.5.109-gecko-poc",installed.versionName)
         assertTrue(installed.longVersionCode>proof.getLong("beforeCode",Long.MAX_VALUE))
         val pairing=checkNotNull(WatcherLink.load(context));assertEquals(device,pairing.deviceId);assertEquals(token,pairing.token)
         WatcherOutbox(context).use{q->

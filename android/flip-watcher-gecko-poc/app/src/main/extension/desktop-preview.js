@@ -456,6 +456,35 @@ function paintedOwnMessageNodes(card){
  const outer=found.filter(n=>!found.some(other=>other!==n&&other.contains?.(n)));
  return outer.length===1?outer:[];
 }
+// Some photo posts expose their own body only as dir=auto, without message
+// markers or ARIA bindings. Accept one standalone sale body, never card text.
+// Appearance is not ownership: plain bodies use the same exact-post boundary
+// and exclusions as coloured panels, but are not screenshot/poster targets.
+function plainOwnMessageNodes(card){
+ const doc=card.ownerDocument,w=doc?.defaultView,core=root.FlipFacebookCollectorCore,fields=root.FlipDesktopFields;
+ if(!w?.getComputedStyle||!core?.parsePostLink||!fields?.previewFields)return[];
+ const anchors=card.querySelectorAll('a[href]');if(anchors.length>100)return[];
+ const links=Array.from(anchors).filter(a=>containers.owner(a)===card).map(a=>core.parsePostLink(a.href)).filter(Boolean);
+ if(!links.length||links.some(p=>p.sourceType!=='GROUP')||new Set(links.map(p=>p.sourceId+'/'+p.postId)).size!==1)return[];
+ const nodes=card.querySelectorAll('[dir="auto"]');if(nodes.length>100)return[];
+ const found=[];
+ for(const n of nodes){
+  if(n.isConnected===false||n.ownerDocument!==doc||containers.owner(n)!==card||n.closest(textForbidden+',header,nav,footer,a,button,[role="button"],[hidden],[aria-hidden="true"]'))continue;
+  let ancestor=n,depth=0;
+  while(ancestor&&ancestor!==card&&depth++<12&&ancestor.isConnected!==false&&ancestor.ownerDocument===doc)ancestor=ancestor.parentElement;
+  if(ancestor!==card)continue;
+  if(n.querySelector?.('a,button,[role="button"],img,svg,video,iframe,article,[role="article"],'+textForbidden))continue;
+  const style=w.getComputedStyle(n),r=n.getBoundingClientRect();
+  if(style.display==='none'||/hidden|collapse/.test(style.visibility)||Number(style.opacity??1)<=0||r.width<200||r.height<20)continue;
+  const text=ownMessageNodeText(n,card);
+  if(text.length<25||text.length>2000||!/[0-9]+(?:[.,][0-9]+)?\s*m\s*[²2]/iu.test(text)||!/(?:zł|PLN)/iu.test(text))continue;
+  const f=fields.previewFields({postText:text});
+  if(f.intent!=='SELL_PROPERTY'||f.usable!==true||!(f.price>=50000&&f.area>=10&&f.area<=500))continue;
+  found.push(n);
+ }
+ const outer=found.filter(n=>!found.some(other=>other!==n&&other.contains?.(n)));
+ return outer.length===1?outer:[];
+}
 function posterAddressFields(f,text){
  if(f.street||f.intent!=='SELL_PROPERTY'||!(f.price>=50000&&f.area>=10))return f;
  const matches=[...text.matchAll(/(?:^|[\s,])Łódź[ ,–-]+([A-ZĄĆĘŁŃÓŚŹŻ][A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż .-]{1,60})\s+(\d{1,4}[A-Za-z]?(?:\/\d{1,4}[A-Za-z]?)?)(?=\s*(?:\n|$))/gu)];
@@ -468,7 +497,7 @@ function ownMessageNodes(card){
  // An article's explicit accessibility description is an own-message binding,
  // not permission to scan arbitrary dir=auto nodes or the surrounding feed.
  const raw=card.getAttribute?.('aria-describedby');
- if(typeof raw!=='string'||!raw.trim())return paintedOwnMessageNodes(card);
+ if(typeof raw!=='string'||!raw.trim()){const painted=paintedOwnMessageNodes(card);return painted.length?painted:plainOwnMessageNodes(card);}
  if(raw.length>1100)return[];
  const ids=raw.trim().split(/\s+/u);if(!ids.length||ids.length>10||ids.some(id=>!/[A-Za-z0-9_:.-]/u.test(id)||!/^[A-Za-z0-9_:.-]{1,100}$/u.test(id)))return[];
  const doc=card.ownerDocument;if(!doc?.getElementById)return[];

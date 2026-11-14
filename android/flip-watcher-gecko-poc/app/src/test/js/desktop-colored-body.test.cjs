@@ -24,8 +24,8 @@ test('own unmarked painted sale panel keeps original text, exact fields and a ge
 test('CSS-painted ancestor of an ordinary message marker is a valid text poster',()=>{
  const h=fixture(true);assert.equal(p.ownMessageText(h.card),text);const posters=p.textPosterNodes(h.card,id);assert.equal(posters.length,1);assert.equal(posters[0].node,h.panel);
 });
-test('unmarked fallback rejects ambiguous post identity, comments, unpainted text and non-sale panels',()=>{
- for(const kind of ['foreign','comment','plain','rental','search','detached','multi']){
+test('unmarked fallback rejects ambiguous post identity, comments and non-sale panels',()=>{
+ for(const kind of ['foreign','comment','rental','search','detached','multi']){
   const h=fixture();if(kind==='foreign')h.anchor.href='https://www.facebook.com/profile.php?id=123456789';
   if(kind==='comment')h.block();if(kind==='plain')h.unpaint();if(kind==='detached')h.panel.isConnected=false;
   if(kind==='rental'||kind==='search'){const t=kind==='rental'?'Wynajmę mieszkanie 37,64m2 Łódź za 260000 zł':'Kupię mieszkanie 37,64m2 Łódź budżet 260000 zł';h.panel.innerText=t;h.message.innerText=t;}
@@ -38,4 +38,33 @@ test('a clickable standalone coloured panel is captured without clicking it',()=
  const h=fixture();const closest=h.panel.closest;
  h.panel.closest=s=>s.includes('[role="button"]')?h.panel:closest(s);
  assert.equal(p.ownMessageText(h.card),text);assert.equal(p.textPosterNodes(h.card,id).length,1);
+});
+
+test('own unmarked plain sale body retains text without becoming an image poster',()=>{
+ const h=fixture();h.unpaint();
+ assert.equal(p.ownMessageText(h.card),text);
+ assert.equal(p.textPosterNodes(h.card,id).length,0);
+ const m=p.createModel(globalThis.FlipFacebookCollectorCore,fields,group,true);
+ m.add({postId:id,permalink:url,text:p.ownMessageText(h.card),media:[]},'DOM');
+ assert.equal(m.rows()[0].intent,'SELL_PROPERTY');assert.equal(m.rows()[0].price,260000);
+ assert.equal(m.rows()[0].area,37.64);assert.equal(m.postTexts()[0].text,text);
+});
+
+test('plain body fallback rejects shared/comment/hidden/interactive/ambiguous and non-sale text',()=>{
+ for(const kind of ['comment','shared','link','button','hidden','rental','search','foreign','multi','twoBodies']){
+  const h=fixture();h.unpaint();
+  if(kind==='comment')h.block();
+  if(['shared','link','button','hidden'].includes(kind)){
+   const old=h.message.closest;h.message.closest=s=>s.includes(kind==='shared'?'shared':kind==='link'?',a,':kind==='button'?'role="button"':'[hidden]')?{}:old(s);
+  }
+  if(kind==='rental'||kind==='search'){h.message.innerText=kind==='rental'?'Wynajmę mieszkanie 37,64m2 w Łodzi za 260000 zł':'Kupię mieszkanie 37,64m2 w Łodzi za 260000 zł';h.message.textContent=h.message.innerText;}
+  if(kind==='foreign')h.anchor.href=url.replace(group,'9999999999999');
+  if(kind==='foreign'){
+   // A card cannot borrow another group's message through mixed post links.
+   const old=h.card.querySelectorAll;h.card.querySelectorAll=s=>s==='a[href]'?[h.anchor,{...h.anchor,href:url}]:old(s);
+  }
+  if(kind==='multi'){const old=h.card.querySelectorAll;h.card.querySelectorAll=s=>s==='a[href]'?[h.anchor,{...h.anchor,href:url.replace(id,'1655103482946839')}]:old(s);}
+  if(kind==='twoBodies'){const other={...h.message,contains:n=>n===other};const old=h.card.querySelectorAll;h.card.querySelectorAll=s=>s==='[dir="auto"]'?[h.message,other]:old(s);}
+  assert.equal(p.ownMessageText(h.card),'',kind);
+ }
 });
