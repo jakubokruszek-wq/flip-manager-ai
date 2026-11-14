@@ -60,7 +60,21 @@ jobs:
           set -euo pipefail
           curl --fail --location --silent --show-error --connect-timeout 10 --max-time 45 https://maven.mozilla.org/maven2/org/mozilla/geckoview/geckoview/158.0.20261007201254/geckoview-158.0.20261007201254.aar -o gecko.aar
           unzip -p gecko.aar classes.jar > classes.jar
-          jar tf classes.jar | grep -E 'ProcessLifecycleOwner|LifecycleRegistry|DefaultLifecycleObserver|LifecycleEventObserver|LifecycleOwner' | head -45
-          javap -p -c -classpath classes.jar org.mozilla.geckoview.GeckoRuntime | grep -E 'lifecycle|Lifecycle' | head -35
-          javap -p -c -classpath classes.jar 'org.mozilla.geckoview.GeckoRuntime$LifecycleListener' | head -180
+          unzip -l gecko.aar > aar-list.txt
+          sed -n '1,60p' aar-list.txt
+          jar tf classes.jar > classes-list.txt
+          grep -E 'ProcessLifecycleOwner|LifecycleRegistry|DefaultLifecycleObserver|LifecycleEventObserver|LifecycleOwner' classes-list.txt || true
+          javap -p -c -classpath classes.jar org.mozilla.geckoview.GeckoRuntime > runtime-api.txt
+          grep -E 'lifecycle|Lifecycle' runtime-api.txt || true
+          javap -p -c -classpath classes.jar 'org.mozilla.geckoview.GeckoRuntime$LifecycleListener' > listener-api.txt
+          sed -n '1,180p' listener-api.txt
+          mkdir -p deps
+          unzip -j gecko.aar 'libs/*.jar' -d deps || true
+          for dep in deps/*.jar; do
+            if [ -f "$dep" ]; then
+              echo "$dep"
+              jar tf "$dep" > dep-list.txt
+              grep -E 'ProcessLifecycleOwner|LifecycleRegistry|DefaultLifecycleObserver|LifecycleEventObserver|LifecycleOwner' dep-list.txt || true
+            fi
+          done
 
