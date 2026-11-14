@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-gecko-poc-${{ github.ref }}${{ github.ref == 'refs/heads/codex/android-watcher-icon-108' && '-release-094' || '' }}
+  group: android-gecko-poc-${{ github.ref }}${{ github.ref == 'refs/heads/codex/android-render-lifecycle-audit' && '-release-094' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -117,7 +117,7 @@ jobs:
 
       - name: Upload unit test reports
         if: always()
-        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-watcher-icon-108' }}
+        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-render-lifecycle-audit' }}
         timeout-minutes: 3
         uses: actions/upload-artifact@v4
         with:
@@ -155,7 +155,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Offline OCR and consent on API 36 (dedicated device)
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-watcher-icon-108'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-render-lifecycle-audit'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -194,18 +194,15 @@ jobs:
           retention-days: 14
 
       - name: Release the offline emulator disk before creating the fresh device
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-watcher-icon-108'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-render-lifecycle-audit'
         run: avdmanager delete avd --name gecko-ocr-offline
       - name: Build both versions for the in-place rollback compatibility test
-        if: github.ref == 'refs/heads/codex/android-watcher-icon-108'
+        if: github.ref == 'refs/heads/codex/android-render-lifecycle-audit'
         run: |
           echo "ORG_GRADLE_PROJECT_GECKO_POC_VERSION_CODE=$((8000 + ${{ github.run_number }}))" >> "$GITHUB_ENV"
-          git fetch --depth=1 origin 01c082ef034d07727a3dbf15c998771240d33888
-          git worktree add ../watcher-upgrade-107 FETCH_HEAD
-          (cd ../watcher-upgrade-107/android/flip-watcher-gecko-poc && ./gradlew --no-daemon assembleDebug -PGECKO_POC_VERSION_CODE=8698)
           (cd android/flip-watcher-gecko-poc && ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest -PGECKO_POC_VERSION_CODE=$((8000 + ${{ github.run_number }})))
       - name: Complete worker, own-message and image-binding regressions on API 36
-        if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-watcher-icon-108'
+        if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-render-lifecycle-audit'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -217,10 +214,9 @@ jobs:
           avd-name: gecko-schema-recovery
           force-avd-creation: true
           script: |
-            if [ '${{ github.ref }}' = 'refs/heads/codex/android-watcher-icon-108' ]; then sh scripts/rollback-upgrade.sh; fi
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#calendarIgnoresOldRevisionAndManualCycleRechecksWhileDegradedReadGetsExactlyOneRetry,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.RenderLifecycleInstrumentedTest
       - name: Online Gecko flow and full regression on API 36 (fresh device)
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-watcher-icon-108'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-render-lifecycle-audit'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -259,7 +255,7 @@ jobs:
 
       - name: Upload instrumented test reports
         if: always()
-        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-watcher-icon-108' }}
+        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-render-lifecycle-audit' }}
         timeout-minutes: 3
         uses: actions/upload-artifact@v4
         with:
@@ -610,78 +606,3 @@ jobs:
           Instaluj jako aktualizację bez odinstalowywania i kasowania danych. Testy używają lokalnych stron, nie prywatnego konta Facebooka; wyniki na telefonie potwierdza kolejny raport skanu.
           NOTES
           gh release create gecko-poc-0.5.87 flip-watcher-0.5.87-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.87 — opisy i zdjęcia w automacie' --prerelease --notes-file release-notes.md
-
-  publish-tested-0597:
-    name: Publish tested Android 0.5.108
-    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-watcher-icon-108'
-    needs: [guard, build, instrumented, verified-apk]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: flip-watcher-gecko-poc-arm64-${{ github.run_number }}
-          path: tested-apk
-      - name: Publish the verified APK without rebuilding
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-watcher-icon-108 --jq .object.sha)" = '${{ github.sha }}'
-          apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
-          test -n "$apk_path" && test -f "$apk_path"
-          cp "$apk_path" flip-watcher-0.5.108-arm64.apk
-          unzip -p flip-watcher-0.5.108-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.108")process.exit(1)})'
-          unzip -p flip-watcher-0.5.108-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
-          sha256sum flip-watcher-0.5.108-arm64.apk > SHA256SUMS
-          cat > release-notes.md <<'NOTES'
-          Android 0.5.108 — nowa ikona FlipWatcher przygotowana na podstawie wzoru z czatu.
-          Ikona pulpitu, uruchamiania oraz duże ikony powiadomień. Zachowuje skaner i obsługę plansz tekstowych z 0.5.107.
-          Instaluj jako aktualizację bez odinstalowywania. Test aktualizacji 107 → 108 sprawdza zachowanie kolejki, parowania, ustawień i plików.
-          NOTES
-          gh release create gecko-poc-0.5.108 flip-watcher-0.5.108-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.108 — nowa ikona' --prerelease --notes-file release-notes.md
-          python3 - <<'PYZIP'
-          import zipfile,pathlib,hashlib,json
-          apk=pathlib.Path('flip-watcher-0.5.108-arm64.apk');output=pathlib.Path('flip-watcher-0.5.108-arm64.zip')
-          info=zipfile.ZipInfo(apk.name,date_time=(2026,11,14,0,0,0));info.compress_type=zipfile.ZIP_STORED;info.external_attr=0o100644 << 16
-          with zipfile.ZipFile(output,'w') as z:z.writestr(info,apk.read_bytes())
-          with zipfile.ZipFile(output) as z:
-              assert z.namelist()==[apk.name]
-              assert hashlib.sha256(z.read(apk.name)).digest()==hashlib.sha256(apk.read_bytes()).digest()
-          metadata={'url':'https://github.com/jakubokruszek-wq/flip-manager-ai/releases/download/gecko-poc-0.5.108/'+output.name,'filename':output.name,'bytes':output.stat().st_size,'sha256':hashlib.sha256(output.read_bytes()).hexdigest(),'apkFilename':apk.name,'apkBytes':apk.stat().st_size,'apkSha256':hashlib.sha256(apk.read_bytes()).hexdigest()}
-          pathlib.Path('release-delivery.json').write_text(json.dumps(metadata));print(json.dumps(metadata))
-          PYZIP
-          gh release upload gecko-poc-0.5.108 flip-watcher-0.5.108-arm64.zip --repo jakubokruszek-wq/flip-manager-ai
-      - uses: actions/upload-artifact@v4
-        with:
-          name: android-108-delivery-metadata
-          path: release-delivery.json
-          retention-days: 14
-
-  verify-published-108:
-    name: Verify 108 ZIP full download, resume and Chrome save
-    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/android-watcher-icon-108'
-    needs: [publish-tested-0597]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - uses: actions/download-artifact@v4
-        with:
-          name: android-108-delivery-metadata
-          path: tested-delivery
-      - run: npm ci --no-audit --no-fund
-      - name: Use installed Chrome or install Chromium
-        run: |
-          browser_path="$(command -v google-chrome || command -v chromium || true)"
-          if [ -n "$browser_path" ]; then
-            echo "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$browser_path" >> "$GITHUB_ENV"
-          else
-            npx playwright install --with-deps chromium
-          fi
-      - name: Verify static ZIP and the enclosed signed APK
-        run: node android/flip-watcher-gecko-poc/scripts/verify-release-download.mjs tested-delivery/release-delivery.json
