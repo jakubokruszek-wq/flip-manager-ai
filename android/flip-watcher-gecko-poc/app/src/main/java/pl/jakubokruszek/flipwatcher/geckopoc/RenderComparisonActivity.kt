@@ -36,9 +36,9 @@ class RenderComparisonActivity:ComponentActivity() {
    if(run!=null&&selected!=null&&readyForBackground&&work?.isActive!=true){
     android.app.AlertDialog.Builder(this@RenderComparisonActivity).setTitle("Wybierz próbę w tle")
      .setItems(arrayOf("Zwykły test w tle","Próba naprawy pauzy Gecko")){_,which->
-      backgroundRequestedArm=if(which==0)3 else 4;background.isEnabled=false
+      backgroundRequestedArm=if(which==0)3 else 4;this@RenderComparisonActivity.background.isEnabled=false
       status.text="Aplikacja schowa się na czas próby. Poczekaj około 2 minut przed powrotem."
-      if(!moveTaskToBack(true)){backgroundRequestedArm=0;background.isEnabled=true;status.text="Nie udało się schować aplikacji. Próba w tle nie została uruchomiona."}
+      if(!moveTaskToBack(true)){backgroundRequestedArm=0;this@RenderComparisonActivity.background.isEnabled=true;status.text="Nie udało się schować aplikacji. Próba w tle nie została uruchomiona."}
      }.setNegativeButton("Wróć",null).show()
    }
   }};body.addView(background)
