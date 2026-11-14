@@ -67,7 +67,7 @@ object ScreenOffTest {
         ensureChannel(context)
         val open = PendingIntent.getActivity(context, 0, Intent(context, PocActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(context, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setSmallIcon(android.R.drawable.stat_sys_download_done).setLargeIcon(android.graphics.drawable.Icon.createWithResource(context,R.mipmap.ic_watcher_launcher))
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(Notification.BigTextStyle().bigText(text))

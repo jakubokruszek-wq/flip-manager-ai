@@ -5,7 +5,7 @@ import {promisify} from 'node:util';
 import {execFileSync} from 'node:child_process';
 import {chromium} from 'playwright';
 const m=JSON.parse(await promisify(readFile)(process.argv[2],'utf8'));
-assert.match(m.url,/^https:\/\/github\.com\/jakubokruszek-wq\/flip-manager-ai\/releases\/download\/gecko-poc-0\.5\.107\/flip-watcher-0\.5\.107-arm64\.zip$/);
+assert.match(m.url,/^https:\/\/github\.com\/jakubokruszek-wq\/flip-manager-ai\/releases\/download\/gecko-poc-0\.5\.108\/flip-watcher-0\.5\.108-arm64\.zip$/);
 async function verify(){
  const full=await fetch(m.url,{signal:AbortSignal.timeout(180000)});assert.equal(full.status,200);
  const hash=createHash('sha256');let total=0;for await(const chunk of full.body){total+=chunk.byteLength;hash.update(chunk);}

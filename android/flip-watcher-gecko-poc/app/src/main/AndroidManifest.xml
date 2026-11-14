@@ -15,8 +15,8 @@
     <application
         android:allowBackup="false"
         android:label="Flip Watcher · MetrON"
-        android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher"
+        android:icon="@mipmap/ic_watcher_launcher"
+        android:roundIcon="@mipmap/ic_watcher_launcher"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
