@@ -37,6 +37,7 @@ class RenderComparisonInstrumentedTest {
     assertEquals(1,headless.stats["comparisonCapture"]);assertTrue((headless.stats["groupAcquiredFrames"]?:0)>0)
     scenario.moveToState(Lifecycle.State.CREATED)
     assertEquals(Lifecycle.State.CREATED,scenario.state)
+    kotlinx.coroutines.withTimeout(5000){while(kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main){view.windowVisibility==android.view.View.VISIBLE})kotlinx.coroutines.delay(50)}
     val background=RenderComparisonProbe.run(context,group,null,width,height,{view.windowVisibility!=android.view.View.VISIBLE},target)
     assertEquals("background stats="+background.stats,"RENDER_COMPARE_OBSERVED",background.issue);assertEquals(1,background.stats["comparisonDocument"])
     assertEquals(1,background.stats["comparisonCapture"]);assertTrue((background.stats["groupRenderedFrames"]?:0)>0)
@@ -55,3 +56,4 @@ class RenderComparisonInstrumentedTest {
   }finally{server.close()}
  }
 }
+
