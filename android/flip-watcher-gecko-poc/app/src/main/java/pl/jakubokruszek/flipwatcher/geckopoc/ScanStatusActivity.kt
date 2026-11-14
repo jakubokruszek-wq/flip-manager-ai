@@ -53,6 +53,7 @@ class ScanStatusActivity:ComponentActivity(){
             journal.text=if(journalExpanded)"Odczytywanie dziennika…"else""
         }})
         body.addView(journal)
+        body.addView(Button(this).apply{text="Test obrazu: okno i tło";tag="scan.render.compare";setOnClickListener{startActivity(android.content.Intent(this@ScanStatusActivity,RenderComparisonActivity::class.java))}})
         body.addView(Button(this).apply{text="Wykryj moje grupy na Facebooku";setOnClickListener{startActivity(android.content.Intent(this@ScanStatusActivity,JoinedGroupsActivity::class.java))}})
         body.addView(Button(this).apply{text="Dodaj grupę / profil w Managerze";setOnClickListener{startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,android.net.Uri.parse(WatcherLink.ORIGIN+"/facebook-watcher/groups")))}})
         body.addView(TextView(this).apply{text="Po dodaniu grupy lub profilu wróć i zleć nowy skan. Automat odczytuje włączone źródła z Managera.";textSize=13f})

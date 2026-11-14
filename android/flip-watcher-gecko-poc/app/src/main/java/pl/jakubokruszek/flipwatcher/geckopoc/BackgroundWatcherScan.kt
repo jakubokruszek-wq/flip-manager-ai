@@ -118,9 +118,8 @@ class BackgroundWatcherScan(private val context:Context) {
 }
 
 /** Render target, never a screenshot of another app. Only exact-bound image crops leave RAM. */
-internal class BackgroundViewport(private val browser:GeckoSession,private val observation:RenderObservation?=null):WatcherViewport,AutoCloseable {
-    override val width=1080
-    override val height=1920
+internal class BackgroundViewport(private val browser:GeckoSession,private val observation:RenderObservation?=null,override val width:Int=1080,override val height:Int=1920):WatcherViewport,AutoCloseable {
+    init { require(width in 128..2160&&height in 128..2160) }
     private var closed=false
     @Volatile internal var renderedFrames:Int=0;private set
     private val thread=HandlerThread("watcher-render").apply{start()}

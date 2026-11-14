@@ -1031,6 +1031,7 @@ class PocActivity : ComponentActivity() {
             })
             actions.addView(android.widget.TextView(this).apply{text="Opcjonalne liczniki obrazu, czasy i stan pamięci. Bez treści ofert, zdjęć i danych logowania. Sposób skanowania pozostaje taki sam.";textSize=13f})
             actions.addView(android.widget.Button(this@PocActivity).apply{text="Podgląd postępu na żywo";tag="automation.live.open";setOnClickListener{dialog.dismiss();startActivity(Intent(this@PocActivity,ScanStatusActivity::class.java))}})
+            actions.addView(android.widget.Button(this@PocActivity).apply{text="Porównaj obraz: okno i tło";tag="automation.render.compare";setOnClickListener{closeSession();dialog.dismiss();startActivity(Intent(this@PocActivity,RenderComparisonActivity::class.java))}})
             actions.addView(android.widget.Button(this@PocActivity).apply{text="Usuń zapisane przed datą…";tag="automation.cleanup";setOnClickListener{dialog.dismiss();askSavedCleanup()}})
             actions.addView(android.widget.Button(this@PocActivity).apply{text="Godziny skanów";tag="automation.edit";setOnClickListener{dialog.dismiss();editAutomationSchedule()}})
             actions.addView(android.widget.Button(this@PocActivity).apply{
