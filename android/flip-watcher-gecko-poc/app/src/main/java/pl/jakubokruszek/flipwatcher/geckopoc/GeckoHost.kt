@@ -24,7 +24,9 @@ object GeckoHost {
     val background = BackgroundChannel()
 
     fun runtime(context: Context): GeckoRuntime = runtime ?: synchronized(this) {
-        runtime ?: GeckoRuntime.create(
+        runtime ?: run {
+        GeckoBackgroundLease.installBeforeRuntime()
+        GeckoRuntime.create(
             context.applicationContext,
             GeckoRuntimeSettings.Builder()
                 // No remote debugging, no about:config and no console mirroring to logcat
@@ -33,7 +35,8 @@ object GeckoHost {
                 .aboutConfigEnabled(false)
                 .consoleOutput(false)
                 .build(),
-        ).also { runtime = it }
+        ).also { runtime = it; GeckoBackgroundLease.runtimeCreated() }
+        }
     }
 
     /**

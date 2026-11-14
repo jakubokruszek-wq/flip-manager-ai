@@ -16,7 +16,7 @@ internal object RenderComparisonVisibility {
   installed=true
   val started=Collections.newSetFromMap(IdentityHashMap<Activity,Boolean>())
   application.registerActivityLifecycleCallbacks(object:Application.ActivityLifecycleCallbacks{
-   override fun onActivityStarted(activity:Activity){foregroundEpoch++;started.add(activity);hasStartedActivity=started.isNotEmpty()}
+   override fun onActivityStarted(activity:Activity){GeckoBackgroundLease.foregroundStarting();foregroundEpoch++;started.add(activity);hasStartedActivity=started.isNotEmpty()}
    override fun onActivityStopped(activity:Activity){started.remove(activity);hasStartedActivity=started.isNotEmpty()}
    override fun onActivityDestroyed(activity:Activity){started.remove(activity);hasStartedActivity=started.isNotEmpty()}
    override fun onActivityCreated(activity:Activity,state:Bundle?){}

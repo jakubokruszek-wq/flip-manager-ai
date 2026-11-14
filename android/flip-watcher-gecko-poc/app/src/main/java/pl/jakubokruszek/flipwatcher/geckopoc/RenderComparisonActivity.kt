@@ -22,7 +22,7 @@ class RenderComparisonActivity:ComponentActivity() {
  private var selected:WatcherGroup?=null
  private var run:String?=null
  private var width=0;private var height=0
- private var work:Job?=null;private var refresh:Job?=null;private var backgroundRequested=false
+ private var work:Job?=null;private var refresh:Job?=null;private var backgroundRequestedArm=0;private var readyForBackground=false
  override fun onCreate(savedInstanceState:Bundle?){
   super.onCreate(savedInstanceState)
   if(android.os.Build.VERSION.SDK_INT>=33)setRecentsScreenshotEnabled(false)
@@ -33,7 +33,14 @@ class RenderComparisonActivity:ComponentActivity() {
   picker=Spinner(this);body.addView(picker)
   start=Button(this).apply{text="Rozpocznij porównanie";tag="render.compare.start";isEnabled=false;setOnClickListener{begin()}};body.addView(start)
   background=Button(this).apply{text="Sprawdź po schowaniu aplikacji";tag="render.compare.background";isEnabled=false;setOnClickListener{
-   if(run!=null&&selected!=null&&work?.isActive!=true){backgroundRequested=true;isEnabled=false;status.text="Aplikacja schowa się na około minutę. Po próbie otwórz Watchera, aby zobaczyć wynik.";if(!moveTaskToBack(true)){backgroundRequested=false;isEnabled=true;status.text="Nie udało się schować aplikacji. Próba w tle nie została uruchomiona."}}
+   if(run!=null&&selected!=null&&readyForBackground&&work?.isActive!=true){
+    android.app.AlertDialog.Builder(this@RenderComparisonActivity).setTitle("Wybierz próbę w tle")
+     .setItems(arrayOf("Zwykły test w tle","Próba naprawy pauzy Gecko")){_,which->
+      backgroundRequestedArm=if(which==0)3 else 4;background.isEnabled=false
+      status.text="Aplikacja schowa się na czas próby. Poczekaj około 2 minut przed powrotem."
+      if(!moveTaskToBack(true)){backgroundRequestedArm=0;background.isEnabled=true;status.text="Nie udało się schować aplikacji. Próba w tle nie została uruchomiona."}
+     }.setNegativeButton("Wróć",null).show()
+   }
   }};body.addView(background)
   status=TextView(this).apply{tag="render.compare.status";textSize=13f;setTextIsSelectable(true);text=RenderComparisonStore.summary(this@RenderComparisonActivity)}
   body.addView(ScrollView(this).apply{addView(status)},LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,180))
@@ -51,7 +58,8 @@ class RenderComparisonActivity:ComponentActivity() {
   }
  }
  override fun onResume(){super.onResume();WatcherAutomation.uiVisible=true
-  refresh=lifecycleScope.launch{while(true){if(work?.isActive!=true&&!backgroundRequested)status.text=RenderComparisonStore.summary(this@RenderComparisonActivity);delay(2000)}}
+  if(readyForBackground&&work?.isActive!=true)background.isEnabled=true
+  refresh=lifecycleScope.launch{while(true){if(work?.isActive!=true&&backgroundRequestedArm==0)status.text=RenderComparisonStore.summary(this@RenderComparisonActivity);delay(2000)}}
  }
  private fun begin(){
   if(work?.isActive==true)return
@@ -59,7 +67,7 @@ class RenderComparisonActivity:ComponentActivity() {
   if(browser.width !in 128..2160||browser.height !in 128..2160||browser.width.toLong()*browser.height>4_000_000){status.text="Okno przeglądarki jest za małe do porównania. Obróć telefon lub powiększ okno.";return}
   selected=group;run=UUID.randomUUID().toString();width=browser.width;height=browser.height
   RenderComparisonStore.begin(this,checkNotNull(run),group)
-  background.isEnabled=false;start.isEnabled=false;picker.isEnabled=false
+  readyForBackground=false;background.isEnabled=false;start.isEnabled=false;picker.isEnabled=false
   work=lifecycleScope.launch{
    var locked=false
    try {
@@ -67,15 +75,15 @@ class RenderComparisonActivity:ComponentActivity() {
     withTimeout(15_000){while(!WatcherAutomation.lock.tryLock())delay(200);locked=true}
     fun alive()=lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)&&!isFinishing
     val key=checkNotNull(run)
-    status.text="1/3 — widoczne okno. Nie opuszczaj tego ekranu."
+    status.text="1 — widoczne okno. Nie opuszczaj tego ekranu."
     val visible=RenderComparisonProbe.run(this@RenderComparisonActivity,group,browser,width,height,::alive)
     RenderComparisonStore.record(this@RenderComparisonActivity,key,group,1,visible)
     if(visible.stats["comparisonDocument"]!=1){status.text=RenderComparisonStore.summary(this@RenderComparisonActivity);return@launch}
-    status.text="2/3 — ten sam rozmiar obrazu bez widocznego okna. Aplikacja nadal jest na ekranie."
+    status.text="2 — ten sam rozmiar obrazu bez widocznego okna. Aplikacja nadal jest na ekranie."
     val headless=RenderComparisonProbe.run(this@RenderComparisonActivity,group,null,width,height,::alive)
     RenderComparisonStore.record(this@RenderComparisonActivity,key,group,2,headless)
     status.text=RenderComparisonStore.summary(this@RenderComparisonActivity)
-    background.isEnabled=true
+    readyForBackground=true;background.isEnabled=true
    }catch(_:TimeoutCancellationException){status.text="Czytnik jest zajęty. Spróbuj ponownie po zakończeniu bieżącej próby."}
     catch(_:CancellationException){status.text="Porównanie przerwane po opuszczeniu widocznego okna. Możesz rozpocząć je ponownie."}
     catch(_:Exception){status.text="Nie ukończono porównania. Zapisane wyniki diagnostyki pozostają dostępne."}
@@ -85,9 +93,9 @@ class RenderComparisonActivity:ComponentActivity() {
  override fun onPause(){refresh?.cancel();refresh=null;work?.cancel();WatcherAutomation.uiVisible=false;super.onPause()}
  override fun onStop(){
   super.onStop()
-  if(backgroundRequested){backgroundRequested=false
+  if(backgroundRequestedArm!=0){val arm=backgroundRequestedArm;backgroundRequestedArm=0
    val group=selected;val key=run
-   if(group!=null&&key!=null)RenderComparisonWorker.enqueue(applicationContext,key,group,width,height)
+   if(group!=null&&key!=null)RenderComparisonWorker.enqueue(applicationContext,key,group,width,height,runtimeLease=arm==4)
   }
  }
 }
