@@ -31,7 +31,7 @@ internal object RenderComparisonProbe {
   val channel=CollectorChannel(browser,fixtureMode=fixtureTarget!=null)
   val load=BackgroundDocumentLoad("GROUP")
   var current:String?=null;var initial=true;var surface:BackgroundViewport?=null
-  val stats=mutableMapOf("comparisonWidth" to width,"comparisonHeight" to height,"comparisonReady" to 0,"comparisonDocument" to 0,"comparisonCapture" to 0,"comparisonVaried" to 0,"renderDiagEnabled" to 1,"renderSdk" to Build.VERSION.SDK_INT)
+  val stats=mutableMapOf("comparisonStage" to 1,"comparisonWidth" to width,"comparisonHeight" to height,"comparisonReady" to 0,"comparisonDocument" to 0,"comparisonCapture" to 0,"comparisonVaried" to 0,"renderDiagEnabled" to 1,"renderSdk" to Build.VERSION.SDK_INT)
   fun live()=alive()&&load.reason==null
   fun accepted(u:String)=BackgroundNavigationPolicy.rejection(u,group.id,fixtureTarget)==null
   browser.navigationDelegate=object:GeckoSession.NavigationDelegate {
@@ -57,10 +57,14 @@ internal object RenderComparisonProbe {
   try {
    withTimeout(70_000){
     check(live()){load.reason?:"COMPARE_INTERRUPTED"}
+    stats["comparisonStage"]=2
     channel.attach(GeckoHost.collectorExtension(context));DesktopSessionPreview.applyDesktop(browser)
+    stats["comparisonStage"]=3
     browser.open(GeckoHost.runtime(context))
+    stats["comparisonStage"]=4
     if(view!=null){check(view.isShown&&view.hasWindowFocus()){ "COMPARE_VIEW_HIDDEN" };view.setSession(browser)}
     else surface=BackgroundViewport(browser,observation,width,height)
+    stats["comparisonStage"]=5
     browser.setActive(true);browser.setFocused(true);browser.loadUri(target)
     var ready=false
     val until=SystemClock.elapsedRealtime()+35_000
@@ -79,6 +83,7 @@ internal object RenderComparisonProbe {
     check(live()&&ready){load.reason?:"GROUP_NOT_READY"}
     val url=checkNotNull(current);val generation=channel.connectionGeneration
     fun sameDocument()=live()&&load.ready&&current==url&&channel.isConnected&&channel.connectedUrl==url&&channel.connectionGeneration==generation&&accepted(url)
+    stats["comparisonStage"]=6
     stats["comparisonReady"]=1
     // Same observation interval for all arms; reproduce the existing headless
     // surface reset without introducing active toggles or alternate frame proof.
@@ -91,6 +96,7 @@ internal object RenderComparisonProbe {
     check(sameDocument()){load.reason?:"COMPARE_DOCUMENT_CHANGED"}
     if(view!=null)check(view.isShown&&view.hasWindowFocus()){ "COMPARE_VIEW_HIDDEN" }
     stats["comparisonDocument"]=1
+    stats["comparisonStage"]=7
     try {
      val bitmap=withTimeout(8000){ownedBitmap(if(view!=null)view.capturePixels() else checkNotNull(surface).capturePixels())}
      try {
@@ -106,10 +112,11 @@ internal object RenderComparisonProbe {
     check(alive()){"COMPARE_INTERRUPTED"}
     check(sameDocument()){load.reason?:"COMPARE_DOCUMENT_CHANGED"}
     stats["comparisonDocument"]=1
+    stats["comparisonStage"]=8
    }
    RenderComparisonResult("RENDER_COMPARE_OBSERVED",stats.toMap()+observation.snapshot()+mapOf("groupElapsedMs" to (SystemClock.elapsedRealtime()-started).toInt())+(surface?.let{mapOf("groupRenderedFrames" to it.renderedFrames)}?:emptyMap()))
   }catch(e:CancellationException){if(e !is TimeoutCancellationException)throw e;stats["comparisonDocument"]=0;RenderComparisonResult("COMPARE_TIMEOUT",stats.toMap()+observation.snapshot())}
-   catch(e:Exception){if(e.message in setOf("COMPARE_DOCUMENT_CHANGED","COMPARE_VIEW_HIDDEN","COMPARE_INTERRUPTED","COMPARE_IMAGE_SIZE"))stats["comparisonDocument"]=0;RenderComparisonResult(WatcherAutomation.errorCode(e),stats.toMap()+observation.snapshot())}
+   catch(e:Exception){stats["comparisonErrorType"]=when(e){is IllegalStateException->1;is IllegalArgumentException->2;is UnsupportedOperationException->3;else->4};if(e.message in setOf("COMPARE_DOCUMENT_CHANGED","COMPARE_VIEW_HIDDEN","COMPARE_INTERRUPTED","COMPARE_IMAGE_SIZE"))stats["comparisonDocument"]=0;RenderComparisonResult(WatcherAutomation.errorCode(e),stats.toMap()+observation.snapshot())}
   finally {
    runCatching{channel.close()}
    if(view!=null)runCatching{view.releaseSession()}
