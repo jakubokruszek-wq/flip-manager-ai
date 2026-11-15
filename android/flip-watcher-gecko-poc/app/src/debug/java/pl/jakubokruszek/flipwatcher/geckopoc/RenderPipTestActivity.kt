@@ -12,11 +12,11 @@ internal class RenderPipTestActivity:RenderPipComparisonActivity() {
   pipView.layoutParams=pipView.layoutParams.apply{width=(pipView.width-32).coerceAtLeast(1)}
   pipView.requestLayout()
  }
+ class Awaited {
+  val started=CompletableDeferred<Unit>()
+  val result=CompletableDeferred<RenderComparisonResult>()
+ }
  companion object {
-  class Awaited {
-   val started=CompletableDeferred<Unit>()
-   val result=CompletableDeferred<RenderComparisonResult>()
-  }
   @Volatile var fixtureTarget:String?=null
   val pending=ConcurrentHashMap<String,Awaited>()
  }
