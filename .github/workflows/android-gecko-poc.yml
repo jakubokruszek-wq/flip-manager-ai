@@ -54,3 +54,25 @@ jobs:
                   print('\nOMNI_FILE',p)
                   for i in sorted(indexes):print(f'{i+1}: {lines[i]}')
           PYEMBED
+
+      - name: Inspect native code at the embedded exact source revision
+        run: |
+          python3 - <<'PYNATIVE'
+          import urllib.request,concurrent.futures,re
+          root='https://hg.mozilla.org/releases/mozilla-release/raw-file/eb9a6e3a736802c8e080a76c44dc81f409d99d54/'
+          paths=['widget/android/AndroidVsync.cpp','widget/android/AndroidVsync.h','gfx/thebes/gfxAndroidPlatform.cpp','widget/android/nsAppShell.cpp','widget/android/nsWindow.cpp','widget/android/AndroidUiThread.cpp','layout/base/nsRefreshDriver.cpp','modules/libpref/init/StaticPrefList.yaml']
+          pattern=re.compile(r'Vsync|vsync|Choreographer|sPauseCount|OnPause|OnResume|ObserveVsync|onPause|onResume|frame_rate|refreshdriver|RefreshDriver|new.surface|[Rr]equestNewSurface')
+          def read(path):
+            try:
+              with urllib.request.urlopen(root+path,timeout=25) as r:data=r.read(2500000).decode()
+              lines=data.splitlines(); indexes=set()
+              for i,line in enumerate(lines):
+                if pattern.search(line):indexes.update(range(max(0,i-5),min(len(lines),i+12)))
+              if path.endswith('nsRefreshDriver.cpp'):indexes={i for i in indexes if i<2300 or i>4200}
+              out=['NATIVE_FILE '+path]
+              for i in sorted(indexes):out.append(str(i+1)+': '+lines[i])
+              return '\n'.join(out)
+            except Exception as e:return 'NATIVE_FETCH_FAILED '+path+' '+str(e)
+          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            for out in pool.map(read,paths):print(out)
+          PYNATIVE
