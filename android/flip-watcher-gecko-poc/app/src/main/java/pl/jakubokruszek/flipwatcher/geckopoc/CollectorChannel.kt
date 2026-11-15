@@ -56,7 +56,7 @@ class CollectorChannel(
                 "shareLinkStop" -> if (json.optString("nonce") == shareNonce) onShareStop()
                 "visiblePostsStop" -> onVisibleStop()
                 "ready" -> ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
-                "joinedGroupsResult", "profilePreviewResult", "reviewImagesResult", "reviewPostResult", "desktopDocumentProof", "desktopArmed", "desktopPreviewResult", "shareLinkContextResult", "mainTransportResult", "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
+                "frameTimingResult", "joinedGroupsResult", "profilePreviewResult", "reviewImagesResult", "reviewPostResult", "desktopDocumentProof", "desktopArmed", "desktopPreviewResult", "shareLinkContextResult", "mainTransportResult", "responseLoadArmed", "responseDiagnosisResult", "visiblePostsResult", "probeResult", "scanResult", "groupProbeResult", "domDiagnosisResult", "structureDiagnosisResult", "networkControlResult", "loadDomStatsResult" -> {
                     ScanProtocol.parseProbe(json.optJSONObject("probe"))?.let(onProbe)
                     pending.remove(json.optString("nonce"))?.let { reply ->
                         android.os.Handler(android.os.Looper.getMainLooper()).post { reply.complete(if (port === this@CollectorChannel.port) json else null) }
@@ -184,6 +184,16 @@ class CollectorChannel(
     fun stopShareLinkContext() {
         shareNonce = null
         runCatching { port?.postMessage(JSONObject().put("type", "stopShareLinkContext").put("nonce", UUID.randomUUID().toString())) }
+    }
+
+    /** Bound to this document generation; no scan permission. Caller owns the RAM token. */
+    internal suspend fun frameTiming(action:String,token:String,group:String,timeoutMs:Long=2000):Map<String,Int>? {
+        require(action in setOf("Start","Snapshot","Stop"))
+        val nonce=UUID.randomUUID().toString();val generation=connectionGeneration;val url=connectedUrl
+        val reply=request(nonce,JSONObject().put("type","frameTiming"+action).put("nonce",nonce).put("token",token)
+            .put("consent",true).put("groupId",group).put("allowLoopback",fixtureMode).put("windowMs",30000),timeoutMs)
+        if(generation!=connectionGeneration||url==null||connectedUrl!=url)return null
+        return FrameTimingProtocol.parse(reply,nonce,token)
     }
 
     suspend fun probe(timeoutMs: Long = 5_000): PageProbe? {

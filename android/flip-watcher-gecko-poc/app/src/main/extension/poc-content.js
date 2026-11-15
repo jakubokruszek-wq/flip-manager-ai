@@ -19,6 +19,62 @@
   } catch {
     return;
   }
+  // Count-only instrumented timing; never grants permission to collect posts.
+  function createFrameTiming(w) {
+    let run=null;
+    const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const bounded=n=>Math.min(100000000,Math.max(0,Math.floor(n)));
+    const now=()=>w.performance.now();
+    const visible=()=>w.document.visibilityState==="visible"?1:0;
+    function dispose(r) {
+      if(!r || !r.active)return;
+      r.active=false;
+      w.cancelAnimationFrame(r.raf);w.clearInterval(r.interval);w.clearTimeout(r.deadline);
+      w.document.removeEventListener("visibilitychange",r.visibility);
+      w.removeEventListener("pagehide",r.pagehide);
+    }
+    function snapshot(r) {
+      const time=r.ended??now();
+      return {elapsedMs:bounded(time-r.started),rafCount:r.rafCount,timerCount:r.timerCount,
+        visibilityChanges:r.visibilityChanges,visibleStart:r.visibleStart,visibleNow:r.visibleNow,
+        hasRaf:r.lastRaf===null?0:1,hasTimer:r.lastTimer===null?0:1,
+        rafLastAgeMs:r.lastRaf===null?0:bounded(time-r.lastRaf),timerLastAgeMs:r.lastTimer===null?0:bounded(time-r.lastTimer)};
+    }
+    function finish(r) {if(r.active){r.visibleNow=visible();r.ended=now();dispose(r);}}
+    function clear(){dispose(run);run=null;}
+    function safe(m) {
+      return m.consent===true && uuid.test(m.token||"") &&
+        w.FlipVisiblePosts.context(w.location.href,m.groupId,m.allowLoopback===true) &&
+        !w.document.querySelector('input[type="password"],form[action*="login"],iframe[src*="captcha"],input[name="captcha_response"],[data-testid*="captcha"],[data-testid*="checkpoint"]');
+    }
+    function handle(m) {
+      const reply={type:"frameTimingResult",nonce:m.nonce,token:m.token,status:"STOP"};
+      if(!safe(m)){if(run?.token===m.token)clear();return reply;}
+      if(m.type==="frameTimingStart") {
+        clear();
+        const windowMs=Number.isFinite(m.windowMs)?Math.max(1,Math.min(30000,Math.floor(m.windowMs))):25000;
+        const r={token:m.token,groupId:m.groupId,fixture:m.allowLoopback===true,started:now(),windowMs,active:true,
+          rafCount:0,timerCount:0,visibilityChanges:0,visibleStart:visible(),visibleNow:visible(),lastRaf:null,lastTimer:null};
+        run=r;
+        const expired=()=>{if(now()-r.started>=r.windowMs){finish(r);return true;}return false;};
+        const frame=()=>{if(run!==r||!r.active||expired())return;r.rafCount=bounded(r.rafCount+1);r.lastRaf=now();r.raf=w.requestAnimationFrame(frame);};
+        r.visibility=()=>{if(run!==r||!r.active||expired())return;r.visibilityChanges=bounded(r.visibilityChanges+1);r.visibleNow=visible();};
+        r.pagehide=clear;
+        w.document.addEventListener("visibilitychange",r.visibility);w.addEventListener("pagehide",r.pagehide);
+        r.raf=w.requestAnimationFrame(frame);
+        r.interval=w.setInterval(()=>{if(run!==r||!r.active||expired())return;r.timerCount=bounded(r.timerCount+1);r.lastTimer=now();},1000);
+        r.deadline=w.setTimeout(()=>finish(r),windowMs);
+      }
+      const r=run;
+      if(!r||r.token!==m.token||r.groupId!==m.groupId||r.fixture!==(m.allowLoopback===true))return reply;
+      if(now()-r.started>=r.windowMs || m.type==="frameTimingStop")finish(r);
+      if(m.type!=="frameTimingStart"&&m.type!=="frameTimingSnapshot"&&m.type!=="frameTimingStop")return reply;
+      if(r.active)r.visibleNow=visible();
+      return {...reply,status:"OK",stats:snapshot(r)};
+    }
+    return {handle,clear};
+  }
+  const frameTiming=createFrameTiming(scope);
   let scanning = false;
   let stopVisibleWatch = null;
 
@@ -430,13 +486,16 @@
   }
   const shareContext=scope.FlipShareContext.create();
   let activeResponseAbort=null;
-  port.onDisconnect.addListener(()=>{if(activeDesktopAbort)activeDesktopAbort();shareContext.stop();if(activeLoadAbort)activeLoadAbort();clearLoadWatch();if(activeResponseAbort)activeResponseAbort();void browser.runtime.sendMessage({type:"stopResponse",nonce:activeResponseNonce}).catch(()=>{});});
+  port.onDisconnect.addListener(()=>{frameTiming.clear();if(activeDesktopAbort)activeDesktopAbort();shareContext.stop();if(activeLoadAbort)activeLoadAbort();clearLoadWatch();if(activeResponseAbort)activeResponseAbort();void browser.runtime.sendMessage({type:"stopResponse",nonce:activeResponseNonce}).catch(()=>{});});
   let activeDesktopAbort=null;
   const viewportTransport=scope.FlipDesktopViewport?.transport(port,scope)||{clear(){},request:async()=>null};
   let desktopRunning=false;
   let activeResponseNonce="";
   port.onMessage.addListener(async message => {
     if (!message || typeof message !== "object" || typeof message.nonce !== "string") return;
+    if(["frameTimingStart","frameTimingSnapshot","frameTimingStop"].includes(message.type)){
+      port.postMessage(frameTiming.handle(message));return;
+    }
     if(message.type==='abortDesktopPreview'){viewportTransport.clear();if(activeDesktopAbort)activeDesktopAbort();return;}
     if(message.type==='armDesktopPreview'){
       const ack=message.consent===true&&message.desktopConsent===true&&responsePageSafe(message)?await browser.runtime.sendMessage({type:'armDesktop',nonce:message.nonce,consent:true,desktopConsent:true,groupId:message.groupId,fixture:message.allowLoopback===true,windowMs:message.windowMs}):{status:'STOP'};

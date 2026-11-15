@@ -42,7 +42,7 @@ internal object RenderComparisonStore {
     suspend fun record(context:Context,run:String,group:WatcherGroup,arm:Int,result:RenderComparisonResult){
         require(validRun(run)&&group.type=="GROUP"&&arm in 1..4)
         val issue=result.issue.takeIf{it.matches(Regex("[A-Z0-9_]{0,60}"))}?:"COMPARE_PROTOCOL"
-        val stats=result.stats.filter{(key,value)->statKey.matches(key)&&value in 0..100_000_000}.entries.take(120).associate{it.key to it.value}+
+        val stats=result.stats.filter{(key,value)->statKey.matches(key)&&value in 0..100_000_000}.entries.take(158).associate{it.key to it.value}+
             mapOf("comparisonArm" to arm,"renderDiagEnabled" to 1)
         val clean=RenderComparisonResult(issue,stats)
         val report=WatcherCaptureReport.create(context,WatcherCaptureReport.cycle("render-comparison/$run/$arm"),run,group,null,issue,failureStats=stats)
@@ -78,6 +78,10 @@ internal object RenderComparisonStore {
                 appendLine("Obraz zawiera różne piksele: ${if(stats.optInt("comparisonVaried")==1)"tak"else"nie"}")
                 appendLine("Elementy postów na stronie: ${stats.optInt("comparisonArticles")}")
                 if(arm!=1&&stats.has("groupAcquiredFrames"))appendLine("Klatki ImageReader: ${stats.optInt("groupAcquiredFrames")}")
+                if(stats.has("timingStarted")){
+                    appendLine("Pomiar animacji i timera: ${if(stats.optInt("timingReply5")==1)"ukończony"else"niepełny"}")
+                    appendLine("25 s — animacje: ${stats.optInt("timingRafCount5")}, timer: ${stats.optInt("timingTimerCount5")}, klatki: ${stats.optInt("timingFrames5")}")
+                }
                 appendLine(when(result.optInt("upload")){1->"Raport diagnostyczny wysłany.";2->"Raport zachowany lokalnie; wysyłka nie powiodła się.";3->"Raport zachowany lokalnie; brak parowania.";else->"Raport zachowany lokalnie; brak potwierdzenia wysyłki."})
             }
             append("To test obrazu strony, nie potwierdzenie odczytania ofert.")

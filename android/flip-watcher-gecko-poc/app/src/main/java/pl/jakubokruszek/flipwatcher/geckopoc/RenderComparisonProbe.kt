@@ -55,7 +55,7 @@ internal object RenderComparisonProbe {
   }
   val started=SystemClock.elapsedRealtime()
   try {
-   withTimeout(70_000){
+   withTimeout(85_000){
     check(live()){load.reason?:"COMPARE_INTERRUPTED"}
     stats["comparisonStage"]=2
     channel.attach(GeckoHost.collectorExtension(context));DesktopSessionPreview.applyDesktop(browser)
@@ -85,13 +85,35 @@ internal object RenderComparisonProbe {
     fun sameDocument()=live()&&load.ready&&current==url&&channel.isConnected&&channel.connectedUrl==url&&channel.connectionGeneration==generation&&accepted(url)
     stats["comparisonStage"]=6
     stats["comparisonReady"]=1
-    // Same observation interval for all arms; reproduce the existing headless
-    // surface reset without introducing active toggles or alternate frame proof.
-    val first=SystemClock.elapsedRealtime()+2500
-    while(sameDocument()&&SystemClock.elapsedRealtime()<first)delay(50)
-    if(view==null&&surface?.renderedFrames==0){surface?.close();surface=BackgroundViewport(browser,observation,width,height);stats["groupSurfaceResets"]=1;browser.setActive(true);browser.setFocused(true)}
-    val settle=SystemClock.elapsedRealtime()+5000
-    while(sameDocument()&&SystemClock.elapsedRealtime()<settle)delay(50)
+    // Instrumented observation: rAF itself is a small stimulus. No surface reset,
+    // frame polling or capture request is issued during this measured interval.
+    val timingToken=java.util.UUID.randomUUID().toString()
+    val timingStart=channel.frameTiming("Start",timingToken,group.id)
+    stats["timingStarted"]=if(timingStart!=null)1 else 0
+    val timingNativeStart=SystemClock.elapsedRealtime()
+    val framesStart=surface?.renderedFrames?:0
+    val callbacksStart=observation.snapshot()["groupImageCallbacks"]?:0
+    try {
+     for(bucket in 1..5){
+      val deadline=timingNativeStart+bucket*5000L
+      while(sameDocument()&&SystemClock.elapsedRealtime()<deadline)delay(100)
+      check(alive()){"COMPARE_INTERRUPTED"}
+      check(sameDocument()){"COMPARE_DOCUMENT_CHANGED"}
+      stats["timingNativeMs"+bucket]=(SystemClock.elapsedRealtime()-timingNativeStart).toInt()
+      stats["timingFrames"+bucket]=(surface?.renderedFrames?:0)-framesStart
+      stats["timingCallbacks"+bucket]=(observation.snapshot()["groupImageCallbacks"]?:0)-callbacksStart
+      val requestAt=SystemClock.elapsedRealtime()
+      val sample=if(timingStart!=null)channel.frameTiming("Snapshot",timingToken,group.id)else null
+      stats["timingRoundTripMs"+bucket]=(SystemClock.elapsedRealtime()-requestAt).toInt()
+      stats["timingReply"+bucket]=if(sample!=null)1 else 0
+      sample?.forEach{(key,value)->stats["timing"+key.replaceFirstChar{it.uppercase()}+bucket]=value}
+     }
+    } finally {
+     // Request cleanup only on the same document; session teardown also disposes it.
+     if(sameDocument())kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable){
+      channel.frameTiming("Stop",timingToken,group.id,1000)
+     }
+    }
     check(alive()){"COMPARE_INTERRUPTED"}
     check(sameDocument()){load.reason?:"COMPARE_DOCUMENT_CHANGED"}
     if(view!=null)check(view.isShown&&view.hasWindowFocus()){ "COMPARE_VIEW_HIDDEN" }

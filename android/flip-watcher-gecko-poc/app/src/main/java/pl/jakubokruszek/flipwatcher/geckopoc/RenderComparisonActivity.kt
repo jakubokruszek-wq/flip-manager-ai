@@ -29,7 +29,7 @@ class RenderComparisonActivity:ComponentActivity() {
   window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
   val body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(12,0,12,0)}
   body.addView(TextView(this).apply{text="Porównanie obrazu jednej grupy";textSize=20f})
-  body.addView(TextView(this).apply{text="Najpierw widoczne okno, potem przechwytywanie bez okna i próba po schowaniu aplikacji. Każdy etap otwiera tę samą grupę. Zapisujemy tylko liczniki diagnostyczne. Nie dodajemy ofert ani zdjęć do Managera.";textSize=13f})
+  body.addView(TextView(this).apply{text="Najpierw widoczne okno, potem przechwytywanie bez okna i próba po schowaniu aplikacji. Każdy etap otwiera tę samą grupę. Każdy etap zawiera 25 sekund pomiaru animacji, timera i klatek. Zapisujemy tylko liczniki diagnostyczne. Nie dodajemy ofert ani zdjęć do Managera.";textSize=13f})
   picker=Spinner(this);body.addView(picker)
   start=Button(this).apply{text="Rozpocznij porównanie";tag="render.compare.start";isEnabled=false;setOnClickListener{begin()}};body.addView(start)
   background=Button(this).apply{text="Sprawdź po schowaniu aplikacji";tag="render.compare.background";isEnabled=false;setOnClickListener{
