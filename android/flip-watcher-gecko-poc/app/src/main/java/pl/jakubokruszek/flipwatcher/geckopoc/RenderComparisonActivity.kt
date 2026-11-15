@@ -35,7 +35,7 @@ class RenderComparisonActivity:ComponentActivity() {
   background=Button(this).apply{text="Sprawdź po schowaniu aplikacji";tag="render.compare.background";isEnabled=false;setOnClickListener{
    if(run!=null&&selected!=null&&readyForBackground&&work?.isActive!=true){
     android.app.AlertDialog.Builder(this@RenderComparisonActivity).setTitle("Wybierz próbę w tle")
-     .setItems(arrayOf("Zwykły test w tle","Próba naprawy pauzy Gecko","Test w tle z usługą pierwszego planu","Usługa pierwszego planu i korekta pauzy Gecko")){_,which->
+     .setItems(arrayOf("Zwykły test w tle","Próba naprawy pauzy Gecko","Test w tle z usługą pierwszego planu","Usługa pierwszego planu i korekta pauzy Gecko","Test sygnału odświeżania Androida")){_,which->
       beginBackground(which+3)
      }.setNegativeButton("Wróć",null).show()
    }
@@ -62,7 +62,7 @@ class RenderComparisonActivity:ComponentActivity() {
    var handedOff=false
    try {
     if(RenderComparisonForegroundService.anyActive()){status.text="Poprzednia usługa diagnostyczna jeszcze trwa. Poczekaj na jej zakończenie.";return@launch}
-    if(arm>=5){
+    if(arm in 5..6){
      status.text="Uruchamiam usługę diagnostyczną z powiadomieniem…"
      if(!RenderComparisonForegroundService.start(this@RenderComparisonActivity,key,arm)){
       RenderComparisonStore.record(this@RenderComparisonActivity,key,group,arm,RenderComparisonResult("COMPARE_FGS_START_DENIED",mapOf("comparisonForegroundRequested" to 1)))
@@ -70,7 +70,7 @@ class RenderComparisonActivity:ComponentActivity() {
      }
     }
     if(!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)||isFinishing){
-     if(arm>=5)RenderComparisonForegroundService.stop(this@RenderComparisonActivity,key,arm)
+     if(arm in 5..6)RenderComparisonForegroundService.stop(this@RenderComparisonActivity,key,arm)
      return@launch
     }
     backgroundRequestedArm=arm
@@ -78,10 +78,10 @@ class RenderComparisonActivity:ComponentActivity() {
     handedOff=moveTaskToBack(true)
     if(!handedOff){
      backgroundRequestedArm=0
-     if(arm>=5)RenderComparisonForegroundService.stop(this@RenderComparisonActivity,key,arm)
+     if(arm in 5..6)RenderComparisonForegroundService.stop(this@RenderComparisonActivity,key,arm)
      status.text="Nie udało się schować aplikacji. Próba w tle nie została uruchomiona."
     }
-   }finally{if(arm>=5&&!handedOff)RenderComparisonForegroundService.stop(this@RenderComparisonActivity,key,arm);background.isEnabled=true;start.isEnabled=true;picker.isEnabled=true}
+   }finally{if(arm in 5..6 && !handedOff)RenderComparisonForegroundService.stop(this@RenderComparisonActivity,key,arm);background.isEnabled=true;start.isEnabled=true;picker.isEnabled=true}
   }
  }
  override fun onResume(){super.onResume();WatcherAutomation.uiVisible=true
@@ -124,7 +124,7 @@ class RenderComparisonActivity:ComponentActivity() {
   super.onStop()
   if(backgroundRequestedArm!=0){val arm=backgroundRequestedArm;backgroundRequestedArm=0
    val group=selected;val key=run
-   if(group!=null&&key!=null)RenderComparisonWorker.enqueue(applicationContext,key,group,width,height,runtimeLease=arm==4||arm==6,foreground=arm>=5)
+   if(group!=null&&key!=null)RenderComparisonWorker.enqueue(applicationContext,key,group,width,height,runtimeLease=arm==4||arm==6,foreground=arm in 5..6,frameSignal=arm==7)
   }
  }
 }

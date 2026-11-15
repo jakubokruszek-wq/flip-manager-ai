@@ -22,7 +22,7 @@ internal data class RenderComparisonResult(val issue:String,val stats:Map<String
  * Bitmap contents stay in RAM. A captured/uniform image is diagnostic evidence only;
  * it never replaces the production reader's current frame or ownership requirements. */
 internal object RenderComparisonProbe {
- suspend fun run(context:Context,group:WatcherGroup,view:GeckoView?,width:Int,height:Int,alive:()->Boolean,fixtureTarget:String?=null):RenderComparisonResult=withContext(Dispatchers.Main){
+ suspend fun run(context:Context,group:WatcherGroup,view:GeckoView?,width:Int,height:Int,alive:()->Boolean,fixtureTarget:String?=null,frameSignal:Boolean=false):RenderComparisonResult=withContext(Dispatchers.Main){
   require(group.type=="GROUP"&&width in 128..2160&&height in 128..2160&&width.toLong()*height<=4_000_000)
   if(fixtureTarget!=null)require(java.net.URI(fixtureTarget).host=="127.0.0.1")
   val target=fixtureTarget?:group.url
@@ -30,7 +30,7 @@ internal object RenderComparisonProbe {
   RenderDiagnostics.attach(browser,observation)
   val channel=CollectorChannel(browser,fixtureMode=fixtureTarget!=null)
   val load=BackgroundDocumentLoad("GROUP")
-  var current:String?=null;var initial=true;var surface:BackgroundViewport?=null
+  var current:String?=null;var initial=true;var surface:BackgroundViewport?=null;var signalProbe:AndroidFrameSignalProbe?=null
   val stats=mutableMapOf("comparisonStage" to 1,"comparisonWidth" to width,"comparisonHeight" to height,"comparisonReady" to 0,"comparisonDocument" to 0,"comparisonCapture" to 0,"comparisonVaried" to 0,"renderDiagEnabled" to 1,"renderSdk" to Build.VERSION.SDK_INT,"comparisonScreenAtStart" to if(context.getSystemService(android.os.PowerManager::class.java).isInteractive)1 else 0)
   fun live()=alive()&&load.reason==null
   fun accepted(u:String)=BackgroundNavigationPolicy.rejection(u,group.id,fixtureTarget)==null
@@ -91,6 +91,7 @@ internal object RenderComparisonProbe {
     val timingStart=channel.frameTiming("Start",timingToken,group.id)
     stats["timingStarted"]=if(timingStart!=null)1 else 0
     val timingNativeStart=SystemClock.elapsedRealtime()
+    if(frameSignal){signalProbe=AndroidFrameSignalProbe();stats["frameSignalRequested"]=1}
     val framesStart=surface?.renderedFrames?:0
     val callbacksStart=observation.snapshot()["groupImageCallbacks"]?:0
     try {
@@ -99,6 +100,7 @@ internal object RenderComparisonProbe {
       while(sameDocument()&&SystemClock.elapsedRealtime()<deadline)delay(100)
       check(alive()){"COMPARE_INTERRUPTED"}
       check(sameDocument()){"COMPARE_DOCUMENT_CHANGED"}
+      signalProbe?.snapshot()?.forEach{(key,value)->stats["timing"+key.replaceFirstChar{it.uppercase()}+bucket]=value}
       stats["timingNativeMs"+bucket]=(SystemClock.elapsedRealtime()-timingNativeStart).toInt()
       stats["timingFrames"+bucket]=(surface?.renderedFrames?:0)-framesStart
       stats["timingCallbacks"+bucket]=(observation.snapshot()["groupImageCallbacks"]?:0)-callbacksStart
@@ -107,6 +109,13 @@ internal object RenderComparisonProbe {
       stats["timingRoundTripMs"+bucket]=(SystemClock.elapsedRealtime()-requestAt).toInt()
       stats["timingReply"+bucket]=if(sample!=null)1 else 0
       sample?.forEach{(key,value)->stats["timing"+key.replaceFirstChar{it.uppercase()}+bucket]=value}
+      // Deliberate stimulus only after the second unchanged sample (~10 s).
+      // This does not authorize a read, paint, capture or engine lifecycle change.
+      if(bucket==2&&signalProbe!=null){
+       check(sameDocument()){"COMPARE_DOCUMENT_CHANGED"}
+       stats["frameSignalAtMs"]=(SystemClock.elapsedRealtime()-timingNativeStart).toInt()
+       stats["frameSignalActivated"]=if(signalProbe?.activateFrames()==true)1 else 0
+      }
      }
     } finally {
      // Request cleanup only on the same document; session teardown also disposes it.
@@ -137,12 +146,14 @@ internal object RenderComparisonProbe {
     check(sameDocument()){load.reason?:"COMPARE_DOCUMENT_CHANGED"}
     stats["comparisonDocument"]=1
     stats["comparisonScreenAtEnd"]=if(context.getSystemService(android.os.PowerManager::class.java).isInteractive)1 else 0
+    signalProbe?.let{it.close();stats["frameSignalClosed"]=1}
     stats["comparisonStage"]=8
    }
    RenderComparisonResult("RENDER_COMPARE_OBSERVED",stats.toMap()+observation.snapshot()+mapOf("groupElapsedMs" to (SystemClock.elapsedRealtime()-started).toInt())+(surface?.let{mapOf("groupRenderedFrames" to it.renderedFrames)}?:emptyMap()))
   }catch(e:CancellationException){if(e !is TimeoutCancellationException)throw e;stats["comparisonDocument"]=0;RenderComparisonResult("COMPARE_TIMEOUT",stats.toMap()+observation.snapshot())}
    catch(e:Exception){stats["comparisonErrorType"]=when(e){is IllegalStateException->1;is IllegalArgumentException->2;is UnsupportedOperationException->3;else->4};if(e.message in setOf("COMPARE_DOCUMENT_CHANGED","COMPARE_VIEW_HIDDEN","COMPARE_INTERRUPTED","COMPARE_IMAGE_SIZE"))stats["comparisonDocument"]=0;RenderComparisonResult(WatcherAutomation.errorCode(e),stats.toMap()+observation.snapshot())}
   finally {
+   runCatching{signalProbe?.close()}
    runCatching{channel.close()}
    if(view!=null)runCatching{view.releaseSession()}
    runCatching{surface?.close()};runCatching{browser.stop()};runCatching{browser.setActive(false)};runCatching{browser.close()}

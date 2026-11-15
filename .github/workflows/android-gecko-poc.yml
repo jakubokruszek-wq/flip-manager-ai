@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-gecko-poc-${{ github.ref }}${{ github.ref == 'refs/heads/codex/android-foreground-matrix-113' && '-release-094' || '' }}
+  group: android-gecko-poc-${{ github.ref }}${{ github.ref == 'refs/heads/codex/android-frame-signal-114' && '-release-094' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -117,7 +117,7 @@ jobs:
 
       - name: Upload unit test reports
         if: always()
-        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-foreground-matrix-113' }}
+        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-frame-signal-114' }}
         timeout-minutes: 3
         uses: actions/upload-artifact@v4
         with:
@@ -155,7 +155,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Offline OCR and consent on API 36 (dedicated device)
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-foreground-matrix-113'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-frame-signal-114'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -194,10 +194,10 @@ jobs:
           retention-days: 14
 
       - name: Release the offline emulator disk before creating the fresh device
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-foreground-matrix-113'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-frame-signal-114'
         run: avdmanager delete avd --name gecko-ocr-offline
       - name: Build both versions for the in-place rollback compatibility test
-        if: github.ref == 'refs/heads/codex/android-foreground-matrix-113'
+        if: github.ref == 'refs/heads/codex/android-frame-signal-114'
         run: |
           echo "ORG_GRADLE_PROJECT_GECKO_POC_VERSION_CODE=$((8000 + ${{ github.run_number }}))" >> "$GITHUB_ENV"
           git fetch --depth=1 origin 01c082ef034d07727a3dbf15c998771240d33888
@@ -205,7 +205,7 @@ jobs:
           (cd ../watcher-upgrade-107/android/flip-watcher-gecko-poc && ./gradlew --no-daemon assembleDebug -PGECKO_POC_VERSION_CODE=8698)
           (cd android/flip-watcher-gecko-poc && ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest -PGECKO_POC_VERSION_CODE=$((8000 + ${{ github.run_number }})))
       - name: Complete worker, own-message and image-binding regressions on API 36
-        if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-foreground-matrix-113'
+        if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-frame-signal-114'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -217,11 +217,11 @@ jobs:
           avd-name: gecko-schema-recovery
           force-avd-creation: true
           script: |
-            if [ '${{ github.ref }}' = 'refs/heads/codex/android-foreground-matrix-113' ]; then sh scripts/rollback-upgrade.sh; fi
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ForegroundRenderComparisonInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.RenderComparisonForegroundServiceInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.RenderComparisonRetentionInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.GeckoBackgroundLeaseInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.RenderComparisonInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.RenderDiagnosticsInstrumentedTest
+            if [ '${{ github.ref }}' = 'refs/heads/codex/android-frame-signal-114' ]; then sh scripts/rollback-upgrade.sh; fi
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.AndroidSignalRenderComparisonInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.AndroidFrameSignalProbeInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ForegroundRenderComparisonInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.RenderComparisonForegroundServiceInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.RenderComparisonRetentionInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.GeckoBackgroundLeaseInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.RenderComparisonInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.RenderDiagnosticsInstrumentedTest
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#calendarIgnoresOldRevisionAndManualCycleRechecksWhileDegradedReadGetsExactlyOneRetry,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
       - name: Online Gecko flow and full regression on API 36 (fresh device)
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-foreground-matrix-113'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-frame-signal-114'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -260,7 +260,7 @@ jobs:
 
       - name: Upload instrumented test reports
         if: always()
-        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-foreground-matrix-113' }}
+        continue-on-error: ${{ github.ref == 'refs/heads/codex/android-frame-signal-114' }}
         timeout-minutes: 3
         uses: actions/upload-artifact@v4
         with:
@@ -613,8 +613,8 @@ jobs:
           gh release create gecko-poc-0.5.87 flip-watcher-0.5.87-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.87 — opisy i zdjęcia w automacie' --prerelease --notes-file release-notes.md
 
   publish-tested-0597:
-    name: Publish tested Android 0.5.113
-    if: false && github.event_name == 'push' && github.ref == 'refs/heads/codex/android-foreground-matrix-113'
+    name: Publish tested Android 0.5.114
+    if: false && github.event_name == 'push' && github.ref == 'refs/heads/codex/android-frame-signal-114'
     needs: [guard, build, instrumented, verified-apk]
     runs-on: ubuntu-24.04
     permissions:
@@ -629,41 +629,41 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-foreground-matrix-113 --jq .object.sha)" = '${{ github.sha }}'
+          test "$(gh api repos/jakubokruszek-wq/flip-manager-ai/git/ref/heads/codex/android-frame-signal-114 --jq .object.sha)" = '${{ github.sha }}'
           apk_path="$(find tested-apk -name app-arm64-v8a-debug.apk -type f)"
           test -n "$apk_path" && test -f "$apk_path"
-          cp "$apk_path" flip-watcher-0.5.113-arm64.apk
-          unzip -p flip-watcher-0.5.113-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.113")process.exit(1)})'
-          unzip -p flip-watcher-0.5.113-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
-          sha256sum flip-watcher-0.5.113-arm64.apk > SHA256SUMS
+          cp "$apk_path" flip-watcher-0.5.114-arm64.apk
+          unzip -p flip-watcher-0.5.114-arm64.apk assets/ext/flip_poc/manifest.json | node -e 'let s="";process.stdin.on("data",x=>s+=x);process.stdin.on("end",()=>{if(JSON.parse(s).version!=="0.5.114")process.exit(1)})'
+          unzip -p flip-watcher-0.5.114-arm64.apk assets/ext/flip_poc/collector-core.js | sha256sum | grep -q '^32c98525cfac6b580b93b4847140d4872ee4119b26981786322235df42e5b88b '
+          sha256sum flip-watcher-0.5.114-arm64.apk > SHA256SUMS
           cat > release-notes.md <<'NOTES'
-          Android 0.5.113 — dodatkowa, ręcznie wybierana próba naprawy pauzy Gecko w tle.
+          Android 0.5.114 — dodatkowa, ręcznie wybierana próba naprawy pauzy Gecko w tle.
           Zwykłe skanowanie i pierwsze trzy tryby porównania pozostają bez dodatkowego wznowienia silnika. Tylko czwarta próba utrzymuje aktywność silnika przez czas testu i przywraca stan na koniec, przy anulowaniu i przed ponownym otwarciem okna. Raportuje liczbę wykonanych wznowień i przywróceń.
           To kontrolowana próba na przypiętej wersji Gecko158, nie potwierdzona naprawa Androida17. Wybierz Test obrazu → Rozpocznij porównanie, a następnie Sprawdź po schowaniu aplikacji → Próba naprawy pauzy Gecko. Poczekaj około 2 minut bez otwierania Watchera.
           Bez zmian logowania, kolejki ofert, profilu przeglądarki i harmonogramu. Instaluj jako aktualizację bez odinstalowywania.
           NOTES
-          gh release create gecko-poc-0.5.113 flip-watcher-0.5.113-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.113 — próba naprawy pauzy Gecko' --prerelease --notes-file release-notes.md
+          gh release create gecko-poc-0.5.114 flip-watcher-0.5.114-arm64.apk SHA256SUMS --repo jakubokruszek-wq/flip-manager-ai --target '${{ github.sha }}' --title 'Watcher 0.5.114 — próba naprawy pauzy Gecko' --prerelease --notes-file release-notes.md
           python3 - <<'PYZIP'
           import zipfile,pathlib,hashlib,json
-          apk=pathlib.Path('flip-watcher-0.5.113-arm64.apk');output=pathlib.Path('flip-watcher-0.5.113-arm64.zip')
+          apk=pathlib.Path('flip-watcher-0.5.114-arm64.apk');output=pathlib.Path('flip-watcher-0.5.114-arm64.zip')
           info=zipfile.ZipInfo(apk.name,date_time=(2026,11,14,0,0,0));info.compress_type=zipfile.ZIP_STORED;info.external_attr=0o100644 << 16
           with zipfile.ZipFile(output,'w') as z:z.writestr(info,apk.read_bytes())
           with zipfile.ZipFile(output) as z:
               assert z.namelist()==[apk.name]
               assert hashlib.sha256(z.read(apk.name)).digest()==hashlib.sha256(apk.read_bytes()).digest()
-          metadata={'url':'https://github.com/jakubokruszek-wq/flip-manager-ai/releases/download/gecko-poc-0.5.113/'+output.name,'filename':output.name,'bytes':output.stat().st_size,'sha256':hashlib.sha256(output.read_bytes()).hexdigest(),'apkFilename':apk.name,'apkBytes':apk.stat().st_size,'apkSha256':hashlib.sha256(apk.read_bytes()).hexdigest()}
+          metadata={'url':'https://github.com/jakubokruszek-wq/flip-manager-ai/releases/download/gecko-poc-0.5.114/'+output.name,'filename':output.name,'bytes':output.stat().st_size,'sha256':hashlib.sha256(output.read_bytes()).hexdigest(),'apkFilename':apk.name,'apkBytes':apk.stat().st_size,'apkSha256':hashlib.sha256(apk.read_bytes()).hexdigest()}
           pathlib.Path('release-delivery.json').write_text(json.dumps(metadata));print(json.dumps(metadata))
           PYZIP
-          gh release upload gecko-poc-0.5.113 flip-watcher-0.5.113-arm64.zip --repo jakubokruszek-wq/flip-manager-ai
+          gh release upload gecko-poc-0.5.114 flip-watcher-0.5.114-arm64.zip --repo jakubokruszek-wq/flip-manager-ai
       - uses: actions/upload-artifact@v4
         with:
-          name: android-113-delivery-metadata
+          name: android-114-delivery-metadata
           path: release-delivery.json
           retention-days: 14
 
-  verify-published-113:
+  verify-published-114:
     name: Verify 111 ZIP full download, resume and Chrome save
-    if: false && github.event_name == 'push' && github.ref == 'refs/heads/codex/android-foreground-matrix-113'
+    if: false && github.event_name == 'push' && github.ref == 'refs/heads/codex/android-frame-signal-114'
     needs: [publish-tested-0597]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -674,7 +674,7 @@ jobs:
           node-version: '22'
       - uses: actions/download-artifact@v4
         with:
-          name: android-113-delivery-metadata
+          name: android-114-delivery-metadata
           path: tested-delivery
       - run: npm ci --no-audit --no-fund
       - name: Use installed Chrome or install Chromium
