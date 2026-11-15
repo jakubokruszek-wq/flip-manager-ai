@@ -76,3 +76,10 @@ jobs:
           with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
             for out in pool.map(read,paths):print(out)
           PYNATIVE
+
+      - name: Check pinned Kotlin plugin repository availability
+        run: |
+          for host in https://repo.maven.apache.org/maven2 https://plugins.gradle.org/m2 https://repo1.maven.org/maven2; do
+            echo "$host"
+            curl --location --silent --show-error --connect-timeout 8 --max-time 20 --head "$host/org/jetbrains/kotlin/android/org.jetbrains.kotlin.android.gradle.plugin/2.4.20/org.jetbrains.kotlin.android.gradle.plugin-2.4.20.pom" | head -12
+          done
