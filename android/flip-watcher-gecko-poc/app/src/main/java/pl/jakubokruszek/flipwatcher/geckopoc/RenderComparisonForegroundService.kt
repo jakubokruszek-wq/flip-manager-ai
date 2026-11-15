@@ -28,7 +28,7 @@ class RenderComparisonForegroundService:Service() {
  override fun onBind(intent:Intent?):IBinder?=null
  override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int {
   val candidate=current
-  if(candidate==null || candidate.token!=intent?.getStringExtra(EXTRA_TOKEN)){
+  if(candidate==null || candidate.token!=intent?.getStringExtra(EXTRA_OWNER)){
    // A delayed obsolete intent must never terminate a newer owner's service.
    if(candidate==null && owned==null)stopSelf(startId)
    return START_NOT_STICKY
@@ -79,7 +79,7 @@ class RenderComparisonForegroundService:Service() {
  companion object {
   private const val CHANNEL="watcher_render_comparison"
   private const val NOTIFICATION=48113
-  private const val EXTRA_TOKEN="comparisonForegroundToken"
+  private const val EXTRA_OWNER="comparisonForegroundOwner"
   private const val MAX_RUN_MS=120000L
   @Volatile private var current:Entry?=null
   @Volatile private var retiring:RenderComparisonForegroundService?=null
@@ -101,7 +101,7 @@ class RenderComparisonForegroundService:Service() {
      val entry=Entry(run,arm);attempted=entry;current=entry
      var acknowledged=false
      try {
-      context.applicationContext.startForegroundService(Intent(context,RenderComparisonForegroundService::class.java).putExtra(EXTRA_TOKEN,entry.token))
+      context.applicationContext.startForegroundService(Intent(context,RenderComparisonForegroundService::class.java).putExtra(EXTRA_OWNER,entry.token))
       acknowledged=withTimeoutOrNull(5000){entry.ready.await()}==true && current===entry && entry.active
       acknowledged
      }catch(e:kotlinx.coroutines.CancellationException){throw e}
