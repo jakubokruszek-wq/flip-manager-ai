@@ -56,6 +56,10 @@ internal open class RenderPipComparisonActivity:ComponentActivity() {
      withTimeout(15000){while(!WatcherAutomation.lock.tryLock())delay(100);locked=true}
      check(!RenderComparisonForegroundService.anyActive()){"COMPARE_FGS_BASELINE_BUSY"}
      WatcherAutomation.uiVisible=true
+     // Initialize the shared runtime while RESUMED, matching the user's preceding
+     // visible controls. A cold runtime created only after PiP entry could miss
+     // the lifecycle pause and give a misleadingly easier test condition.
+     GeckoHost.collectorExtension(this@RenderPipComparisonActivity)
      val accepted=runCatching{enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16,9)).build())}.getOrDefault(false)
      if(!accepted){result=RenderComparisonResult("COMPARE_PIP_ENTER_DENIED",mapOf("pipRequested" to 1));return@withTimeout}
      withTimeout(8000){entered.await()}
