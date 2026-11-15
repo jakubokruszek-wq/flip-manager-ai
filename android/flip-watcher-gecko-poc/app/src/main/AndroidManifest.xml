@@ -12,6 +12,8 @@
     <!-- User-granted ("Alarms & reminders"); without it the test alarm is inexact. -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
+    <uses-feature android:name="android.software.picture_in_picture" android:required="false" />
+
     <application
         android:name=".WatcherApplication"
         android:allowBackup="false"
@@ -32,6 +34,10 @@
             </intent-filter>
         </activity>
 
+        <activity android:name=".RenderPipComparisonActivity" android:exported="false"
+            android:supportsPictureInPicture="true" android:resizeableActivity="true"
+            android:taskAffinity="${applicationId}.renderpip" android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density" />
         <activity android:name=".RenderComparisonActivity" android:exported="false" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density" />
         <activity android:name=".ScanStatusActivity" android:exported="false" />
         <activity android:name=".JoinedGroupsActivity" android:exported="false" />

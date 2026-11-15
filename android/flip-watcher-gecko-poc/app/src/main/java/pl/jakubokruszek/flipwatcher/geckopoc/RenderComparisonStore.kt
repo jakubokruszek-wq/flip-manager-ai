@@ -11,7 +11,7 @@ import java.util.UUID
 internal object RenderComparisonStore {
     private const val PREFS="watcher-render-comparison-v1"
     private const val KEY="latest"
-    private const val MAX_BYTES=65536
+    private const val MAX_BYTES=98304
     private val statKey=Regex("[A-Za-z][A-Za-z0-9]{0,40}")
     private fun preferences(context:Context)=context.getSharedPreferences(PREFS,Context.MODE_PRIVATE)
     private fun read(context:Context):JSONObject {
@@ -40,7 +40,7 @@ internal object RenderComparisonStore {
         synchronized(this){check(preferences(context).edit().putString(KEY,JSONObject().put("run",run).put("group",group.id).put("name",group.name.take(200)).put("started",System.currentTimeMillis()).put("arms",JSONObject()).toString()).commit())}
     }
     suspend fun record(context:Context,run:String,group:WatcherGroup,arm:Int,result:RenderComparisonResult){
-        require(validRun(run)&&group.type=="GROUP"&&arm in 1..7)
+        require(validRun(run)&&group.type=="GROUP"&&arm in 1..8)
         val issue=result.issue.takeIf{it.matches(Regex("[A-Z0-9_]{0,60}"))}?:"COMPARE_PROTOCOL"
         val stats=result.stats.filter{(key,value)->statKey.matches(key)&&value in 0..100_000_000}.entries.take(158).associate{it.key to it.value}+
             mapOf("comparisonArm" to arm,"renderDiagEnabled" to 1)
@@ -66,8 +66,8 @@ internal object RenderComparisonStore {
             appendLine("Grupa: ${latest.optString("name").ifEmpty{WatcherSources.find(group)?.name?:group}}")
             appendLine("Rozpoczęcie: ${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(latest.optLong("started")))}")
             val arms=latest.optJSONObject("arms")?:JSONObject()
-            for(arm in 1..7){
-                val label=when(arm){1->"Widoczne okno";2->"Odczyt bez widoku, aplikacja na ekranie";3->"Odczyt po przejściu aplikacji w tło";4->"Test w tle z kontrolą pauzy Gecko";5->"Test w tle z usługą pierwszego planu";6->"Usługa pierwszego planu i korekta pauzy Gecko";else->"Test sygnału odświeżania Androida"}
+            for(arm in 1..8){
+                val label=when(arm){1->"Widoczne okno";2->"Odczyt bez widoku, aplikacja na ekranie";3->"Odczyt po przejściu aplikacji w tło";4->"Test w tle z kontrolą pauzy Gecko";5->"Test w tle z usługą pierwszego planu";6->"Usługa pierwszego planu i korekta pauzy Gecko";7->"Test sygnału odświeżania Androida";else->"Test obrazu w małym oknie PiP"}
                 val result=arms.optJSONObject(arm.toString())
                 appendLine();appendLine("$arm. $label")
                 if(result==null){appendLine("Jeszcze nie wykonano.");continue}
@@ -78,6 +78,7 @@ internal object RenderComparisonStore {
                 appendLine("Obraz zawiera różne piksele: ${if(stats.optInt("comparisonVaried")==1)"tak"else"nie"}")
                 appendLine("Elementy postów na stronie: ${stats.optInt("comparisonArticles")}")
                 if(arm!=1&&stats.has("groupAcquiredFrames"))appendLine("Klatki ImageReader: ${stats.optInt("groupAcquiredFrames")}")
+                if(arm==8)appendLine("PiP: początek ${stats.optInt("pipModeAtStart")}, koniec ${stats.optInt("pipModeAtEnd")}; obraz ${stats.optInt("comparisonWidth")} × ${stats.optInt("comparisonHeight")}")
                 if(stats.optInt("frameSignalRequested")==1)appendLine("Sygnał Androida po 10 s: ${stats.optInt("timingUiFrames5")}; animacje strony: ${stats.optInt("timingRafCount5")}")
                 if(stats.optInt("comparisonForegroundRequested")==1)appendLine("Usługa pierwszego planu: początek ${stats.optInt("comparisonForegroundAtStart")}, koniec ${stats.optInt("comparisonForegroundAtEnd")}")
                 if(stats.has("timingStarted")){

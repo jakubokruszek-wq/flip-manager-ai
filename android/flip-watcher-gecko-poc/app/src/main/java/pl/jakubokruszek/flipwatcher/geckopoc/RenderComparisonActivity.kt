@@ -35,7 +35,7 @@ class RenderComparisonActivity:ComponentActivity() {
   background=Button(this).apply{text="Sprawdź po schowaniu aplikacji";tag="render.compare.background";isEnabled=false;setOnClickListener{
    if(run!=null&&selected!=null&&readyForBackground&&work?.isActive!=true){
     android.app.AlertDialog.Builder(this@RenderComparisonActivity).setTitle("Wybierz próbę w tle")
-     .setItems(arrayOf("Zwykły test w tle","Próba naprawy pauzy Gecko","Test w tle z usługą pierwszego planu","Usługa pierwszego planu i korekta pauzy Gecko","Test sygnału odświeżania Androida")){_,which->
+     .setItems(arrayOf("Zwykły test w tle","Próba naprawy pauzy Gecko","Test w tle z usługą pierwszego planu","Usługa pierwszego planu i korekta pauzy Gecko","Test sygnału odświeżania Androida","Test obrazu w małym oknie PiP")){_,which->
       beginBackground(which+3)
      }.setNegativeButton("Wróć",null).show()
    }
@@ -62,6 +62,13 @@ class RenderComparisonActivity:ComponentActivity() {
    var handedOff=false
    try {
     if(RenderComparisonForegroundService.anyActive()){status.text="Poprzednia usługa diagnostyczna jeszcze trwa. Poczekaj na jej zakończenie.";return@launch}
+    if(arm==8){
+     if(!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)||isFinishing)return@launch
+     startActivity(RenderPipComparisonActivity.intent(this@RenderComparisonActivity,key,group))
+     // The PiP task has its own affinity. Keep this full-size task behind other apps.
+     moveTaskToBack(true)
+     return@launch
+    }
     if(arm in 5..6){
      status.text="Uruchamiam usługę diagnostyczną z powiadomieniem…"
      if(!RenderComparisonForegroundService.start(this@RenderComparisonActivity,key,arm)){

@@ -22,9 +22,10 @@ internal data class RenderComparisonResult(val issue:String,val stats:Map<String
  * Bitmap contents stay in RAM. A captured/uniform image is diagnostic evidence only;
  * it never replaces the production reader's current frame or ownership requirements. */
 internal object RenderComparisonProbe {
- suspend fun run(context:Context,group:WatcherGroup,view:GeckoView?,width:Int,height:Int,alive:()->Boolean,fixtureTarget:String?=null,frameSignal:Boolean=false):RenderComparisonResult=withContext(Dispatchers.Main){
+ suspend fun run(context:Context,group:WatcherGroup,view:GeckoView?,width:Int,height:Int,alive:()->Boolean,fixtureTarget:String?=null,frameSignal:Boolean=false,pipActivity:androidx.activity.ComponentActivity?=null):RenderComparisonResult=withContext(Dispatchers.Main){
   require(group.type=="GROUP"&&width in 128..2160&&height in 128..2160&&width.toLong()*height<=4_000_000)
   if(fixtureTarget!=null)require(java.net.URI(fixtureTarget).host=="127.0.0.1")
+  require(pipActivity==null||view!=null&&!frameSignal)
   val target=fixtureTarget?:group.url
   val browser=GeckoSession();val observation=RenderObservation("GROUP"){SystemClock.elapsedRealtime()}
   RenderDiagnostics.attach(browser,observation)
@@ -32,6 +33,18 @@ internal object RenderComparisonProbe {
   val load=BackgroundDocumentLoad("GROUP")
   var current:String?=null;var initial=true;var surface:BackgroundViewport?=null;var signalProbe:AndroidFrameSignalProbe?=null
   val stats=mutableMapOf("comparisonStage" to 1,"comparisonWidth" to width,"comparisonHeight" to height,"comparisonReady" to 0,"comparisonDocument" to 0,"comparisonCapture" to 0,"comparisonVaried" to 0,"renderDiagEnabled" to 1,"renderSdk" to Build.VERSION.SDK_INT,"comparisonScreenAtStart" to if(context.getSystemService(android.os.PowerManager::class.java).isInteractive)1 else 0)
+  fun viewUsable()=view!=null&&if(pipActivity==null)view.isShown&&view.hasWindowFocus()else PipRenderVisibility.matches(pipActivity,view,width,height)
+  fun pipSnapshot(suffix:String){
+   if(pipActivity==null||view==null)return
+   stats["pipMode"+suffix]=if(pipActivity.isInPictureInPictureMode)1 else 0
+   stats["pipVisible"+suffix]=if(viewUsable())1 else 0
+   stats["pipFocused"+suffix]=if(view.hasWindowFocus())1 else 0
+   stats["pipStartedWindows"+suffix]=RenderComparisonVisibility.startedActivityCount
+   stats["pipProcessResumed"+suffix]=if(androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))1 else 0
+   stats["pipViewWidth"+suffix]=view.width.coerceIn(0,100_000_000)
+   stats["pipViewHeight"+suffix]=view.height.coerceIn(0,100_000_000)
+   if(Build.VERSION.SDK_INT>=30){val bounds=pipActivity.windowManager.currentWindowMetrics.bounds;stats["pipWindowWidth"+suffix]=bounds.width().coerceIn(0,100_000_000);stats["pipWindowHeight"+suffix]=bounds.height().coerceIn(0,100_000_000)}
+  }
   fun live()=alive()&&load.reason==null
   fun accepted(u:String)=BackgroundNavigationPolicy.rejection(u,group.id,fixtureTarget)==null
   browser.navigationDelegate=object:GeckoSession.NavigationDelegate {
@@ -55,6 +68,7 @@ internal object RenderComparisonProbe {
   }
   val started=SystemClock.elapsedRealtime()
   try {
+   pipSnapshot("AtStart")
    withTimeout(85_000){
     check(live()){load.reason?:"COMPARE_INTERRUPTED"}
     stats["comparisonStage"]=2
@@ -62,10 +76,10 @@ internal object RenderComparisonProbe {
     stats["comparisonStage"]=3
     browser.open(GeckoHost.runtime(context))
     stats["comparisonStage"]=4
-    if(view!=null){check(view.isShown&&view.hasWindowFocus()){ "COMPARE_VIEW_HIDDEN" };view.setSession(browser)}
+    if(view!=null){check(viewUsable()){ "COMPARE_VIEW_HIDDEN" };view.setSession(browser)}
     else surface=BackgroundViewport(browser,observation,width,height)
     stats["comparisonStage"]=5
-    browser.setActive(true);browser.setFocused(true);browser.loadUri(target)
+    browser.setActive(true);browser.setFocused(pipActivity==null||view?.hasWindowFocus()==true);browser.loadUri(target)
     var ready=false
     val until=SystemClock.elapsedRealtime()+35_000
     while(live()&&SystemClock.elapsedRealtime()<until){
@@ -125,7 +139,7 @@ internal object RenderComparisonProbe {
     }
     check(alive()){"COMPARE_INTERRUPTED"}
     check(sameDocument()){load.reason?:"COMPARE_DOCUMENT_CHANGED"}
-    if(view!=null)check(view.isShown&&view.hasWindowFocus()){ "COMPARE_VIEW_HIDDEN" }
+    if(view!=null)check(viewUsable()){ "COMPARE_VIEW_HIDDEN" }
     stats["comparisonDocument"]=1
     stats["comparisonStage"]=7
     surface?.let{stats["comparisonFramesBeforeCapture"]=it.renderedFrames}
@@ -135,8 +149,9 @@ internal object RenderComparisonProbe {
      try {
       check(alive()){"COMPARE_INTERRUPTED"}
       check(sameDocument()){ "COMPARE_DOCUMENT_CHANGED" }
-      if(view!=null)check(view.isShown&&view.hasWindowFocus()){ "COMPARE_VIEW_HIDDEN" }
+      if(view!=null)check(viewUsable()){ "COMPARE_VIEW_HIDDEN" }
       check(bitmap.width==width&&bitmap.height==height){"COMPARE_IMAGE_SIZE"}
+      if(pipActivity!=null){stats["pipCaptureWidth"]=bitmap.width;stats["pipCaptureHeight"]=bitmap.height}
       stats["comparisonCapture"]=1;stats["comparisonVaried"]=if(varied(bitmap))1 else 0
      } finally {bitmap.recycle()}
     }catch(e:TimeoutCancellationException){stats["comparisonCaptureTimeout"]=1}
@@ -147,11 +162,12 @@ internal object RenderComparisonProbe {
     stats["comparisonDocument"]=1
     stats["comparisonScreenAtEnd"]=if(context.getSystemService(android.os.PowerManager::class.java).isInteractive)1 else 0
     signalProbe?.let{it.close();stats["frameSignalClosed"]=1}
+    pipSnapshot("AtEnd")
     stats["comparisonStage"]=8
    }
    RenderComparisonResult("RENDER_COMPARE_OBSERVED",stats.toMap()+observation.snapshot()+mapOf("groupElapsedMs" to (SystemClock.elapsedRealtime()-started).toInt())+(surface?.let{mapOf("groupRenderedFrames" to it.renderedFrames)}?:emptyMap()))
-  }catch(e:CancellationException){if(e !is TimeoutCancellationException)throw e;stats["comparisonDocument"]=0;RenderComparisonResult("COMPARE_TIMEOUT",stats.toMap()+observation.snapshot())}
-   catch(e:Exception){stats["comparisonErrorType"]=when(e){is IllegalStateException->1;is IllegalArgumentException->2;is UnsupportedOperationException->3;else->4};if(e.message in setOf("COMPARE_DOCUMENT_CHANGED","COMPARE_VIEW_HIDDEN","COMPARE_INTERRUPTED","COMPARE_IMAGE_SIZE"))stats["comparisonDocument"]=0;RenderComparisonResult(WatcherAutomation.errorCode(e),stats.toMap()+observation.snapshot())}
+  }catch(e:CancellationException){if(e !is TimeoutCancellationException)throw e;pipSnapshot("AtEnd");stats["comparisonDocument"]=0;RenderComparisonResult("COMPARE_TIMEOUT",stats.toMap()+observation.snapshot())}
+   catch(e:Exception){pipSnapshot("AtEnd");stats["comparisonErrorType"]=when(e){is IllegalStateException->1;is IllegalArgumentException->2;is UnsupportedOperationException->3;else->4};if(e.message in setOf("COMPARE_DOCUMENT_CHANGED","COMPARE_VIEW_HIDDEN","COMPARE_INTERRUPTED","COMPARE_IMAGE_SIZE"))stats["comparisonDocument"]=0;RenderComparisonResult(WatcherAutomation.errorCode(e),stats.toMap()+observation.snapshot())}
   finally {
    runCatching{signalProbe?.close()}
    runCatching{channel.close()}
