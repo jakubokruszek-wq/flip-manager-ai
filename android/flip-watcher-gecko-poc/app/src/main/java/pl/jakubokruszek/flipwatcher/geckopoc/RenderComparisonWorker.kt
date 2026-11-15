@@ -27,32 +27,40 @@ class RenderComparisonWorker(context:Context,parameters:WorkerParameters):Corout
         val width=inputData.getInt("width",0);val height=inputData.getInt("height",0)
         if(width !in 128..2160||height !in 128..2160||width.toLong()*height>4_000_000)return Result.failure()
         val experimental=inputData.getBoolean("runtimeLease",false)
-        val arm=if(experimental)4 else 3
+        val foreground=inputData.getBoolean("foreground",false)
+        val arm=if(foreground){if(experimental)6 else 5}else if(experimental)4 else 3
+        var locked=false
         suspend fun blocked(issue:String):Result {
-            if(runAttemptCount<2)return Result.retry()
+            if(!foreground&&runAttemptCount<2)return Result.retry()
             RenderComparisonStore.record(applicationContext,run,group,arm,RenderComparisonResult(issue,mapOf("comparisonAttempt" to runAttemptCount.coerceAtMost(100_000_000))))
             return Result.failure()
         }
-        if(isStopped)return Result.failure()
-        if(WatcherAutomation.uiVisible||RenderComparisonVisibility.hasStartedActivity)return blocked("COMPARE_WAIT_UI")
-        if(!WatcherAutomation.lock.tryLock())return blocked("COMPARE_BUSY")
         return try {
+            if(isStopped)return Result.failure()
+            if(foreground&&!RenderComparisonForegroundService.isActive(run,arm))return blocked("COMPARE_FGS_NOT_ACTIVE")
+            if(!foreground&&RenderComparisonForegroundService.anyActive())return blocked("COMPARE_FGS_BASELINE_BUSY")
+            if(WatcherAutomation.uiVisible||RenderComparisonVisibility.hasStartedActivity)return blocked("COMPARE_WAIT_UI")
+            if(!WatcherAutomation.lock.tryLock())return blocked("COMPARE_BUSY")
+            locked=true
             if(WatcherAutomation.uiVisible||RenderComparisonVisibility.hasStartedActivity)return blocked("COMPARE_WAIT_UI")
             val epoch=RenderComparisonVisibility.foregroundEpoch
+            fun foregroundValid()=if(foreground)RenderComparisonForegroundService.isActive(run,arm)else !RenderComparisonForegroundService.anyActive()
+            check(foregroundValid()){"COMPARE_FGS_NOT_ACTIVE"}
+            val foregroundStart=if(foreground&&foregroundValid())1 else 0
             var lease:AutoCloseable?=null
             val before=withContext(Dispatchers.Main){GeckoBackgroundLease.snapshot()}
             val observed=try {
                 if(experimental)withContext(NonCancellable+Dispatchers.Main){
-                    check(!isStopped&&!WatcherAutomation.uiVisible&&!RenderComparisonVisibility.hasStartedActivity&&RenderComparisonVisibility.foregroundEpoch==epoch){"COMPARE_INTERRUPTED"}
+                    check(foregroundValid()&&!isStopped&&!WatcherAutomation.uiVisible&&!RenderComparisonVisibility.hasStartedActivity&&RenderComparisonVisibility.foregroundEpoch==epoch){"COMPARE_INTERRUPTED"}
                     GeckoHost.runtime(applicationContext)
                     lease=GeckoBackgroundLease.acquire()
                 }
                 withTimeoutOrNull(90_000){
-                    RenderComparisonProbe.run(applicationContext,group,null,width,height,{!isStopped&&!WatcherAutomation.uiVisible&&!RenderComparisonVisibility.hasStartedActivity&&RenderComparisonVisibility.foregroundEpoch==epoch})
+                    RenderComparisonProbe.run(applicationContext,group,null,width,height,{foregroundValid()&&!isStopped&&!WatcherAutomation.uiVisible&&!RenderComparisonVisibility.hasStartedActivity&&RenderComparisonVisibility.foregroundEpoch==epoch})
                 }?:RenderComparisonResult("COMPARE_TIMEOUT",emptyMap())
             }finally{withContext(NonCancellable+Dispatchers.Main){lease?.close()}}
             val after=withContext(Dispatchers.Main){GeckoBackgroundLease.snapshot()}
-            val result=observed.copy(stats=observed.stats+mapOf("comparisonRuntimeLease" to if(experimental)1 else 0,"comparisonLeasePausedBefore" to (before["leaseRuntimePaused"]?:0),"comparisonLeaseOwnersAfter" to (after["leaseOwners"]?:0),
+            val result=observed.copy(stats=observed.stats+mapOf("comparisonForegroundRequested" to if(foreground)1 else 0,"comparisonForegroundAtStart" to foregroundStart,"comparisonForegroundAtEnd" to if(foreground&&foregroundValid())1 else 0,"comparisonRuntimeLease" to if(experimental)1 else 0,"comparisonLeasePausedBefore" to (before["leaseRuntimePaused"]?:0),"comparisonLeaseOwnersAfter" to (after["leaseOwners"]?:0),
                 "comparisonLeaseResumes" to ((after["ownedNativeResumeCount"]?:0)-(before["ownedNativeResumeCount"]?:0)).coerceAtLeast(0),
                 "comparisonLeaseRestores" to ((after["ownedNativePauseCount"]?:0)-(before["ownedNativePauseCount"]?:0)).coerceAtLeast(0)))
             RenderComparisonStore.record(applicationContext,run,group,arm,result)
@@ -61,17 +69,20 @@ class RenderComparisonWorker(context:Context,parameters:WorkerParameters):Corout
             val issue=e.message?.takeIf{it.matches(Regex("[A-Z0-9_]{1,60}"))}?:"COMPARE_ERROR"
             RenderComparisonStore.record(applicationContext,run,group,arm,RenderComparisonResult(issue,emptyMap()))
             Result.failure()
-        }finally{WatcherAutomation.lock.unlock()}
+        }finally{
+            if(locked)WatcherAutomation.lock.unlock()
+            if(foreground)withContext(NonCancellable+Dispatchers.Main){RenderComparisonForegroundService.stop(applicationContext,run,arm)}
+        }
     }
     companion object {
-        fun enqueue(context:Context,run:String,group:WatcherGroup,width:Int,height:Int,runtimeLease:Boolean=false){
+        fun enqueue(context:Context,run:String,group:WatcherGroup,width:Int,height:Int,runtimeLease:Boolean=false,foreground:Boolean=false){
             require(UUID.fromString(run).toString()==run&&group.type=="GROUP")
             require(width in 128..2160&&height in 128..2160&&width.toLong()*height<=4_000_000)
-            val input=Data.Builder().putString("run",run).putString("group",group.id).putString("name",group.name.take(200)).putInt("width",width).putInt("height",height).putBoolean("runtimeLease",runtimeLease).build()
+            val input=Data.Builder().putString("run",run).putString("group",group.id).putString("name",group.name.take(200)).putInt("width",width).putInt("height",height).putBoolean("runtimeLease",runtimeLease).putBoolean("foreground",foreground).build()
             val work=OneTimeWorkRequestBuilder<RenderComparisonWorker>().setInputData(input)
                 .setInitialDelay(2,TimeUnit.SECONDS).setBackoffCriteria(BackoffPolicy.LINEAR,10,TimeUnit.SECONDS)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
-            WorkManager.getInstance(context).enqueueUniqueWork("watcher-render-comparison-$run-${if(runtimeLease)4 else 3}",ExistingWorkPolicy.KEEP,work)
+            WorkManager.getInstance(context).enqueueUniqueWork("watcher-render-comparison-$run-${if(foreground){if(runtimeLease)6 else 5}else if(runtimeLease)4 else 3}",ExistingWorkPolicy.KEEP,work)
         }
     }
 }

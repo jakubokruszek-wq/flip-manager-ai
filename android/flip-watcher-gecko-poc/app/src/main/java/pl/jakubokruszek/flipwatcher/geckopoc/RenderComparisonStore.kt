@@ -11,7 +11,7 @@ import java.util.UUID
 internal object RenderComparisonStore {
     private const val PREFS="watcher-render-comparison-v1"
     private const val KEY="latest"
-    private const val MAX_BYTES=32768
+    private const val MAX_BYTES=65536
     private val statKey=Regex("[A-Za-z][A-Za-z0-9]{0,40}")
     private fun preferences(context:Context)=context.getSharedPreferences(PREFS,Context.MODE_PRIVATE)
     private fun read(context:Context):JSONObject {
@@ -19,7 +19,7 @@ internal object RenderComparisonStore {
         return if(raw.length>MAX_BYTES)JSONObject() else runCatching{JSONObject(raw)}.getOrDefault(JSONObject())
     }
     private fun validRun(run:String)=runCatching{UUID.fromString(run).toString()==run}.getOrDefault(false)
-    private fun update(context:Context,run:String,group:WatcherGroup,arm:Int,result:RenderComparisonResult,reportId:String,upload:Int){
+    internal fun update(context:Context,run:String,group:WatcherGroup,arm:Int,result:RenderComparisonResult,reportId:String,upload:Int){
         synchronized(this){
             val current=read(context)
             // A delayed background arm from an older run cannot replace the new visible comparison.
@@ -40,7 +40,7 @@ internal object RenderComparisonStore {
         synchronized(this){check(preferences(context).edit().putString(KEY,JSONObject().put("run",run).put("group",group.id).put("name",group.name.take(200)).put("started",System.currentTimeMillis()).put("arms",JSONObject()).toString()).commit())}
     }
     suspend fun record(context:Context,run:String,group:WatcherGroup,arm:Int,result:RenderComparisonResult){
-        require(validRun(run)&&group.type=="GROUP"&&arm in 1..4)
+        require(validRun(run)&&group.type=="GROUP"&&arm in 1..6)
         val issue=result.issue.takeIf{it.matches(Regex("[A-Z0-9_]{0,60}"))}?:"COMPARE_PROTOCOL"
         val stats=result.stats.filter{(key,value)->statKey.matches(key)&&value in 0..100_000_000}.entries.take(158).associate{it.key to it.value}+
             mapOf("comparisonArm" to arm,"renderDiagEnabled" to 1)
@@ -66,8 +66,8 @@ internal object RenderComparisonStore {
             appendLine("Grupa: ${latest.optString("name").ifEmpty{WatcherSources.find(group)?.name?:group}}")
             appendLine("Rozpoczęcie: ${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(latest.optLong("started")))}")
             val arms=latest.optJSONObject("arms")?:JSONObject()
-            for(arm in 1..4){
-                val label=when(arm){1->"Widoczne okno";2->"Odczyt bez widoku, aplikacja na ekranie";3->"Odczyt po przejściu aplikacji w tło";else->"Test w tle z kontrolą pauzy Gecko"}
+            for(arm in 1..6){
+                val label=when(arm){1->"Widoczne okno";2->"Odczyt bez widoku, aplikacja na ekranie";3->"Odczyt po przejściu aplikacji w tło";4->"Test w tle z kontrolą pauzy Gecko";5->"Test w tle z usługą pierwszego planu";else->"Usługa pierwszego planu i korekta pauzy Gecko"}
                 val result=arms.optJSONObject(arm.toString())
                 appendLine();appendLine("$arm. $label")
                 if(result==null){appendLine("Jeszcze nie wykonano.");continue}
@@ -78,6 +78,7 @@ internal object RenderComparisonStore {
                 appendLine("Obraz zawiera różne piksele: ${if(stats.optInt("comparisonVaried")==1)"tak"else"nie"}")
                 appendLine("Elementy postów na stronie: ${stats.optInt("comparisonArticles")}")
                 if(arm!=1&&stats.has("groupAcquiredFrames"))appendLine("Klatki ImageReader: ${stats.optInt("groupAcquiredFrames")}")
+                if(stats.optInt("comparisonForegroundRequested")==1)appendLine("Usługa pierwszego planu: początek ${stats.optInt("comparisonForegroundAtStart")}, koniec ${stats.optInt("comparisonForegroundAtEnd")}")
                 if(stats.has("timingStarted")){
                     appendLine("Pomiar animacji i timera: ${if(stats.optInt("timingReply5")==1)"ukończony"else"niepełny"}")
                     appendLine("25 s — animacje: ${stats.optInt("timingRafCount5")}, timer: ${stats.optInt("timingTimerCount5")}, klatki: ${stats.optInt("timingFrames5")}")

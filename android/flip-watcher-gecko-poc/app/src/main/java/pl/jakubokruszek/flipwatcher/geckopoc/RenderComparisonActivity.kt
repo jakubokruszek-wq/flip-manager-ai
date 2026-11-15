@@ -35,10 +35,8 @@ class RenderComparisonActivity:ComponentActivity() {
   background=Button(this).apply{text="Sprawdź po schowaniu aplikacji";tag="render.compare.background";isEnabled=false;setOnClickListener{
    if(run!=null&&selected!=null&&readyForBackground&&work?.isActive!=true){
     android.app.AlertDialog.Builder(this@RenderComparisonActivity).setTitle("Wybierz próbę w tle")
-     .setItems(arrayOf("Zwykły test w tle","Próba naprawy pauzy Gecko")){_,which->
-      backgroundRequestedArm=if(which==0)3 else 4;this@RenderComparisonActivity.background.isEnabled=false
-      status.text="Aplikacja schowa się na czas próby. Poczekaj około 2 minut przed powrotem."
-      if(!moveTaskToBack(true)){backgroundRequestedArm=0;this@RenderComparisonActivity.background.isEnabled=true;status.text="Nie udało się schować aplikacji. Próba w tle nie została uruchomiona."}
+     .setItems(arrayOf("Zwykły test w tle","Próba naprawy pauzy Gecko","Test w tle z usługą pierwszego planu","Usługa pierwszego planu i korekta pauzy Gecko")){_,which->
+      beginBackground(which+3)
      }.setNegativeButton("Wróć",null).show()
    }
   }};body.addView(background)
@@ -57,12 +55,43 @@ class RenderComparisonActivity:ComponentActivity() {
    start.isEnabled=true
   }
  }
+ private fun beginBackground(arm:Int){
+  val group=selected?:return;val key=run?:return
+  background.isEnabled=false;start.isEnabled=false;picker.isEnabled=false
+  lifecycleScope.launch{
+   var handedOff=false
+   try {
+    if(RenderComparisonForegroundService.anyActive()){status.text="Poprzednia usługa diagnostyczna jeszcze trwa. Poczekaj na jej zakończenie.";return@launch}
+    if(arm>=5){
+     status.text="Uruchamiam usługę diagnostyczną z powiadomieniem…"
+     if(!RenderComparisonForegroundService.start(this@RenderComparisonActivity,key,arm)){
+      RenderComparisonStore.record(this@RenderComparisonActivity,key,group,arm,RenderComparisonResult("COMPARE_FGS_START_DENIED",mapOf("comparisonForegroundRequested" to 1)))
+      status.text=RenderComparisonStore.summary(this@RenderComparisonActivity);return@launch
+     }
+    }
+    if(!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)||isFinishing){
+     if(arm>=5)RenderComparisonForegroundService.stop(this@RenderComparisonActivity,key,arm)
+     return@launch
+    }
+    backgroundRequestedArm=arm
+    status.text="Aplikacja schowa się na czas próby. Poczekaj około 2 minut przed powrotem."
+    handedOff=moveTaskToBack(true)
+    if(!handedOff){
+     backgroundRequestedArm=0
+     if(arm>=5)RenderComparisonForegroundService.stop(this@RenderComparisonActivity,key,arm)
+     status.text="Nie udało się schować aplikacji. Próba w tle nie została uruchomiona."
+    }
+   }finally{if(arm>=5&&!handedOff)RenderComparisonForegroundService.stop(this@RenderComparisonActivity,key,arm);background.isEnabled=true;start.isEnabled=true;picker.isEnabled=true}
+  }
+ }
  override fun onResume(){super.onResume();WatcherAutomation.uiVisible=true
+  run?.let{key->for(arm in 5..6)RenderComparisonForegroundService.stop(this,key,arm)}
   if(readyForBackground&&work?.isActive!=true)background.isEnabled=true
   refresh=lifecycleScope.launch{while(true){if(work?.isActive!=true&&backgroundRequestedArm==0)status.text=RenderComparisonStore.summary(this@RenderComparisonActivity);delay(2000)}}
  }
  private fun begin(){
   if(work?.isActive==true)return
+  if(RenderComparisonForegroundService.anyActive()){status.text="Poczekaj na zatrzymanie poprzedniej usługi diagnostycznej.";return}
   val group=groups.getOrNull(picker.selectedItemPosition)?:return
   if(browser.width !in 128..2160||browser.height !in 128..2160||browser.width.toLong()*browser.height>4_000_000){status.text="Okno przeglądarki jest za małe do porównania. Obróć telefon lub powiększ okno.";return}
   selected=group;run=UUID.randomUUID().toString();width=browser.width;height=browser.height
@@ -95,7 +124,7 @@ class RenderComparisonActivity:ComponentActivity() {
   super.onStop()
   if(backgroundRequestedArm!=0){val arm=backgroundRequestedArm;backgroundRequestedArm=0
    val group=selected;val key=run
-   if(group!=null&&key!=null)RenderComparisonWorker.enqueue(applicationContext,key,group,width,height,runtimeLease=arm==4)
+   if(group!=null&&key!=null)RenderComparisonWorker.enqueue(applicationContext,key,group,width,height,runtimeLease=arm==4||arm==6,foreground=arm>=5)
   }
  }
 }

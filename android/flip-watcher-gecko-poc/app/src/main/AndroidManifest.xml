@@ -44,6 +44,8 @@
             android:name=".ScreenOffTestService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <service android:name=".RenderComparisonForegroundService"
+            android:exported="false" android:foregroundServiceType="dataSync" />
         <service android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync" android:exported="false"
             xmlns:tools="http://schemas.android.com/tools" tools:node="merge" />
