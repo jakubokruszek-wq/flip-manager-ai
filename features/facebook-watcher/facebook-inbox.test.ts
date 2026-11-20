@@ -28,3 +28,20 @@ test("manual rejection disappears from the default inbox but remains recoverable
  assert.deepEqual(filterFacebookInbox([base,rejected],"rejected",EMPTY_FACEBOOK_INBOX_FILTERS).map(i=>i.listingId),["rejected"]);
  assert.equal(filterFacebookInbox([{...rejected,workflowStatus:"review"}],"all",EMPTY_FACEBOOK_INBOX_FILTERS).length,1);
 });
+
+
+test("missing property facts stay visible under selected filters while known mismatches are rejected",()=>{
+ const filters={...EMPTY_FACEBOOK_INBOX_FILTERS,minPrice:200000,maxPrice:400000,minArea:40,maxArea:60,minFloor:1,maxFloor:4,minProfit:20000,roomOptions:[2],excludeGroundFloor:true,excludeTopFloor:true,marketType:"secondary" as const,sellerType:"private" as const,condition:"renovation" as const};
+ const missing={...base,listingId:"missing",price:null,area:null,rooms:null,floor:null,totalFloors:null,potentialProfit:null,marketType:null,sellerType:null,condition:null};
+ const known={...base,listingId:"known",marketType:"secondary" as const,totalFloors:5};
+ const badPrice={...known,listingId:"expensive",price:500000};
+ const badArea={...missing,listingId:"small",area:20};
+ const top={...known,listingId:"top",floor:5};
+ assert.deepEqual(filterFacebookInbox([missing,known,badPrice,badArea,top],"all",filters).map(x=>x.listingId),["missing","known"]);
+ assert.equal(filterFacebookInbox([{...missing,area:50}],"all",filters).length,1,"missing price plus known matching area remains visible");
+ assert.equal(filterFacebookInbox([{...missing,rooms:3}],"all",filters).length,0);
+ assert.equal(filterFacebookInbox([{...missing,floor:0}],"all",filters).length,0);
+ assert.equal(filterFacebookInbox([{...missing,sellerType:"agency"}],"all",filters).length,0);
+ assert.equal(filterFacebookInbox([{...missing,workflowStatus:"rejected"}],"all",filters).length,0);
+ assert.equal(filterFacebookInbox([missing],"all",{...filters,query:"nonexistent-street"}).length,0);
+});
