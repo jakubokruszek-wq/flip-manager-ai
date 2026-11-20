@@ -30,5 +30,5 @@ internal object RenderComparisonVisibility {
  }
 }
 class WatcherApplication:Application(){
- override fun onCreate(){super.onCreate();RenderComparisonVisibility.install(this)}
+ override fun onCreate(){super.onCreate();RenderComparisonVisibility.install(this);ManualScanHandoff.install(this)}
 }

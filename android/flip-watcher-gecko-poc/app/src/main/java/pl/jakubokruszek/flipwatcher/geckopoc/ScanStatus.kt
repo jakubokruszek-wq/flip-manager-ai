@@ -28,6 +28,7 @@ data class ScanState(
 
 object ScanStatusText {
     fun reason(code:String):String=when(code){
+        "USER_STOPPED"->"Skan zatrzymany przez użytkownika. Zapisane oferty, zdjęcia i logowanie są zachowane; następne terminy harmonogramu pozostają włączone."
         "WAITING_FOR_BACKGROUND"->"Aplikacja jest otwarta. Przejdź na ekran główny telefonu, aby kontynuować skan w tle."
         "PAIRING_REQUIRED","WATCHER_PAIRING_REQUIRED","UPLOAD_HTTP_401","UPLOAD_HTTP_403"->"Połącz ponownie Watchera z Managerem."
         "LOGIN_REQUIRED"->"Facebook wymaga logowania. Otwórz sesję i zaloguj się ręcznie."
@@ -64,6 +65,7 @@ object ScanStatusText {
     fun title(s:ScanState,enabled:Boolean,now:Long,running:Boolean?):String=when {
         !enabled->"Automat wyłączony"
         s.active&&now-s.heartbeat>90_000->if(running==true)"Zadanie uruchomione — brak świeżego potwierdzenia"else"Brak potwierdzenia dalszej pracy"
+        s.phase=="STOPPED"->"Skan zatrzymany przez użytkownika"
         s.phase=="QUEUED"->"Skan zlecony — oczekuje na uruchomienie"
         s.phase=="PREPARING"->"Przygotowanie skanu"
         s.phase=="UPLOADING"->"Wysyłanie zapisanych ofert"
@@ -129,6 +131,12 @@ object WatcherScanStatus {
         check(context.getSharedPreferences(PREFS,Context.MODE_PRIVATE).edit().putString("state",j.toString()).commit())
         if(alert)notify(context,s)
         s
+    }
+    fun userStopped(context:Context)=change(context){s->
+        val now=System.currentTimeMillis()
+        // Retire the old run ID so late heartbeat/progress/finish callbacks
+        // cannot overwrite an explicit user stop or a later fresh request.
+        s.copy(run=java.util.UUID.randomUUID().toString(),phase="STOPPED",reason="USER_STOPPED",ended=now,changed=now,heartbeat=now)
     }
     fun request(context:Context)=change(context){s->if(s.active&&System.currentTimeMillis()-s.heartbeat<90_000)s else ScanState(phase="QUEUED",changed=System.currentTimeMillis(),lastSuccess=s.lastSuccess,checked=s.checked,skipped=s.skipped)}
     fun resume(context:Context)=change(context){s->if(s.active&&System.currentTimeMillis()-s.heartbeat<90_000)s else s.copy(phase="QUEUED",reason="",changed=System.currentTimeMillis())}

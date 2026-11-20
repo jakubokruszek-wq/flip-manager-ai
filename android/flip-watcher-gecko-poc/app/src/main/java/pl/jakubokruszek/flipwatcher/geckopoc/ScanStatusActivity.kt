@@ -30,11 +30,21 @@ class ScanStatusActivity:ComponentActivity(){
         val dp=resources.displayMetrics.density
         val body=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding((16*dp).toInt(),(16*dp).toInt(),(16*dp).toInt(),(16*dp).toInt())}
         body.addView(TextView(this).apply{text="Postęp automatu";textSize=22f;setTypeface(null,android.graphics.Typeface.BOLD)})
-        body.addView(TextView(this).apply{text="Podgląd odświeża się co 2 sekundy. Możesz pozostawić ten ekran otwarty podczas skanu."})
+        body.addView(TextView(this).apply{text="Podgląd odświeża się co 2 sekundy. Ręczny skan czeka, gdy okno Watchera jest otwarte — schowaj aplikację, aby kontynuować. Postęp pozostaje w powiadomieniu."})
         body.addView(Button(this).apply{tag="scan.resume";text="Wznów tę samą próbę teraz";setOnClickListener{
-            runCatching{WatcherAutomation.resume(this@ScanStatusActivity)}
+            runCatching{check(WatcherScanStatus.read(this@ScanStatusActivity).phase!="STOPPED"){"SCAN_USER_STOPPED"};WatcherAutomation.resume(this@ScanStatusActivity)}
                 .onSuccess{android.widget.Toast.makeText(this@ScanStatusActivity,"Zlecono wznowienie z zachowaniem postępu.",android.widget.Toast.LENGTH_SHORT).show()}
-                .onFailure{error->android.widget.Toast.makeText(this@ScanStatusActivity,if(error.message=="SCAN_ALREADY_FINISHED")"Ta próba jest zakończona. Nowy odczyt uruchom przez Skan teraz w tle."else"Nie zlecono wznowienia. Sprawdź, czy automat jest włączony.",android.widget.Toast.LENGTH_LONG).show()}
+                .onFailure{error->android.widget.Toast.makeText(this@ScanStatusActivity,if(error.message=="SCAN_USER_STOPPED")"Skan został zatrzymany. Wybierz Nowy skan od pierwszej grupy."else if(error.message=="SCAN_ALREADY_FINISHED")"Ta próba jest zakończona. Nowy odczyt uruchom przez Skan teraz w tle."else"Nie zlecono wznowienia. Sprawdź, czy automat jest włączony.",android.widget.Toast.LENGTH_LONG).show()}
+        }})
+        body.addView(Button(this).apply{tag="scan.stop";text="Zatrzymaj bieżący skan";setOnClickListener{
+            runCatching{ScanUserControl.stop(this@ScanStatusActivity)}
+                .onSuccess{android.widget.Toast.makeText(this@ScanStatusActivity,"Zatrzymano skan. Zapisane dane i kolejne terminy pozostają zachowane.",android.widget.Toast.LENGTH_LONG).show()}
+                .onFailure{android.widget.Toast.makeText(this@ScanStatusActivity,"Nie udało się zapisać zatrzymania. Spróbuj ponownie.",android.widget.Toast.LENGTH_LONG).show()}
+        }})
+        body.addView(Button(this).apply{tag="scan.restart.zero";text="Nowy skan od pierwszej grupy";setOnClickListener{
+            runCatching{ScanUserControl.restartFromZero(this@ScanStatusActivity)}
+                .onSuccess{android.widget.Toast.makeText(this@ScanStatusActivity,"Zlecono nowy skan od pierwszej grupy. Schowaj aplikację, aby rozpocząć. Zapisane oferty pozostają zachowane.",android.widget.Toast.LENGTH_LONG).show()}
+                .onFailure{android.widget.Toast.makeText(this@ScanStatusActivity,if(it.message=="AUTOMATION_DISABLED")"Włącz automat przed rozpoczęciem nowego skanu."else"Nie udało się zlecić nowego skanu. Spróbuj ponownie.",android.widget.Toast.LENGTH_LONG).show()}
         }})
         status=TextView(this).apply{tag="scan.live.status";text="Odczytywanie stanu…";textSize=17f;setTextIsSelectable(true);setPadding(0,(16*dp).toInt(),0,(16*dp).toInt())};body.addView(status)
         sources=TextView(this).apply{tag="scan.live.sources";setTextIsSelectable(true);visibility=if(sourcesExpanded)View.VISIBLE else View.GONE}

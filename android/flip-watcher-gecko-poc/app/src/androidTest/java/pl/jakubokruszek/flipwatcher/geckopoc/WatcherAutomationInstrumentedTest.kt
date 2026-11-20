@@ -24,6 +24,58 @@ class WatcherAutomationInstrumentedTest {
     private fun result(price:Double=430000.0)=SavedResult(System.currentTimeMillis(),listOf(
         DesktopRow("550000000000091",group.url+"posts/550000000000091/","DOM",price,"EXPLICIT_TOTAL",42.0,2,"Bałuty",null,null,"SELL_PROPERTY",true,0)
     ),emptyList(),listOf(photo()))
+    @Test fun manualWindowGatePreservesRequestAndReceiptsButDoesNotBlockScheduledWork()=runBlocking {
+        val prefs=WatcherAutomation.preferences(context);val backup=prefs.all.toMap()
+        val wasVisible=WatcherAutomation.uiVisible
+        val oldGroups=WatcherGroups.active.toList()
+        val catalog=context.getSharedPreferences("gecko_poc",Context.MODE_PRIVATE);val oldCatalog=catalog.getString("watcher_active_groups",null)
+        val credentials=WatcherLink.Credentials(device,"fixture-unused-credential")
+        val request=java.util.UUID.randomUUID().toString()
+        var windowVisible=true;var calls=0;var lookups=0
+        val factory=object:androidx.work.WorkerFactory(){
+            override fun createWorker(appContext:Context,name:String,parameters:androidx.work.WorkerParameters):androidx.work.ListenableWorker=
+                object:WatcherAutomationWorker(appContext,parameters){
+                    override fun credentials(context:Context)=credentials
+                    override fun appWindowsVisible()=windowVisible
+                    override fun manualBackgroundReady()=!windowVisible
+                    override fun groups(credentials:WatcherLink.Credentials):List<WatcherGroup>{lookups++;return listOf(group)}
+                    override fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+                    override fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item){}
+                    override suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult{calls++;return result()}
+                }
+        }
+        fun worker()=androidx.work.testing.TestListenableWorkerBuilder<WatcherAutomationWorker>(context).setWorkerFactory(factory).build()
+        try{
+            context.deleteDatabase("watcher-outbox-v1.db")
+            prefs.edit().clear().putBoolean("enabled",true).putLong("schedule_since",0)
+                .putString("requested_scan",request).putString(ManualScanHandoff.KEY,request).commit()
+            WatcherAutomation.uiVisible=false
+            assertEquals(androidx.work.ListenableWorker.Result.success(),worker().doWork())
+            assertEquals(0,lookups);assertEquals(0,calls)
+            assertEquals(request,prefs.getString("requested_scan",null))
+            assertEquals("WAITING_UI",WatcherScanStatus.read(context).phase)
+            val slot=WatcherCaptureReport.cycle("manual/"+request)
+            WatcherOutbox(context).use{assertTrue(it.attemptedSources(slot).isEmpty());assertFalse(it.scanned(slot,group.key))}
+            windowVisible=false
+            worker().doWork();assertEquals(1,calls)
+            assertNull(prefs.getString("requested_scan",null))
+            WatcherOutbox(context).use{assertTrue(it.scanned(slot,group.key))}
+            windowVisible=true
+            context.deleteDatabase("watcher-outbox-v1.db")
+            prefs.edit().remove("completed_slot").commit()
+            worker().doWork();assertEquals("Scheduled work ignores the stale manual gate and status window",2,calls)
+            assertFalse(ManualScanHandoff.waiting(context,java.util.UUID.randomUUID().toString(),true))
+            assertFalse(ManualScanHandoff.ready(false,2_499,1_000))
+            assertTrue(ManualScanHandoff.ready(false,2_500,1_000))
+            assertFalse(ManualScanHandoff.ready(true,10_000,1_000))
+        }finally{
+            WatcherAutomation.configure(context,false)
+            val edit=prefs.edit().clear();for((k,v)in backup)when(v){is String->edit.putString(k,v);is Boolean->edit.putBoolean(k,v);is Long->edit.putLong(k,v);is Int->edit.putInt(k,v)};edit.commit()
+            WatcherAutomation.uiVisible=wasVisible;WatcherGroups.setActive(oldGroups)
+            catalog.edit().putString("watcher_active_groups",oldCatalog).commit()
+            context.deleteDatabase("watcher-outbox-v1.db")
+        }
+    }
     @Test fun backgroundPhotoEncodingYieldsMainThreadAndPreservesOwnedPixels()=runBlocking {
         val images=DesktopThumbnails(50)
         val bitmap=android.graphics.Bitmap.createBitmap(192,144,android.graphics.Bitmap.Config.ARGB_8888)
