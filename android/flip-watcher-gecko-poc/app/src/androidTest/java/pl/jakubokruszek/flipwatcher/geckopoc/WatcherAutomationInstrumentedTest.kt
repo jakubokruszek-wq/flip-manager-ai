@@ -41,7 +41,7 @@ class WatcherAutomationInstrumentedTest {
                     override fun groups(credentials:WatcherLink.Credentials):List<WatcherGroup>{lookups++;return listOf(group)}
                     override fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
                     override fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item){}
-                    override suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult{calls++;if(stopOnScan)ScanUserControl.stop(context,{},{});return result()}
+                    override suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult{calls++;if(stopOnScan)ScanUserControl.stop(context,{},{});return result().copy(captureStats=DesktopProtocol.emptyStats()+mapOf("pageVisible" to 1,"scrollMoves" to 1))}
                 }
         }
         fun worker()=androidx.work.testing.TestListenableWorkerBuilder<WatcherAutomationWorker>(context).setWorkerFactory(factory).build()
