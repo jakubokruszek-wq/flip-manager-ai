@@ -170,7 +170,6 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                     val deadline=android.os.SystemClock.elapsedRealtime()+8*60*1000L
                     fun remaining()=deadline-android.os.SystemClock.elapsedRealtime()
                     withTimeout(9*60*1000L){
-                        val credentials=credentials(context)?:error("PAIRING_REQUIRED")
                         val prefs=WatcherAutomation.preferences(context)
                         val window=AutomationPolicy.current(Instant.now(),ZoneId.systemDefault(),WatcherAutomation.schedule(context))
                         val requested=prefs.getString("requested_scan",null)
@@ -179,6 +178,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                         val slot=if(requested==null)windowKey else WatcherCaptureReport.cycle("manual/"+requested)
                         activeSlot=slot
                         if(userStopped())return@withTimeout
+                        val credentials=credentials(context)?:error("PAIRING_REQUIRED")
                         check(prefs.edit().putString("capture_cycle",slot).commit())
                         val scheduleDue=requested!=null||window.at.toEpochMilli()>=prefs.getLong("schedule_since",0)
                         val reopened=queue.reopenNetworkFailures(slot)
@@ -248,6 +248,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
                             val scanned=withTimeoutOrNull(sourceTimeoutMs(remaining())){
                                 scan(group){phase->WatcherScanStatus.update(context,run){it.copy(phase=phase)}}
                             }?:error("SOURCE_TIMEOUT")
+                            if(userStopped())break
                             WatcherScanStatus.update(context,run){it.copy(phase="SAVING")}
                             val offers=scanned.rows.filter{DesktopSummary.eligible(it)||DesktopPresentation.reviewable(it)}
                             val ids=offers.map{it.postId}.toSet()

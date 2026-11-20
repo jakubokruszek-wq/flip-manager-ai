@@ -31,7 +31,7 @@ class WatcherAutomationInstrumentedTest {
         val catalog=context.getSharedPreferences("gecko_poc",Context.MODE_PRIVATE);val oldCatalog=catalog.getString("watcher_active_groups",null)
         val credentials=WatcherLink.Credentials(device,"fixture-unused-credential")
         val request=java.util.UUID.randomUUID().toString()
-        var windowVisible=true;var calls=0;var lookups=0
+        var windowVisible=true;var calls=0;var lookups=0;var stopOnScan=false
         val factory=object:androidx.work.WorkerFactory(){
             override fun createWorker(appContext:Context,name:String,parameters:androidx.work.WorkerParameters):androidx.work.ListenableWorker=
                 object:WatcherAutomationWorker(appContext,parameters){
@@ -41,7 +41,7 @@ class WatcherAutomationInstrumentedTest {
                     override fun groups(credentials:WatcherLink.Credentials):List<WatcherGroup>{lookups++;return listOf(group)}
                     override fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
                     override fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item){}
-                    override suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult{calls++;return result()}
+                    override suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult{calls++;if(stopOnScan)ScanUserControl.stop(context,{},{});return result()}
                 }
         }
         fun worker()=androidx.work.testing.TestListenableWorkerBuilder<WatcherAutomationWorker>(context).setWorkerFactory(factory).build()
@@ -68,6 +68,13 @@ class WatcherAutomationInstrumentedTest {
             assertFalse(ManualScanHandoff.ready(false,2_499,1_000))
             assertTrue(ManualScanHandoff.ready(false,2_500,1_000))
             assertFalse(ManualScanHandoff.ready(true,10_000,1_000))
+            val stoppedRequest=java.util.UUID.randomUUID().toString()
+            windowVisible=false;stopOnScan=true
+            prefs.edit().putString("requested_scan",stoppedRequest).putString(ManualScanHandoff.KEY,stoppedRequest).commit()
+            worker().doWork()
+            val stoppedSlot=WatcherCaptureReport.cycle("manual/"+stoppedRequest)
+            WatcherOutbox(context).use{assertFalse("A result arriving after Stop must not close the source",it.scanned(stoppedSlot,group.key))}
+            assertEquals("STOPPED",WatcherScanStatus.read(context).phase)
         }finally{
             WatcherAutomation.configure(context,false)
             val edit=prefs.edit().clear();for((k,v)in backup)when(v){is String->edit.putString(k,v);is Boolean->edit.putBoolean(k,v);is Long->edit.putLong(k,v);is Int->edit.putInt(k,v)};edit.commit()
