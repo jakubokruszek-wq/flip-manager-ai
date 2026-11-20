@@ -322,7 +322,727 @@ class PocActivity : ComponentActivity() {
         if(ocrBusy||reviewWorking()||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||kind!=PageKind.APPROVED_GROUP||progress!=100||channel?.isConnected!=true)return
         val currentSession=session?:return;val currentChannel=channel?:return;val target=url?:return
         desktopConsentDialog=DesktopConsentDialog(this,onAccept=accept@{automaticPhotos->
-                if(reviewWorking()||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.R…18638 tokens truncated…wymaga otwartego ekranu aplikacji. Android może opóźnić start; po wymuszonym zatrzymaniu trzeba ponownie otworzyć aplikację.\n\nOferty i przypisane miniatury trafiają do sparowanego Managera. Automat odczytuje też tekst ze zdjęć lokalnym OCR i uzupełnia brakujące dane; nie nadpisuje sprzecznych danych tekstowych. Kolejka ponawia wysyłkę bez duplikatów. Logowanie i baza pozostają na telefonie. CAPTCHA wymaga ręcznej obsługi.\n\n"+status
+                if(reviewWorking()||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)||session!==currentSession||channel!==currentChannel||url!=target||kind!=PageKind.APPROVED_GROUP||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad||progress!=100||!currentChannel.isConnected)return@accept
+                reviewLast=null;ocrLast=null;photoLast=null;photoReportPending=false;stopVisiblePosts();finishShare("CANCELLED",clear=true);clearDesktopDetails()
+                val gate=DesktopTrial(target,{android.os.SystemClock.elapsedRealtime()})
+                if(!gate.begin(true)){publishDesktop(DesktopSummary.create("NO_CONSENT_OR_CONTEXT",0),emptyList());return@accept}
+                desktopFollowUp=if(automaticPhotos)({if(session===currentSession&&channel===currentChannel&&kind==PageKind.APPROVED_GROUP&&!busyForTabs()&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))askPhotos(preconsented=true)}) else null
+                clearDesktopDetails();geckoView.requestFocus();DesktopKeyboard.dismiss(geckoView);desktopGate=gate;desktopBusy=true;desktopRows=emptyList();desktopNonce=UUID.randomUUID().toString();render()
+                desktopJob=lifecycleScope.launch{
+                    val result=DesktopSessionPreview.run(currentSession,currentChannel,gate,desktopNonce!!,target,{url},pageReady={pageLoaded&&progress==100},view=geckoView,images=desktopThumbnails,baseline=false,gesture=false,fastScroll=true)
+                    if(desktopGate===gate&&desktopBusy){userAgent=result.userAgent;finishDesktop(result.reason,result.reply)}
+                }
+        })
+        desktopConsentDialog?.setOnDismissListener{desktopConsentDialog=null}
+        desktopConsentDialog?.show()
+    }
+    private fun finishDesktop(reason:String,reply:DesktopReply?=null,show:Boolean=true){
+        if(!desktopBusy)return
+        val followUp=desktopFollowUp.takeIf{reason=="DONE"};desktopFollowUp=null
+        val gate=desktopGate;gate?.stop(reason)
+        desktopBusy=false;desktopJob?.cancel();desktopJob=null
+        desktopNonce?.let{GeckoHost.background.abortDesktop(it)};desktopNonce=null;channel?.abortDesktop()
+        if(reason!="DONE")session?.stop()
+        val summary=DesktopSummary.create(reason,gate?.requests?:0,reply)
+        publishDesktop(summary,if(reason=="DONE")reply?.rows?:emptyList() else emptyList(),show)
+        render()
+        if(followUp!=null){val completedRows=desktopRows;lifecycleScope.launch{
+            val deadline=android.os.SystemClock.elapsedRealtime()+5000
+            while(archiveWritePending&&desktopRows===completedRows&&android.os.SystemClock.elapsedRealtime()<deadline)delay(50)
+            if(!archiveWritePending&&desktopRows===completedRows&&completedRows.isNotEmpty())followUp()
+        }}
+    }
+    internal fun publishDesktop(summary:DesktopSummary,rows:List<DesktopRow>,show:Boolean=true){
+        cancelOcr("CONTEXT");ocrResults.clear()
+        desktopRows=rows.take(20)
+        if(summary.reason=="DONE"&&desktopRows.isNotEmpty())saveResult(photos=true)
+        desktopThumbnails.retain(desktopRows.map{it.postId}.toSet())
+        val saved=runCatching{desktopPrefs.edit().putString("last",summary.encode()).commit()}.getOrDefault(false)
+        output.text=summary.report()+if(saved)"" else "\nUWAGA: nie zapisano raportu; skopiuj teraz."
+        if(::offersPanel.isInitialized){if(desktopRows.isEmpty())showSavedResult() else offersPanel.showRows(desktopRows,thumbnails=::offerPictures)}
+        if(show&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))selectContentTab(true)
+        render()
+    }
+    private fun clearDesktopDetails(){
+        cancelOcr("CONTEXT");ocrResults.clear()
+        desktopRows=emptyList();desktopResultText?.text="";desktopResultText=null;desktopResultDialog?.dismiss();desktopResultDialog=null
+        if(::offersPanel.isInitialized)offersPanel.showRows(emptyList())
+        desktopThumbnails.clear()
+        showSavedResult()
+        if(::offersTab.isInitialized)offersTab.text="Oferty (${displayedRows().count{OfferQuality.reason(it,offerPictures(it.postId).count{b->!b.isRecycled},savedResult?.postTexts?.get(it.postId))==null}})"
+    }
+    private fun busyForTabs()=WatcherAutomation.lock.isLocked||watcherBusy||deletingResults||ocrBusy||reviewWorking()||desktopBusy||shareBusy||responseBusy||visibleBusy||scanning||inspectingDom||measuringLoad
+    private fun selectContentTab(offers:Boolean){
+        if(busyForTabs()||!::offersPanel.isInitialized)return
+        if(offers&&desktopRows.isEmpty())showSavedResult()
+        geckoView.visibility=if(offers)View.GONE else View.VISIBLE
+        offersPanel.visibility=if(offers)View.VISIBLE else View.GONE
+        facebookTab.isSelected=!offers;offersTab.isSelected=offers
+        facebookTab.setTypeface(null,if(offers)Typeface.NORMAL else Typeface.BOLD)
+        offersTab.setTypeface(null,if(offers)Typeface.BOLD else Typeface.NORMAL)
+        if(offers)geckoView.clearFocus()
+    }
+    private fun cancelReview(code:String){
+        if(!reviewBusy)return
+        val photos=reviewPhotosActive
+        if(photos){savePhotos((photoLast?:PhotoSummary("INTERRUPTED",reviewTotal,0)).copy(reason=when(code){"PAUSED","CANCELLED"->code;"DEADLINE"->"TIMEOUT";else->"ERROR"},review=reviewSnapshot?.stopped(code)));photoReportPending=true}
+        if(reviewOcrActive){saveOcr((ocrLast?:OcrSummary("INTERRUPTED",reviewTotal,0,0,0,0)).copy(reason=if(code in setOf("PAUSED","CANCELLED"))code else if(code=="DEADLINE")"TIMEOUT" else "ERROR",reviewFailure=reviewSnapshot?.stopped(code)));ocrReportPending=true;reviewOcrActive=false}
+        saveReviewResult((reviewSnapshot?:ReviewDataSummary("INTERRUPTED",reviewTotal,0,0,0,0,0,0,0)).stopped(code));reviewReportPending=!photos
+        reviewBusy=false;reviewClosing=true;reviewJob?.cancel();clearDesktopDetails()
+        output.text="Uzupełnianie zatrzymane: $code. Ostatni zapisany wynik pozostaje w bazie; brak skanu i uploadu.";render()
+    }
+    private fun saveReviewResult(value:ReviewDataSummary){
+        reviewSnapshot=value;reviewLast=value
+        runCatching{reviewPrefs.edit().putString("last",value.encode()).commit()}
+    }
+    internal fun publishReviewFailure(value:ReviewDataSummary,preservePreview:Boolean=false){
+        require(value.reason!="DONE")
+        val keep=preservePreview&&value.reason=="NO_OWN_POST"&&session!=null&&haltMessage==null&&kind==PageKind.APPROVED_GROUP&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+        if(!keep)clearDesktopDetails();saveReviewResult(value);reviewReportPending=true;render();showPendingReviewReport()
+    }
+    private fun showReviewResult(){
+        val result=reviewLast?:ReviewDataSummary.decode(reviewPrefs.getString("last",null))
+        reviewReportPending=false;desktopResultDialog?.dismiss()
+        desktopResultDialog=AlertDialog.Builder(this).setTitle("Wynik uzupełniania — lokalnie")
+            .setMessage(result?.report()?:"Brak zapisanej próby uzupełniania. Raport przeglądania grupy jest osobnym wynikiem.")
+            .setPositiveButton("OK",null).create().also{it.show()}
+    }
+    private fun showPendingReviewReport(){
+        if(!reviewReportPending||reviewWorking()||isFinishing||isDestroyed||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
+        val result=reviewLast?:return
+        if(result.reason!="DONE"&&desktopRows.isEmpty()){
+            showSavedResult()
+            selectContentTab(true)
+        }
+        if(result.reason=="NO_OWN_POST"&&desktopRows.isNotEmpty()){
+            offersPanel.showRows(desktopRows,"Nie odczytano szczegółów. Dotychczasowe wyniki grupy pozostają dostępne; możesz otworzyć post ręcznie.",thumbnails=::offerPictures)
+            selectContentTab(true)
+        }
+        showReviewResult()
+    }
+    private fun showReviewOrDesktopResult(){
+        if(photoLast!=null){showPhotosReport();return}
+        if(ocrLast!=null){showOcrReport();return}
+        if(reviewLast!=null||desktopRows.isEmpty()&&ReviewDataSummary.decode(reviewPrefs.getString("last",null))!=null)showReviewResult() else showDesktopResult()
+    }
+    private fun saveOcr(value:OcrSummary){photoLast=null;ocrLast=value;runCatching{ocrPrefs.edit().putString("last",value.encode()).commit()}}
+    private fun showOcrReport(){
+        ocrReportPending=false;desktopResultDialog?.dismiss()
+        val value=ocrLast?:OcrSummary.decode(ocrPrefs.getString("last",null))
+        desktopResultDialog=AlertDialog.Builder(this).setTitle("OCR — wynik lokalny")
+            .setMessage(value?.brief()?:"Brak zapisanej próby OCR.")
+            .setNeutralButton("Diagnostyka"){_,_->desktopResultDialog=AlertDialog.Builder(this).setTitle("OCR — diagnostyka").setMessage(value?.report()?:"Brak raportu.").setPositiveButton("OK",null).create().also{it.show()}}
+            .setPositiveButton("OK",null).create().also{it.show()}
+    }
+    private fun showPendingOcrReport(){if(ocrReportPending&&!ocrBusy&&!isFinishing&&!isDestroyed&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))showOcrReport()}
+    private fun cancelOcr(reason:String){
+        if(!ocrBusy)return
+        ocrBusy=false;ocrEpoch++;ocrResults.clear();ocrJob?.cancel()
+        saveOcr((ocrLast?:OcrSummary("INTERRUPTED",0,0,0,0,0)).copy(reason=if(reason in setOf("PAUSED","CANCELLED","CONTEXT"))reason else "ERROR"));ocrReportPending=true
+    }
+    private fun askOcr(preconsented:Boolean=false){
+        if(ReviewDataGate.queue(desktopRows).isNotEmpty()){askReviewData(withOcr=true,preconsented=preconsented);return}
+        if(busyForTabs()||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
+        val original=session?:return;val source=channel?:return;val generation=source.connectionGeneration;val target=url;val snapshot=desktopRows
+        val count=snapshot.count{(DesktopPresentation.reviewable(it)||DesktopSummary.eligible(it))&&desktopThumbnails.ocrRows(it.postId).isNotEmpty()}
+        // Prefer already identity-bound crops: manual rows must not force a new
+        // navigation and prevent OCR of images we already hold in RAM.
+        if(count==0){
+            if(ReviewDataGate.queue(snapshot).isNotEmpty())askReviewData(withOcr=true,preconsented=preconsented)
+            return
+        }
+        ocrConsentDialog?.dismiss()
+        val start=start@{
+                ocrConsentDialog=null
+                if(busyForTabs()||session!==original||channel!==source||url!=target||desktopRows!==snapshot||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return@start
+                ocrResults.clear();ocrReportPending=false;val epoch=++ocrEpoch;ocrBusy=true;saveOcr(OcrSummary("INTERRUPTED",count,0,0,0,0));render()
+                val live={ocrBusy&&ocrEpoch==epoch&&session===original&&channel===source&&source.isConnected&&source.connectionGeneration==generation&&url==target&&kind==PageKind.APPROVED_GROUP&&desktopRows===snapshot&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&window.decorView.hasWindowFocus()}
+                ocrJob=lifecycleScope.launch{
+                    try{
+                        delay(200)
+                        val outcome=kotlinx.coroutines.withTimeout(120000){OcrBatch.run(snapshot,true,{desktopThumbnails.ocrRows(it).size},live,
+                            read={id,index->val photo=desktopThumbnails.ocrRows(id).getOrNull(index);val owned=photo?.takeIf{!it.isRecycled}?.copy(android.graphics.Bitmap.Config.ARGB_8888,false);if(owned==null)null else LocalOcr.readOwned(owned)},
+                            project={id,texts->GeckoHost.background.ocrFields(id,texts,true)},now={android.os.SystemClock.elapsedRealtime()},snapshot={if(ocrBusy&&ocrEpoch==epoch)saveOcr(it.copy(reason="INTERRUPTED"))})}
+                        if(!ocrBusy||ocrEpoch!=epoch)return@launch
+                        ocrBusy=false;saveOcr(outcome.summary);ocrReportPending=true
+                        if(outcome.summary.reason=="DONE"){ocrResults.putAll(outcome.rows);saveResult()} else if(outcome.summary.reason in setOf("CONTEXT","PROTOCOL"))clearDesktopDetails()
+                        offersPanel.showRows(desktopRows,"OCR: ${outcome.summary.suggestions} wyników do sprawdzenia",thumbnails=::offerPictures)
+                    }catch(_:kotlinx.coroutines.TimeoutCancellationException){if(ocrBusy&&ocrEpoch==epoch){ocrBusy=false;saveOcr((ocrLast?:OcrSummary("INTERRUPTED",count,0,0,0,0)).copy(reason="TIMEOUT"));ocrReportPending=true}}
+                    catch(e:kotlinx.coroutines.CancellationException){throw e}
+                    catch(_:Exception){if(ocrBusy&&ocrEpoch==epoch){ocrBusy=false;saveOcr((ocrLast?:OcrSummary("INTERRUPTED",count,0,0,0,0)).copy(reason="ERROR"));ocrReportPending=true}}
+                    finally{if(ocrEpoch==epoch)ocrJob=null;render();showPendingOcrReport()}
+                }
+
+        }
+        if(preconsented){start();return}
+        ocrConsentDialog=AlertDialog.Builder(this).setTitle("OCR lokalnie — nowa zgoda")
+            .setMessage("Odczytać napisy z widocznych wcześniej zdjęć przypisanych do $count postów zatwierdzonej grupy? Maks. 20 obrazów, 20 postów i 2 minuty. Model OCR jest w APK i działa na telefonie bez pobierania modelu. Bez wysyłania zdjęć lub wyników, dodatkowego pobierania mediów, skanu i kolektora.\n\nPola OCR mogą być błędne: będą pokazane osobno, DO SPRAWDZENIA. Nie nadpisują danych tekstowych. Wycinki i wyniki zapisują się w prywatnej bazie lokalnej. Pauza zatrzymuje odczyt, ale nie usuwa zachowanego wyniku. Zapis usuwa przycisk Kasuj bazę. Każda próba wymaga nowej zgody.")
+            .setNegativeButton("Anuluj",null).setPositiveButton("Zgadzam się"){_,_->start()}
+            .create().also{it.setCanceledOnTouchOutside(false);it.show()}
+    }
+
+    internal fun askSavedOcr(){
+        if(busyForTabs()||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
+        if(archiveWritePending){android.widget.Toast.makeText(this,"Trwa zapis wyniku. Spróbuj za chwilę.",android.widget.Toast.LENGTH_SHORT).show();return}
+        val saved=savedResult?:return
+        val count=saved.photos.count{it.crop}
+        if(count==0){AlertDialog.Builder(this).setTitle("Brak wycinków OCR").setMessage("Zapisane miniatury nie zastępują pełniejszych wycinków. Wybierz Sprawdź zdjęcie tego posta, aby sprawdzić brak przechwycenia.").setPositiveButton("OK",null).show();return}
+        ocrConsentDialog=AlertDialog.Builder(this).setTitle("OCR zapisanych zdjęć")
+            .setMessage("Odczytać do 20 zapisanych wycinków zdjęć, bez otwierania Facebooka i bez nowego wyszukiwania? Do 2 minut. Wyniki osobno, do sprawdzenia. Każdy ukończony odczyt jest zapisywany. Pauza zatrzymuje dalsze rozpoznawanie; wcześniejsze dane pozostają. Bez uploadu.")
+            .setNegativeButton("Anuluj",null).setPositiveButton("Uruchom OCR"){_,_->startSavedOcr(saved)}.create().also{it.show()}
+    }
+    private fun startSavedOcr(saved:SavedResult){
+        ocrConsentDialog=null
+        if(busyForTabs()||savedResult!==saved||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
+        val epoch=++ocrEpoch;ocrBusy=true;ocrReportPending=false;saveOcr(OcrSummary("INTERRUPTED",saved.rows.size,0,0,0,0));render()
+        val live={ocrBusy&&ocrEpoch==epoch&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)}
+        ocrJob=lifecycleScope.launch{
+            try{
+                GeckoHost.collectorExtension(this@PocActivity)
+                if(!GeckoHost.background.awaitPort(8000)||!live())throw IllegalStateException("LOCAL_PARSER")
+                val outcome=kotlinx.coroutines.withTimeout(120000){SavedOcr.run(saved,true,live,
+                    read={photo->val bitmap=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){android.graphics.BitmapFactory.decodeByteArray(photo.jpeg,0,photo.jpeg.size)};if(bitmap==null)null else LocalOcr.readOwned(bitmap)},
+                    project={id,texts->GeckoHost.background.ocrFields(id,texts,true)},now={android.os.SystemClock.elapsedRealtime()},
+                    progress={if(live())saveOcr(it)},checkpoint={rows->if(live())saveResult(saved.rows,rows)})}
+                if(live()&&outcome.summary.reason=="DONE"&&outcome.rows.isNotEmpty()){
+                    val persisted=ResultArchiveJobs.read(this@PocActivity).getOrThrow()?:throw IllegalStateException("SAVE_FAILED")
+                    if(outcome.rows.values.any{candidate->persisted.ocr.none{it==candidate}})throw IllegalStateException("SAVE_FAILED")
+                }
+                if(live()){
+                    if(desktopRows==saved.rows){ocrResults.putAll(saved.ocr.associateBy{it.postId});ocrResults.putAll(outcome.rows);offersPanel.showRows(desktopRows,"OCR zapisanych zdjęć: ${outcome.summary.suggestions} nowych sugestii do sprawdzenia",thumbnails=::offerPictures)}
+                    saveOcr(outcome.summary);ocrBusy=false;ocrReportPending=true
+                }
+            }catch(_:kotlinx.coroutines.TimeoutCancellationException){if(live()){saveOcr((ocrLast?:OcrSummary("TIMEOUT",saved.rows.size,0,0,0,0)).copy(reason="TIMEOUT"));ocrReportPending=true}}
+            catch(e:kotlinx.coroutines.CancellationException){throw e}
+            catch(_:Exception){if(live()){saveOcr((ocrLast?:OcrSummary("ERROR",saved.rows.size,0,0,0,0)).copy(reason="ERROR"));ocrBusy=false;ocrReportPending=true}}
+            finally{if(ocrEpoch==epoch){ocrJob=null;ocrBusy=false;render();showSavedResult();showPendingOcrReport()}}
+        }
+    }
+    private var reviewPhotosActive=false
+    private var photoLast:PhotoSummary?=null
+    private var photoReportPending=false
+    private val photoPrefs get()=getSharedPreferences(groupPreference("photo_collection_v1"),MODE_PRIVATE)
+    private fun offerPictures(id:String)=desktopThumbnails.rows(id).ifEmpty{savedThumbnails.rows(id)}
+    private fun hasOfferPhoto(id:String)=desktopThumbnails.rows(id).isNotEmpty()||savedResult?.photos?.any{it.postId==id&&!it.crop}==true
+    private fun savePhotos(value:PhotoSummary){photoLast=value;photoPrefs.edit().putString("last",value.encode()).commit()}
+    private fun showPhotosReport(){
+        photoReportPending=false;desktopResultDialog?.dismiss()
+        val value=photoLast?:PhotoSummary.decode(photoPrefs.getString("last",null))
+        desktopResultDialog=AlertDialog.Builder(this).setTitle("Zdjęcia ofert — zapis lokalny").setMessage(value?.brief()?:"Brak zapisanej próby.")
+            .setNeutralButton("Diagnostyka"){_,_->desktopResultDialog=AlertDialog.Builder(this).setTitle("Zdjęcia — diagnostyka").setMessage(value?.report()?:"Brak raportu.").setPositiveButton("OK",null).create().also{it.show()}}
+            .setPositiveButton("OK",null).create().also{it.show()}
+    }
+    private fun showPendingPhotosReport(){if(photoReportPending&&!reviewWorking()&&!isFinishing&&!isDestroyed&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))showPhotosReport()}
+    private suspend fun persistPhotos(rows:List<DesktopRow>,ocr:List<DesktopRow>,images:DesktopThumbnails):Boolean {
+        archiveWritePending=true;val revision=++archiveRevision
+        return try{ResultArchiveJobs.saveAwait(this,rows,ocr,images)}finally{if(!isDestroyed&&revision==archiveRevision)readSavedResult()}
+    }
+    internal fun askPhotos(preconsented:Boolean=false){
+        if(busyForTabs()||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
+        if(archiveWritePending){android.widget.Toast.makeText(this,"Trwa zapis wyniku. Spróbuj za chwilę.",android.widget.Toast.LENGTH_SHORT).show();return}
+        val rows=displayedRows();val queue=PhotoCollection.queue(rows,::hasOfferPhoto)
+        if(queue.isEmpty()){
+            if(preconsented)return
+            AlertDialog.Builder(this).setTitle("Zdjęcia ofert").setMessage("Nie ma ofert ani kandydatów bez lokalnego zdjęcia. Zachowane zdjęcia pozostają w bazie.")
+                .setNeutralButton("Ostatni raport"){_,_->showPhotosReport()}.setPositiveButton("OK",null).show();return
+        }
+        if(session==null||kind!=PageKind.APPROVED_GROUP||channel?.isConnected!=true){
+            AlertDialog.Builder(this).setTitle("Zdjęcia zachowanych ofert").setMessage("Najpierw otwórz sesję i zatwierdzoną grupę, następnie wybierz Uzupełnij zdjęcia ofert. Zachowane wyniki pozostają; nowe wyszukiwanie nie jest potrzebne.")
+                .setNegativeButton("Anuluj",null).setPositiveButton(if(session==null)"Otwórz sesję"else"Otwórz grupę"){_,_->if(session==null)askConsentAndOpen()else load(PocPolicy.APPROVED_GROUP_URL,login=false)}.show();return
+        }
+        val original=session?:return;val originalChannel=channel?:return
+        val retainedOcr=(savedResult?.ocr.orEmpty()+ocrResults.values).associateBy{it.postId}.values.toList()
+        val start=start@{
+            reviewConsentDialog=null
+            if(busyForTabs()||session!==original||channel!==originalChannel||!originalChannel.isConnected||displayedRows()!==rows||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return@start
+            desktopResultDialog?.dismiss();desktopRows=rows;photoReportPending=false;ocrReportPending=false;reviewReportPending=false
+            stopVisiblePosts();selectContentTab(false);reviewPhotosActive=true;reviewOcrActive=false;reviewBusy=true;reviewPosition=0;reviewTotal=queue.size
+            saveReviewResult(ReviewDataSummary("INTERRUPTED",queue.size,0,0,0,0,0,0,0));savePhotos(PhotoSummary("INTERRUPTED",queue.size,0));render()
+            reviewJob=lifecycleScope.launch{
+                var saved=0;var checks:Map<String,Int> = emptyMap();var archiveRows=rows
+                fun progress(reason:String,review:ReviewDataSummary?=null){savePhotos(PhotoSummary(reason,queue.size,saved,checks,review))}
+                try{
+                    delay(200)
+                    val outcome=kotlinx.coroutines.withTimeout(180000){ReviewDataRunner.run(geckoView,original,rows,true,
+                        alive={reviewBusy&&reviewPhotosActive&&session===original&&desktopRows===rows&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&geckoView.isAttachedToWindow},
+                        progress={index,total->reviewPosition=index;reviewTotal=total;render()},
+                        restoreActive={session===original&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)},
+                        snapshot={if(reviewBusy)saveReviewResult(it.copy(reason="INTERRUPTED"))},originalChannel=originalChannel,photoPostIds=queue.map{it.postId},
+                        onValidatedRows={validated->archiveRows=validated;saveResult(validated,retainedOcr)},
+                        onBoundPost={source,row,current,live->
+                            if(DesktopSummary.eligible(row)||DesktopPresentation.reviewable(row)){
+                                val captured=PhotoCollection.capture(row.postId,live,
+                                    capture={images->
+                                        val safe=source.reviewImages(row,current,geckoView,images,true,alive=live)
+                                        checks=ReviewImageChecks.add(checks,source.reviewImageOutcome,source.reviewImageFilters);progress("INTERRUPTED")
+                                        safe
+                                    },
+                                    persist={images->persistPhotos(archiveRows.map{if(it.postId==row.postId)row else it},retainedOcr,images)},
+                                    publish={images->desktopThumbnails.replacePostFrom(row.postId,images)})
+                                if(captured){saved++;progress("INTERRUPTED")}
+                            }
+                        })}
+                    if(!reviewBusy)return@launch
+                    saveReviewResult(outcome.summary);progress(if(outcome.summary.reason=="DONE")"DONE"else"CONTEXT",outcome.summary)
+                    if(outcome.summary.reason=="DONE"){desktopRows=outcome.rows;saveResult(outcome.rows,retainedOcr)}
+                    reviewBusy=false;photoReportPending=true;reviewReportPending=false
+                    offersPanel.showRows(desktopRows,"Zapisano nowe zdjęcia: $saved. OCR nie był uruchamiany.",thumbnails=::offerPictures)
+                    selectContentTab(true)
+                }catch(_:kotlinx.coroutines.TimeoutCancellationException){if(reviewBusy)cancelReview("DEADLINE")}
+                catch(e:kotlinx.coroutines.CancellationException){throw e}
+                catch(_:Exception){if(reviewBusy)cancelReview("ERROR")}
+                finally{reviewClosing=false;reviewPhotosActive=false;if(!reviewBusy)reviewJob=null;render();showPendingPhotosReport()}
+            }
+        }
+        if(preconsented){start();return}
+        reviewConsentDialog=AlertDialog.Builder(this).setTitle("Uzupełnij zdjęcia ofert")
+            .setMessage("Sprawdzić ${queue.size} zachowanych postów bez zdjęcia? Najpierw rozpoznane oferty, potem kandydaci do ręcznego sprawdzenia. Do jednego widocznego, potwierdzonego zdjęcia na post, maks. 20 postów i 3 minuty. Każde zdjęcie zapisuje się lokalnie przed przejściem do następnego posta. Bez OCR, nowego wyszukiwania i uploadu. Pauza lub utrata kontekstu zatrzymują dalszą pracę; ukończone zapisy pozostają.")
+            .setNegativeButton("Anuluj",null).setPositiveButton("Zapisz zdjęcia"){_,_->start()}.create().also{it.setCanceledOnTouchOutside(false);it.show()}
+    }
+
+    private val photoDiagnosisPrefs get()=getSharedPreferences(groupPreference("photo_diagnosis_v1"),MODE_PRIVATE)
+    private fun savePhotoDiagnosis(id:String,reason:String,details:Map<String,Int>,checks:Map<String,Int>){
+        photoDiagnosisPrefs.edit().putString("last",PhotoDiagnosis(id,reason,details,checks).encode()).commit()
+    }
+    private fun showPhotoDiagnosis(){
+        val value=PhotoDiagnosis.decode(photoDiagnosisPrefs.getString("last",null))
+        AlertDialog.Builder(this).setTitle("Zdjęcie jednego posta").setMessage(value?.report()?:"Brak diagnozy. W Ofertach wybierz Sprawdź zdjęcie tego posta.").setPositiveButton("OK",null).show()
+    }
+    private fun askReviewData(withOcr:Boolean=false,preconsented:Boolean=false,selectedPostId:String?=null){
+        if(busyForTabs())return
+        val archive=if(desktopRows.isEmpty())savedResult else null
+        if(archive!=null&&archiveWritePending)return
+        val snapshot=archive?.rows?:desktopRows
+        val queue=ReviewDataGate.queue(snapshot,selectedPostId=selectedPostId)
+        if(queue.isEmpty())return
+        if(session==null||kind!=PageKind.APPROVED_GROUP||channel?.isConnected!=true){
+            reviewConsentDialog=AlertDialog.Builder(this).setTitle("Odczyt zachowanych postów")
+                .setMessage("Zachowany wynik pozostaje w bazie. Najpierw otwórz sesję i zatwierdzoną grupę, następnie wybierz ponownie uzupełnianie lub sprawdzenie zdjęcia. Wyszukiwanie od początku nie jest potrzebne.")
+                .setNegativeButton("Anuluj",null).setPositiveButton(if(session==null)"Otwórz sesję" else "Otwórz grupę"){_,_->if(session==null)askConsentAndOpen() else load(PocPolicy.APPROVED_GROUP_URL,login=false)}.show();return
+        }
+        val original=session?:return
+        fun sourceCurrent()=if(archive!=null)desktopRows.isEmpty()&&savedResult===archive else desktopRows===snapshot
+        val previousOcr=(archive?.ocr.orEmpty()+ocrResults.values).associateBy{it.postId}
+        fun retainedOcr(rows:Map<String,DesktopRow>)=(previousOcr+rows).values.toList()
+        val selectedOcr=if(selectedPostId!=null)1 else snapshot.count{DesktopPresentation.reviewable(it)||DesktopSummary.eligible(it)}
+        val cachedChannel=channel;val cachedGeneration=cachedChannel?.connectionGeneration;val cachedUrl=url
+        if(busyForTabs()||queue.isEmpty()||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
+        reviewConsentDialog?.dismiss()
+        val start=start@{
+                reviewConsentDialog=null
+                photoLast=null
+                if(busyForTabs()||session!==original||!sourceCurrent()||kind!=PageKind.APPROVED_GROUP||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return@start
+                if(archive!=null){desktopRows=snapshot;desktopThumbnails.clear()}
+                if(selectedPostId!=null)savePhotoDiagnosis(selectedPostId,"NO_PROOF",emptyMap(),emptyMap())
+                reviewOcrActive=withOcr;if(withOcr){ocrResults.clear();ocrReportPending=false;saveOcr(OcrSummary("INTERRUPTED",selectedOcr,0,0,0,0))};stopVisiblePosts();selectContentTab(false);reviewLast=null;reviewTotal=queue.size;reviewPosition=0;reviewReportPending=false;saveReviewResult(ReviewDataSummary("INTERRUPTED",queue.size,0,0,0,0,0,0,0));reviewBusy=true;render()
+                reviewJob=lifecycleScope.launch{
+                    try{
+                        delay(200)
+                        val pendingOcr=linkedMapOf<String,DesktopRow>();val cachedOcr=linkedMapOf<String,DesktopRow>();var ocrImages=0;var cachedImages=0;var ocrTexts=0;var ocrErrors=0;var imageChecks:Map<String,Int> = emptyMap()
+                        fun ocrProgress(reason:String,failure:ReviewDataSummary?=null,completed:ReviewDataSummary?=null){if(withOcr)saveOcr(OcrSummary(reason,selectedOcr,ocrImages,ocrTexts,pendingOcr.size,ocrErrors,failure,completed,imageChecks))}
+                        val outcome=kotlinx.coroutines.withTimeout(180000){
+                        if(withOcr&&selectedPostId==null&&snapshot.any{desktopThumbnails.ocrRows(it.postId).isNotEmpty()}){
+                            val cacheLive={reviewBusy&&session===original&&desktopRows===snapshot&&channel===cachedChannel&&cachedChannel?.isConnected==true&&cachedChannel.connectionGeneration==cachedGeneration&&url==cachedUrl&&kind==PageKind.APPROVED_GROUP&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&window.decorView.hasWindowFocus()}
+                            val cached=OcrBatch.run(snapshot,true,{desktopThumbnails.ocrRows(it).size},cacheLive,
+                                read={id,index->val photo=desktopThumbnails.ocrRows(id).getOrNull(index);val owned=photo?.takeIf{!it.isRecycled}?.copy(android.graphics.Bitmap.Config.ARGB_8888,false);if(owned==null)null else LocalOcr.readOwned(owned)},
+                                project={id,texts->GeckoHost.background.ocrFields(id,texts,true)},now={android.os.SystemClock.elapsedRealtime()},snapshot={if(reviewBusy)saveOcr(it.copy(reason="INTERRUPTED",selected=selectedOcr))})
+                            if(cached.summary.reason!="DONE"||!cacheLive())throw IllegalStateException("OCR_CACHE_CONTEXT")
+                            cachedOcr.putAll(cached.rows.filterValues{ReviewDataSummary.fields(it)>0});pendingOcr.putAll(cachedOcr)
+                            ocrImages=cached.summary.images;cachedImages=cached.summary.images;ocrTexts=cached.summary.texts;ocrErrors=cached.summary.errors;ocrProgress("INTERRUPTED")
+                        }
+                        // Large feed crops have been consumed; keep small visible thumbnails only.
+                        if(withOcr)desktopThumbnails.clearOcr()
+                        // Cached OCR never short-circuits the consented detail-opening stage.
+                        var archiveRows=snapshot
+                        ReviewDataRunner.run(geckoView,original,snapshot,true,alive={reviewBusy&&session===original&&desktopRows===snapshot&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)&&geckoView.isAttachedToWindow},progress={index,total->reviewPosition=index;reviewTotal=total;render()},restoreActive={session===original&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)},snapshot={if(reviewBusy)saveReviewResult(it.copy(reason="INTERRUPTED"))},originalChannel=cachedChannel,selectedPostId=selectedPostId,onValidatedRows={validated->archiveRows=validated;saveResult(validated,retainedOcr(pendingOcr))},onBoundPost={source,row,current,live->
+                            if(withOcr&&ocrImages<20&&live()){
+                                val crops=DesktopThumbnails()
+                                try{
+                                    val imageSafe=source.reviewImages(row,current,geckoView,crops,true,alive=live)
+                                    imageChecks=ReviewImageChecks.add(imageChecks,source.reviewImageOutcome,source.reviewImageFilters);if(selectedPostId!=null)savePhotoDiagnosis(selectedPostId,source.reviewImageOutcome,source.reviewImageDetails,imageChecks);ocrProgress("INTERRUPTED")
+                                    if(!imageSafe)throw IllegalStateException("OCR_CONTEXT")
+                                    if(!live())throw IllegalStateException("OCR_CONTEXT")
+                                    val photo=crops.ocrRows(row.postId).firstOrNull()
+                                    if(photo!=null){
+                                        if(!persistPhotos(archiveRows.map{if(it.postId==row.postId)row else it},retainedOcr(pendingOcr),crops))throw IllegalStateException("PHOTO_SAVE")
+                                        desktopThumbnails.replacePostFrom(row.postId,crops)
+                                        if(!live())throw IllegalStateException("OCR_CONTEXT")
+                                        ocrImages++;ocrProgress("INTERRUPTED")
+                                        val owned=photo.copy(android.graphics.Bitmap.Config.ARGB_8888,false)
+                                        val recognized=try{kotlinx.coroutines.withTimeoutOrNull(8000){LocalOcr.readOwned(owned)}?:run{ocrErrors++;""}}catch(e:kotlinx.coroutines.CancellationException){throw e}catch(_:Exception){ocrErrors++;""}
+                                        if(!live())throw IllegalStateException("OCR_CONTEXT")
+                                        if(recognized.isNotBlank()){
+                                            ocrTexts++;val suggestion=GeckoHost.background.ocrFields(row.postId,listOf(recognized),true)?:throw IllegalStateException("OCR_PROTOCOL")
+                                            if(!live()||suggestion.postId!=row.postId||suggestion.permalink!=row.permalink)throw IllegalStateException("OCR_CONTEXT")
+                                            if(ReviewDataSummary.fields(suggestion)>0)pendingOcr[row.postId]=suggestion
+                                        }
+                                        ocrProgress("INTERRUPTED")
+                                        saveResult(archiveRows.map{if(it.postId==row.postId)row else it},retainedOcr(pendingOcr))
+                                    }
+                                }finally{crops.clear()}
+                            }
+                        })
+                        }
+                        if(!reviewBusy)return@launch
+                        reviewBusy=false;reviewJob=null;saveReviewResult(outcome.summary);reviewReportPending=true
+                        if(outcome.summary.reason=="DONE"){
+                            ocrResults.putAll(previousOcr)
+                            if(withOcr){ocrResults.putAll(pendingOcr);ocrProgress("DONE",completed=outcome.summary);ocrReportPending=true};desktopRows=outcome.rows.take(20);desktopThumbnails.retain(desktopRows.map{it.postId}.toSet())
+                            offersPanel.showRows(desktopRows,"Uzupełniono: ${outcome.summary.enriched} • bez potwierdzonego odczytu: ${outcome.summary.unresolved}",thumbnails=::offerPictures)
+                            saveResult()
+                            output.text=outcome.summary.report();selectContentTab(true);render()
+                        }else{
+                            val keep=outcome.summary.reason=="NO_OWN_POST"&&session===original&&desktopRows===snapshot&&haltMessage==null&&kind==PageKind.APPROVED_GROUP&&lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+                            if(withOcr){pendingOcr.clear();if(keep)pendingOcr.putAll(cachedOcr);ocrProgress(if(keep&&cachedImages>0)"PARTIAL" else "CONTEXT",outcome.summary);ocrReportPending=true}
+                            publishReviewFailure(outcome.summary,preservePreview=keep)
+                            if(withOcr&&keep){
+                                ocrResults.putAll(previousOcr);ocrResults.putAll(cachedOcr);saveResult()
+                                offersPanel.showRows(desktopRows,"OCR z pamięci ukończony; otwieranie zatrzymane. Dotychczasowe wyniki pozostają dostępne.",thumbnails=::offerPictures)
+                                selectContentTab(true)
+                            }
+                            output.text=outcome.summary.report();render()
+                        }
+                    }catch(_:kotlinx.coroutines.TimeoutCancellationException){if(reviewBusy)cancelReview("DEADLINE")}
+                    catch(e:kotlinx.coroutines.CancellationException){throw e}
+                    catch(_:Exception){if(reviewBusy)cancelReview("ERROR")}
+                    finally{reviewClosing=false;reviewOcrActive=false;if(!reviewBusy)reviewJob=null;render();if(selectedPostId!=null){ocrReportPending=false;if(lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))showPhotoDiagnosis()} else if(withOcr)showPendingOcrReport() else showPendingReviewReport()}
+                }
+
+        }
+        if(preconsented){start();return}
+        reviewConsentDialog=AlertDialog.Builder(this).setTitle(if(selectedPostId!=null)"Sprawdź zdjęcie jednego posta" else if(withOcr)"Otwórz posty + OCR — nowa zgoda" else "Uzupełnij dane — nowa zgoda")
+            .setMessage((if(selectedPostId!=null)"Tylko wybrany post: $selectedPostId. Diagnostyka dostępnych obrazów i przyczyn ich odrzucenia. Bez zmiany filtrów bezpieczeństwa.\n\n" else "")+(if(withOcr)"Dwa etapy w jednej próbie: najpierw OCR dostępnych zdjęć z pamięci, następnie otwieranie ${queue.size} postów do sprawdzenia i odczyt treści oraz jednego widocznego zdjęcia potwierdzonego posta. Łącznie do 20 obrazów i 3 minut na oba etapy. Sugestie osobno, DO SPRAWDZENIA, bez nadpisywania pól. Brak powiązania posta zatrzymuje otwieranie; ukończone wyniki OCR z pamięci mogą pozostać tylko przy zachowanej pierwotnej sesji.\n\n" else "")+"Otworzyć kolejno ${queue.size} dokładnych linków z Do ręcznego sprawdzenia? Jedna zatwierdzona grupa, do 20 postów i 3 minut. Każdy post ma osobną sesję roboczą, zamykaną przed otwarciem następnego. Cała kolejka korzysta z tej samej jednorazowej zgody i pozostałego czasu. Odczyt DOM i osadzonych danych; bez odczytu odpowiedzi sieciowych i bez klikania reakcji, komentarzy lub udostępniania.\n\nBez dodatkowego pobierania mediów, uploadu, skanu i kolektora. Tylko potwierdzone ID; pola heurystyczne. Komentarze, cytaty i cudze posty są wykluczone. Wyniki, zdjęcia i sugestie OCR zapisują się lokalnie do użycia przy kolejnym uruchomieniu. Logowanie/CAPTCHA/CHECKPOINT, zmiana kontekstu, pauza lub wygaszenie: STOP odczytu. Zachowany wynik pozostaje w bazie. Nowa jednorazowa zgoda; wcześniejsza zgoda na skan nie jest używana.")
+            .setNegativeButton("Anuluj",null).setPositiveButton("Zgadzam się"){_,_->start()}
+            .create().also{it.setCanceledOnTouchOutside(false);it.show()}
+    }
+
+    private fun openOffer(row:DesktopRow){
+        if(desktopRows.isEmpty()&&savedResult?.rows?.any{it===row}==true){
+            if(busyForTabs()||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return
+            val link=OfferLinks.validated(row)?:OfferLinks.validatedReview(row)?:return
+            val intent=Intent(Intent.ACTION_VIEW,Uri.parse(link)).addCategory(Intent.CATEGORY_BROWSABLE)
+            if(runCatching{startActivity(intent)}.isFailure)output.text="Nie udało się otworzyć posta. Zachowany wynik pozostaje w bazie."
+            return
+        }
+        if(!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)||busyForTabs()||desktopRows.none{it===row})return
+        val link=OfferLinks.validated(row)?:OfferLinks.validatedReview(row)?:return
+        if(DesktopPresentation.reviewable(row)){
+            val browser=session?:return
+            // Explicit view-only navigation uses the already authenticated visible session.
+            // No enrichment/OCR/scan is implicitly granted by opening a post.
+            clearDesktopDetails();selectContentTab(false);geckoView.requestFocus()
+            browser.loadUri(link);return
+        }
+        // Explicit user click; clear both UI copies/listeners before leaving the local preview.
+        clearDesktopDetails()
+        val intent=Intent(Intent.ACTION_VIEW,Uri.parse(link)).addCategory(Intent.CATEGORY_BROWSABLE)
+        if(runCatching{startActivity(intent)}.isFailure)offersPanel.showRows(emptyList(),"Nie udało się otworzyć posta. Sprawdź dostępność Facebooka lub przeglądarki.")
+    }
+    private fun showDesktopResult(value:DesktopSummary?=DesktopSummary.decode(desktopPrefs.getString("last",null))){
+        desktopResultDialog?.dismiss();desktopResultText?.text="";desktopResultText=null
+        val report=value?.report()?:"Brak zakończonej próby komputerowej. Dotychczasowe raporty linków pozostają w archiwum."
+        val preview=DesktopPresentation.preview(report,desktopRows,value!=null)
+        val text=TextView(this).apply{text=preview;textSize=14f;setPadding(20,12,20,12)}
+        desktopResultText=text
+        desktopResultDialog=AlertDialog.Builder(this).setTitle("Wynik próby komputerowej").setView(ScrollView(this).apply{addView(text)})
+            .setPositiveButton("Wróć do Facebooka",null)
+            .setNeutralButton("Kopiuj raport (bez ID)"){_,_->getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("Raport próby komputerowej",report))}.create()
+        desktopResultDialog?.show()
+    }
+
+    private fun checkSharedLink() {
+        if (shareBusy || responseBusy || visibleBusy || scanning || inspectingDom || measuringLoad || kind != PageKind.APPROVED_GROUP || channel?.isConnected != true || progress != 100) return
+        val currentSession = session ?: return
+        val currentChannel = channel ?: return
+        val input = EditText(this).apply {
+            hint = "https://www.facebook.com/share/p/…/"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            imeOptions = EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+            isSingleLine = true; isSaveEnabled = false
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+        }
+        shareDialog = AlertDialog.Builder(this).setTitle("Sprawdź jeden udostępniony link")
+            .setMessage("NOWA JEDNORAZOWA ZGODA: otworzyć w tej sesji jeden wklejony link /share/p/ i sprawdzić jego przekierowanie? Do 20 s i 8 żądań nawigacji. Obejmuje adres poza stroną główną grupy, wyłącznie w celu rozpoznania dokładnego permalinku zatwierdzonej grupy. Bez odczytu treści postów, skryptów, odpowiedzi sieciowych, nagłówków i danych logowania. Kontrola bezpieczeństwa strony: tytuł, obecność formularzy weryfikacji i metadane świeżości dokumentu; czas nie jest zapisywany. Aplikacja zapisze lokalnie wyłącznie status, powód i liczniki ostatniej zakończonej próby, aby wynik nie zniknął po powrocie do grupy lub zamknięciu aplikacji. Nie zapisuje linku, ID ani treści posta i niczego nie wysyła. Przeglądarka korzysta z istniejącego profilu jak przy ręcznym otwarciu. Bez kolektora. Raport zawiera status i liczby, nie adres ani ID. Logowanie/CAPTCHA/CHECKPOINT, inna grupa, utrata kontekstu lub wygaszenie: STOP. Jeśli Facebook zmieni dozwolony adres bez żądania nawigacji, aplikacja może raz otworzyć ten adres ponownie w tym samym limicie 20 s i 8 żądań. Taki wynik sprawdza adres, ale nie dowodzi powiązania z linkiem udostępnienia ani istnienia oferty. Zgoda nie uruchamia skanu.")
+            .setView(input).setNegativeButton("Anuluj", null)
+            .setPositiveButton("Zgadzam się — sprawdź") { _, _ ->
+                val raw = input.text.toString().trim(); input.text.clear()
+                if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) || session !== currentSession || channel !== currentChannel || kind != PageKind.APPROVED_GROUP || shareBusy || responseBusy || scanning) return@setPositiveButton
+                val resolver = ShareLinkResolver(now = { android.os.SystemClock.elapsedRealtime() }, allowAddressReload = true)
+                if (!resolver.begin(raw, true, url)) { ShareLinkResult.snapshot(resolver)?.let { publishShareResult(it, true) }; return@setPositiveButton }
+                stopVisiblePosts(); shareResolver = resolver; shareBusy = true
+                sharePageLoading = false
+                resolver.waitingFor(ShareLinkWait.LOCATION)
+                sharePortAfterGeneration = currentChannel.connectionGeneration
+                shareDocumentAfter = System.currentTimeMillis()
+                output.text = "LINK 0.4.4: sprawdzanie przekierowania, maksymalnie 20 s."; render()
+                currentSession.loadUri(raw)
+                shareJob = lifecycleScope.launch {
+                    while (shareBusy && shareResolver === resolver && resolver.tick()) {
+                        val expected = url
+                        when {
+                            resolver.pendingAddressReload != null -> resolver.waitingFor(ShareLinkWait.SOURCE_LOADING)
+                            expected == null || !resolver.canInspect(expected) -> resolver.waitingFor(ShareLinkWait.LOCATION)
+                            !currentChannel.isConnected -> resolver.waitingFor(ShareLinkWait.PORT)
+                            currentChannel.connectionGeneration <= sharePortAfterGeneration -> resolver.waitingFor(ShareLinkWait.NEW_PORT)
+                            currentChannel.connectedUrl != expected -> resolver.waitingFor(ShareLinkWait.PORT_ADDRESS)
+                            else -> {
+                                resolver.waitingFor(ShareLinkWait.CONTEXT_REPLY)
+                                val context = currentChannel.shareLinkProof(expected, true, shareDocumentAfter)
+                                if (shareResolver !== resolver || !shareBusy) return@launch
+                                if (url == expected) when(context) {
+                                    ShareContextReply.ABSENT -> resolver.waitingFor(ShareLinkWait.CONTEXT_REPLY)
+                                    ShareContextReply.MALFORMED -> resolver.waitingFor(ShareLinkWait.CONTEXT_PROTOCOL)
+                                    ShareContextReply.STALE -> resolver.waitingFor(ShareLinkWait.DOCUMENT_FRESHNESS)
+                                    ShareContextReply.UNSAFE -> resolver.confirm(expected, false, false)
+                                    ShareContextReply.LOADING -> {
+                                        resolver.waitingFor(ShareLinkWait.DOCUMENT_COMPLETE)
+                                        resolver.confirm(expected, true, false)
+                                    }
+                                    ShareContextReply.COMPLETE -> {
+                                        if (!resolver.hasExactPostAddress) resolver.waitingFor(ShareLinkWait.EXACT_PERMALINK)
+                                        else if (progress != 100) resolver.waitingFor(ShareLinkWait.NATIVE_PROGRESS)
+                                        resolver.confirm(expected, true, progress == 100)
+                                    }
+                                }
+                                if (!resolver.active) break
+                            }
+                        }
+                        delay(200)
+                    }
+                    if (shareResolver === resolver && shareBusy) finishShare()
+                }
+            }.create()
+        shareDialog?.setOnDismissListener { input.text.clear(); shareDialog = null }
+        shareDialog?.show()
+    }
+
+    private fun checkVisiblePosts() {
+        if (visibleBusy || responseBusy || scanning || inspectingDom || kind != PageKind.APPROVED_GROUP || progress < 100 || haltMessage != null) return
+        val current = channel ?: return
+        val epoch = visibleEpoch
+        val approvedUrl = url
+        visibleDialog = AlertDialog.Builder(this)
+            .setTitle("Nowa zgoda: widoczne posty")
+            .setMessage("Jednorazowo przeanalizować wyrenderowany DOM tej grupy? Maksymalnie 20 widocznych kandydatów i do 6 poziomów otaczających kontenerów. Sprawdzane są też jawne atrybuty adresów przy tych blokach, maksymalnie 200 elementów. Bez odczytu kodu kliknięć i ukrytych danych akcji. Wspólny feed nie jest przypisywany do posta. Tylko lokalne liczniki: linki, dokładne ID, cena, metraż, pokoje, dzielnica i zdjęcia. Pola są heurystyczne. Bez zapisu treści, bez sieciowych odpowiedzi, bez skanu i kolektora. Zgoda wygasa po tej próbie.")
+            .setNegativeButton("Anuluj", null)
+            .setPositiveButton("Zgadzam się jednorazowo") { _, _ ->
+                if (epoch != visibleEpoch || current !== channel || approvedUrl != url || kind != PageKind.APPROVED_GROUP) return@setPositiveButton
+                visibleBusy = true
+                lifecycleScope.launch {
+                    val report = runCatching { current.visiblePosts(consent = true) }.getOrNull()
+                    if (epoch == visibleEpoch && current === channel && approvedUrl == url && kind == PageKind.APPROVED_GROUP) {
+                        output.text = report ?: "STOP: brak poprawnego kontekstu lub przerwana diagnostyka."
+                        visibleBusy = false
+                    }
+                }
+            }.show()
+    }
+
+    private fun checkMainTransport() {
+        if (responseBusy || visibleBusy || scanning || inspectingDom || measuringLoad || kind != PageKind.APPROVED_GROUP || progress < 100 || haltMessage != null) return
+        val current=channel ?: return
+        val epoch=visibleEpoch
+        val approvedUrl=url
+        visibleDialog=AlertDialog.Builder(this).setTitle("Nowa zgoda: mechanizm rozszerzenia")
+            .setMessage("Jednorazowo uruchomić mechanizm fetch/XHR z rozszerzenia komputerowego na BIEŻĄCEJ zatwierdzonej grupie? Okno do 20 s, bez ponownego otwierania. Obejmuje nowe odpowiedzi powstałe po tej zgodzie i do 5 automatycznych przewinięć po 400–900 px (łącznie do 4500 px), z adaptacyjnym czekaniem na zmianę feedu. Do 8 odpowiedzi, 512 KiB/odpowiedź, 2 MiB łącznie i 20 dokładnych ID. Odpowiedzi dla strony pozostają niezmienione. Treści przejściowo tylko w RAM rozszerzenia; wynik to wyłącznie liczniki. Bez odczytu Beacon, nagłówków i wysyłanych payloadów; bez wyodrębniania cookies/tokenów; bez zapisu treści/ID, uploadu, skanu i kolektora. LOGIN/CAPTCHA/CHECKPOINT, zmiana strony, utrata portu lub wygaszenie: STOP i czyszczenie. Ta nowa zgoda nie wykorzystuje poprzednich zgód i wygasa po próbie.")
+            .setNegativeButton("Anuluj",null).setPositiveButton("Zgadzam się jednorazowo") { _, _ ->
+                if (epoch!=visibleEpoch || current!==channel || approvedUrl!=url || kind!=PageKind.APPROVED_GROUP) return@setPositiveButton
+                responseBusy=true;output.text="Mechanizm rozszerzenia: do 20 s i 5 przewinięć. Zmiana kontekstu lub wygaszenie: STOP.";render()
+                lifecycleScope.launch {
+                    val report=runCatching { current.mainTransport(consent=true,autoScrollConsent=true) }.getOrNull()
+                    if(epoch==visibleEpoch && current===channel && approvedUrl==url && kind==PageKind.APPROVED_GROUP) {
+                        responseBusy=false;output.text=report ?: "STOP: przerwana próba mechanizmu rozszerzenia.";render()
+                    }
+                }
+            }.show()
+    }
+
+    private fun checkResponses(autoScroll: Boolean = false) {
+        val fast = autoScroll && fastScrollOption.isChecked
+        if (responseBusy || visibleBusy || scanning || inspectingDom || measuringLoad || kind != PageKind.APPROVED_GROUP || progress < 100 || haltMessage != null) return
+        val current = channel ?: return
+        val epoch = visibleEpoch
+        val approvedUrl = url
+        visibleDialog = AlertDialog.Builder(this)
+            .setTitle(if (autoScroll) "Nowa zgoda: odpowiedzi i przewijanie" else "Nowa zgoda: treść odpowiedzi sieciowych")
+            .setMessage((if (autoScroll) "ZEZWOLIĆ NA AUTOMATYCZNE PRZEWIJANIE? Maksymalnie 5 kroków po 400–900 px, pierwszy po ${if (fast) "0,25 s" else "1 s"}, następne co ${if (fast) "0,5 s" else "2 s"}; łącznie do 4500 px. Tylko okno diagnostyki 15 s, bez klikania, skanu i kolektora. " else "Bez automatycznego przewijania. ") + "Przez 15 sekund analizować lokalnie odpowiedzi danych tej zatwierdzonej grupy? Dodatkowo policzyć zdarzenia Facebook/CDN i powody pominięcia (karta, ramka, typ, host, ścieżka, kontekst), także zbiorczo ruch bez karty lub innej karty, bez jego treści i adresów? Do 8 odpowiedzi, 512 KiB na odpowiedź i 2 MiB łącznie, maksymalnie 20 dokładnych ID. Tylko pamięć i liczniki: bez zapisu surowych odpowiedzi, tekstów, ID, cookies i tokenów; bez uploadu, skanu, galerii i kolektora. Strona otrzyma niezmienione bajty. Możesz ręcznie przewinąć grupę. Zmiana strony, LOGIN/CAPTCHA/CHECKPOINT i wygaszenie przerywają próbę. To osobna zgoda, niezależna od DOM i starego skanu.")
+            .setNegativeButton("Anuluj", null)
+            .setPositiveButton("Zgadzam się jednorazowo") { _, _ ->
+                if (epoch != visibleEpoch || current !== channel || approvedUrl != url || kind != PageKind.APPROVED_GROUP) return@setPositiveButton
+                responseBusy = true
+                output.text = if (autoScroll) "Diagnostyka: 15 sekund, do 5 automatycznych przewinięć. Zmiana kontekstu lub wygaszenie: STOP." else "Diagnostyka odpowiedzi: 15 sekund. Możesz ręcznie przewinąć zatwierdzoną grupę."
+                render()
+                lifecycleScope.launch {
+                    val report = runCatching { current.responseDiagnosis(consent = true, autoScrollConsent = autoScroll, fastScrollConsent = fast) }.getOrNull()
+                    if (epoch == visibleEpoch && current === channel && approvedUrl == url && kind == PageKind.APPROVED_GROUP) {
+                        output.text = report ?: "STOP: przerwana diagnostyka odpowiedzi."
+                        responseBusy = false
+                        render()
+                    }
+                }
+            }.show()
+    }
+
+    private fun checkResponseLoad(autoScroll: Boolean = false, document: Boolean = false) {
+        val fast = autoScroll && fastScrollOption.isChecked
+        if (responseBusy || visibleBusy || scanning || inspectingDom || measuringLoad || kind != PageKind.APPROVED_GROUP || progress < 100 || haltMessage != null) return
+        val currentSession = session ?: return
+        val current = channel ?: return
+        val approvedUrl = url ?: return
+        val epoch = visibleEpoch
+        visibleDialog = AlertDialog.Builder(this).setTitle(if (document) "Nowa zgoda: dokument grupy" else if (autoScroll) "Nowa zgoda: otwarcie + przewijanie" else "Nowa zgoda: jedno otwarcie i odpowiedzi")
+            .setMessage(if (document) "Jednorazowo ponownie otworzyć DOKŁADNIE tę zatwierdzoną grupę i odczytać wyłącznie jej dokument HTML (do 2 MiB, okno 25 s)? Lokalna analiza dokładnych linków i osadzonych bloków application/json oraz literałów JSON w dokładnych opakowaniach require(„ServerJS”).handle(...) i new ServerJS().handle(...). Maksymalnie 64 skrypty po 512 KiB i 20 ID. Inne opakowania są pomijane. Kod skryptów nie jest wykonywany przez parser. Bez odczytu XHR, Beacon, innych odpowiedzi, nagłówków ani pól logowania; bez wyodrębniania cookies/tokenów. HTML i JSON tylko przejściowo w ograniczonym RAM, usuwane po próbie. Na wyjściu tylko liczniki, bez treści, ID i adresów. Bez zapisu, uploadu, przewijania, skanu i kolektora. Nowa jednorazowa zgoda niezależna od poprzednich. Zmiana strony, logowanie, CAPTCHA, CHECKPOINT lub wygaszenie: STOP. Anulowanie niczego nie odczytuje." else (if (autoScroll) "ZEZWOLIĆ TAKŻE NA AUTOMATYCZNE PRZEWIJANIE? Do 5 kroków po 400–900 px, maksymalnie 4500 px. Pierwszy po sprawdzeniu nowego dokumentu i ${if (fast) "0,25 s" else "1 s"}, kolejne co ${if (fast) "0,5 s" else "2 s"}. Przeładowanie i przewijanie dzielą JEDNO okno do 25 s; wolne ładowanie zmniejsza liczbę kroków. " else "Bez automatycznego przewijania. ") + "Otworzyć ponownie DOKŁADNIE tę zatwierdzoną grupę w tej samej karcie i przez 25 s odczytywać lokalnie jej odpowiedzi danych? Obejmuje typy XHR, fetch i other, wyłącznie dozwolone endpointy, top-frame i dokładny kontekst grupy. Osobno policzyć dokładne typy zasobów (w tym ping/beacon), klasy /ajax/bz, inne /ajax i /data oraz zgodność ramki/origin? To wyłącznie liczniki metadanych, bez odczytu treści dodatkowych typów. To nowy zakres, niezależny od skanu i przewijania. Do 8 odpowiedzi, 512 KiB na odpowiedź, 2 MiB łącznie i 20 ID. Wcześniejsze odpowiedzi pozostaną w ograniczonej pamięci RAM do sprawdzenia nowego dokumentu; bez potwierdzenia zostaną usunięte bez analizy postów. Bez odczytu dokumentu HTML, nagłówków, cookies i tokenów, zapisu, uploadu, skanu i kolektora. Tylko jedno zatwierdzone otwarcie; kolejne przejście, LOGIN/CAPTCHA/CHECKPOINT, pauza, wygaszenie lub utrata kontekstu: STOP.")
+            .setNegativeButton("Anuluj", null).setPositiveButton("Zgadzam się jednorazowo") { _, _ ->
+                if (epoch != visibleEpoch || current !== channel || currentSession !== session || approvedUrl != url || kind != PageKind.APPROVED_GROUP) return@setPositiveButton
+                responseReloadGate.begin(approvedUrl); responseBusy = true
+                output.text = "Diagnostyka od otwarcia: 25 s, jedno zatwierdzone otwarcie. Nie dotykaj ekranu."
+                render()
+                lifecycleScope.launch {
+                    val report = runCatching { ResponseLoadRunner(GeckoHost.background).run(currentSession, current, approvedUrl,
+                        PocPolicy.APPROVED_GROUP_ID, autoScrollConsent = autoScroll, fastScrollConsent = fast, documentConsent = document, alive = { epoch == visibleEpoch && currentSession === session && responseReloadGate.active },
+                        willLoad = { responseReloadGate.willLoad() }) }.getOrNull()
+                    if (epoch == visibleEpoch && currentSession === session && responseReloadGate.active) {
+                        responseReloadGate.cancel(); responseBusy = false
+                        output.text = report ?: "STOP: brak potwierdzonego nowego dokumentu lub przerwana próba."
+                        render()
+                    }
+                }
+            }.show()
+    }
+
+    // ---- session
+
+    private fun askConsentAndOpen() {
+        if (preferences.getBoolean(KEY_CONSENT, false)) { openSession(); return }
+        AlertDialog.Builder(this)
+            .setTitle("Zgoda na sesję Facebooka")
+            .setMessage(
+                "Otworzy się zwykła przeglądarka (silnik Firefox/GeckoView) tylko dla zatwierdzonej grupy testowej.\n\n" +
+                    "• Logujesz się sam na oficjalnej stronie Facebooka; aplikacja nie czyta haseł ani pól formularzy.\n" +
+                    "• Sesja (ciasteczka) zostaje wyłącznie w tej aplikacji na telefonie; możesz ją usunąć przyciskiem „Wyloguj i usuń dane”.\n" +
+                    "• Dane sesji zostają lokalnie. Oferty i zdjęcia zapisujemy lokalnie; po osobnym włączeniu automatu wysyłamy je do sparowanego Managera.\n" +
+                    "• Przy CAPTCHA, checkpoincie lub utracie dostępu automat staje.",
+            )
+            .setPositiveButton("Zgadzam się") { _, _ -> preferences.edit().putBoolean(KEY_CONSENT, true).apply(); openSession() }
+            .setNegativeButton("Anuluj", null)
+            .show()
+    }
+
+    private val automationPermission=registerForActivityResult(ActivityResultContracts.RequestPermission()){ }
+    internal var automationScheduleDialog:AlertDialog?=null;private set
+    internal var automationTimeDialog:android.app.TimePickerDialog?=null;private set
+    internal fun editAutomationSchedule(){
+        val times=runCatching{WatcherAutomation.schedule(this)}.getOrDefault(AutomationPolicy.defaultMinutes).toMutableList()
+        val layout=android.widget.LinearLayout(this).apply{orientation=android.widget.LinearLayout.VERTICAL;setPadding(24,12,24,12)}
+        layout.addView(android.widget.TextView(this).apply{text="Trzy pory dziennie, według czasu telefonu. Android może opóźnić zadanie, zwłaszcza przy oszczędzaniu baterii."})
+        val error=android.widget.TextView(this).apply{setTextColor(android.graphics.Color.RED);tag="automation.schedule.error"}
+        val choices=times.indices.map{index->android.widget.Button(this).apply{
+            tag="automation.time.$index";text=AutomationPolicy.label(times[index]);isAllCaps=false
+            setOnClickListener{
+                automationTimeDialog=android.app.TimePickerDialog(this@PocActivity,{_,hour,minute->
+                    times[index]=hour*60+minute;text=AutomationPolicy.label(times[index]);error.text=""
+                },times[index]/60,times[index]%60,true).also{picker->
+                    picker.setOnDismissListener{if(automationTimeDialog===picker)automationTimeDialog=null};picker.show()
+                }
+            }
+        }}
+        choices.forEach(layout::addView);layout.addView(error)
+        val dialog=AlertDialog.Builder(this).setTitle("Godziny skanów").setView(layout)
+            .setNegativeButton("Anuluj",null).setPositiveButton("Zapisz",null).create()
+        automationScheduleDialog=dialog
+        dialog.setOnDismissListener{if(automationScheduleDialog===dialog)automationScheduleDialog=null}
+        dialog.show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
+            if(times.distinct().size!=3){error.text="Wybierz trzy różne godziny.";return@setOnClickListener}
+            runCatching{WatcherAutomation.saveSchedule(this,times)}.onSuccess{
+                output.text="Zapisano godziny: "+AutomationPolicy.validate(times).joinToString(" • ",transform=AutomationPolicy::label)
+                dialog.dismiss()
+            }.onFailure{error.text="Nie udało się zapisać godzin. Dotychczasowy harmonogram pozostaje zachowany."}
+        }
+    }
+    internal var automationStatusDialog:AlertDialog?=null;private set
+    private fun automationSettings(){
+        lifecycleScope.launch {
+            val status=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){runCatching{WatcherOutbox(this@PocActivity).use{it.status()}}.getOrDefault("Nie udało się odczytać dziennika. Baza pozostaje zachowana.")}
+            if(isDestroyed||!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))return@launch
+            showAutomationSettings(status)
+        }
+    }
+    internal fun askSavedCleanup(){
+        if(busyForTabs()||archiveWritePending)return
+        val day=java.time.LocalDate.now().minusDays(30)
+        android.app.DatePickerDialog(this,{_,year,month,date->
+            val selected=java.time.LocalDate.of(year,month+1,date)
+            val before=runCatching{SavedCleanup.cutoff(selected)}.getOrNull()
+            if(before==null){output.text="Wybierz przeszłą datę.";return@DatePickerDialog}
+            val group=PocPolicy.APPROVED_GROUP_ID
+            lifecycleScope.launch {
+                val preview=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){runCatching{SavedCleanup.preview(this@PocActivity,group,before)}}
+                if(isDestroyed||PocPolicy.APPROVED_GROUP_ID!=group)return@launch
+                val p=preview.getOrNull()?:run{output.text="Nie udało się przygotować podglądu. Nic nie usunięto.";return@launch}
+                AlertDialog.Builder(this@PocActivity).setTitle("Usuń zapisane przed $selected")
+                    .setMessage("Wybrana grupa: $group.\nKolejka: ${p.queue.rows} zapisów (${p.queue.posts} postów), w tym niewysłane: ${p.queue.pending}.\nArchiwum ręczne: ${p.archiveRows} postów.\nBez znanej daty zapisu: ${p.queue.unknownDate} — pozostają.\n\nUsuwamy lokalne dane i zdjęcia. Klucze ponowień pozostają, aby usunięte wpisy nie wróciły do wysyłki. Manager ma osobne czyszczenie. Logowanie i parowanie pozostają.")
+                    .setNegativeButton("Anuluj",null).setPositiveButton("Usuń starsze"){_,_->
+                        if(busyForTabs()||archiveWritePending||PocPolicy.APPROVED_GROUP_ID!=group)return@setPositiveButton
+                        deletingResults=true;archiveRevision++;render()
+                        lifecycleScope.launch {
+                            val result=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){
+                                WatcherAutomation.lock.lock()
+                                try{runCatching{SavedCleanup.apply(this@PocActivity,group,before,p)}}finally{WatcherAutomation.lock.unlock()}
+                            }
+                            deletingResults=false
+                            if(!isDestroyed){
+                                if(result.isSuccess){clearDesktopDetails();savedResult=null;savedThumbnails.clear();readSavedResult();output.text="Usunięto starsze lokalne zapisy. Baza Managera pozostaje bez zmian."}
+                                else output.text="Czyszczenie nie zostało potwierdzone. Sprawdź stan i przygotuj nowy podgląd."
+                                render()
+                            }
+                        }
+                    }.show()
+            }
+        },day.year,day.monthValue-1,day.dayOfMonth).show()
+    }
+
+    internal fun showAutomationSettings(status:String){
+            val enabled=WatcherAutomation.enabled(this)
+            val times=runCatching{WatcherAutomation.schedule(this@PocActivity)}.getOrDefault(AutomationPolicy.defaultMinutes)
+            val hours=times.joinToString(" • ",transform=AutomationPolicy::label)
+            val next=AutomationPolicy.next(java.time.Instant.now(),java.time.ZoneId.systemDefault(),times).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("dd.MM HH:mm"))
+            val actions=android.widget.LinearLayout(this@PocActivity).apply{orientation=android.widget.LinearLayout.VERTICAL;setPadding(24,8,24,8)}
+            val dialog=AlertDialog.Builder(this@PocActivity).setTitle("Automat: "+if(enabled)"włączony" else "wyłączony")
+                .setView(android.widget.ScrollView(this).apply{tag="automation.scroll";isFillViewport=false;addView(actions)})
+                .setNegativeButton("Zamknij",null)
+                .setNeutralButton("Ponów wysyłkę"){_,_->lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO){WatcherOutbox(this@PocActivity).use{it.retry()};if(WatcherAutomation.enabled(this@PocActivity))WatcherAutomation.retry(this@PocActivity)}}
+                .setPositiveButton(if(enabled)"Wyłącz automat" else "Włącz automat"){_,_->
+                    if(enabled)WatcherAutomation.configure(this@PocActivity,false)
+                    else lifecycleScope.launch {
+                        val paired=kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO){runCatching{WatcherLink.load(this@PocActivity)!=null}.getOrDefault(false)}
+                        if(!paired){output.text="Najpierw połącz Watchera z Managerem.";return@launch}
+                        closeSession()
+                        if(android.os.Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)
+                            automationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                        WatcherAutomation.configure(this@PocActivity,true)
+                        output.text="Automat włączony. Po opuszczeniu aplikacji może wykonać zaległe okno. Godziny i dziennik są w panelu automatu."
+                    }
+                }.create()
+            actions.addView(android.widget.CheckBox(this@PocActivity).apply{
+                tag="automation.render.diagnostics";text="Diagnostyka obrazu — maks. 30 minut";isSaveEnabled=false
+                isChecked=RenderDiagnostics.enabled(this@PocActivity)
+                setOnCheckedChangeListener{_,checked->RenderDiagnostics.set(this@PocActivity,checked)}
+            })
+            actions.addView(android.widget.TextView(this).apply{text="Opcjonalne liczniki obrazu, czasy i stan pamięci. Bez treści ofert, zdjęć i danych logowania. Sposób skanowania pozostaje taki sam.";textSize=13f})
+            actions.addView(android.widget.Button(this@PocActivity).apply{text="Podgląd postępu na żywo";tag="automation.live.open";setOnClickListener{dialog.dismiss();startActivity(Intent(this@PocActivity,ScanStatusActivity::class.java))}})
+            actions.addView(android.widget.Button(this@PocActivity).apply{text="Porównaj obraz: okno i tło";tag="automation.render.compare";setOnClickListener{closeSession();dialog.dismiss();startActivity(Intent(this@PocActivity,RenderComparisonActivity::class.java))}})
+            actions.addView(android.widget.Button(this@PocActivity).apply{text="Usuń zapisane przed datą…";tag="automation.cleanup";setOnClickListener{dialog.dismiss();askSavedCleanup()}})
+            actions.addView(android.widget.Button(this@PocActivity).apply{text="Godziny skanów";tag="automation.edit";setOnClickListener{dialog.dismiss();editAutomationSchedule()}})
+            actions.addView(android.widget.Button(this@PocActivity).apply{
+                text="Skan teraz w tle";tag="automation.scan.now";isEnabled=enabled
+                setOnClickListener{closeSession();WatcherAutomation.requestScan(this@PocActivity);dialog.dismiss();output.text="Skan zlecony. Schowaj aplikację, aby rozpocząć. Postęp znajdziesz w powiadomieniu. Otwarty podgląd wstrzyma ręczny skan."}
+            })
+            actions.addView(android.widget.Button(this@PocActivity).apply{
+                text="Ustawienia Androida";setOnClickListener{startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:$packageName")))}
+            })
+            actions.addView(android.widget.TextView(this).apply{
+                tag="automation.status";text="Godziny: $hours\nNastępne okno: $next (czas telefonu).\n\nAutomat skanuje w tle po opuszczeniu aplikacji. Skan ręczny wymaga otwartego ekranu aplikacji. Android może opóźnić start; po wymuszonym zatrzymaniu trzeba ponownie otworzyć aplikację.\n\nOferty i przypisane miniatury trafiają do sparowanego Managera. Automat odczytuje też tekst ze zdjęć lokalnym OCR i uzupełnia brakujące dane; nie nadpisuje sprzecznych danych tekstowych. Kolejka ponawia wysyłkę bez duplikatów. Logowanie i baza pozostają na telefonie. CAPTCHA wymaga ręcznej obsługi.\n\n"+status
                 setTextIsSelectable(true)
             })
             automationStatusDialog?.dismiss();automationStatusDialog=dialog
