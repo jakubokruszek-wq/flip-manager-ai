@@ -18,6 +18,10 @@ function isValidDeploymentId(value) {
  * @returns {string | undefined}
  */
 export function resolveNextDeploymentId(env) {
+  // Next.js already consumes this platform-supplied ID. A custom transformed
+  // ID conflicts with it and prevents the build before compilation starts.
+  if (env.NEXT_DEPLOYMENT_ID) return undefined;
+
   const platformId = env.VERCEL_DEPLOYMENT_ID?.replace(/^dpl_/, "");
   if (isValidDeploymentId(platformId)) return platformId;
 
