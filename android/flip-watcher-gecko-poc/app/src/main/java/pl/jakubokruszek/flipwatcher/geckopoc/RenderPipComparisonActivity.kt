@@ -27,6 +27,7 @@ internal open class RenderPipComparisonActivity:ComponentActivity() {
  protected open suspend fun reportResult(run:String,group:WatcherGroup,result:RenderComparisonResult){
   RenderComparisonStore.record(this,run,group,8,result)
  }
+ private val lifecycleEvidence=mutableMapOf<String,Int>()
  private val entered=CompletableDeferred<Unit>()
  private var enteredOnce=false
  private var completed=false
@@ -44,6 +45,7 @@ internal open class RenderPipComparisonActivity:ComponentActivity() {
   }
   phase=lifecycleScope.launch{
    var locked=false
+   val setupStats=mutableMapOf("pipRequested" to 1,"pipStage" to 1)
    var result=RenderComparisonResult("COMPARE_PIP_INTERRUPTED",mapOf("pipRequested" to 1))
    try {
     withTimeout(120000){
@@ -53,6 +55,7 @@ internal open class RenderPipComparisonActivity:ComponentActivity() {
      withTimeout(10000){while(!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))delay(50)}
      // Let the explicit task launch/resume settle before asking Android for PiP.
      delay(300)
+     setupStats["pipStage"]=2
      withTimeout(15000){while(!WatcherAutomation.lock.tryLock())delay(100);locked=true}
      check(!RenderComparisonForegroundService.anyActive()){"COMPARE_FGS_BASELINE_BUSY"}
      WatcherAutomation.uiVisible=true
@@ -60,12 +63,17 @@ internal open class RenderPipComparisonActivity:ComponentActivity() {
      // visible controls. A cold runtime created only after PiP entry could miss
      // the lifecycle pause and give a misleadingly easier test condition.
      GeckoHost.collectorExtension(this@RenderPipComparisonActivity)
+     setupStats["pipStage"]=3
      val accepted=runCatching{enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16,9)).build())}.getOrDefault(false)
      if(!accepted){result=RenderComparisonResult("COMPARE_PIP_ENTER_DENIED",mapOf("pipRequested" to 1));return@withTimeout}
+     setupStats["pipStage"]=4
      withTimeout(8000){entered.await()}
+     setupStats["pipStage"]=5
      var width=0;var height=0;var stableSince=0L
      withTimeout(10000){
       while(true){
+       setupStats.putAll(PipRenderVisibility.snapshot(this@RenderPipComparisonActivity,pipView))
+       setupStats.putAll(lifecycleEvidence)
        val w=pipView.width;val h=pipView.height
        val valid=w in 128..2160&&h in 128..2160&&w.toLong()*h<=4000000&&
         RenderComparisonVisibility.startedActivityCount==1&&PipRenderVisibility.matches(this@RenderPipComparisonActivity,pipView,w,h)
@@ -81,6 +89,7 @@ internal open class RenderPipComparisonActivity:ComponentActivity() {
       PipRenderVisibility.matches(this@RenderPipComparisonActivity,pipView,width,height)
      check(alive()){"COMPARE_PIP_INTERRUPTED"}
      val focusedAtStart=if(pipView.hasWindowFocus())1 else 0
+     setupStats["pipStage"]=6
      onMeasurementStarted()
      val observed=RenderComparisonProbe.run(this@RenderPipComparisonActivity,group,pipView,width,height,::alive,
       fixtureTarget=diagnosticFixtureTarget,pipActivity=this@RenderPipComparisonActivity)
@@ -88,9 +97,9 @@ internal open class RenderPipComparisonActivity:ComponentActivity() {
       "pipVisibleAtStart" to 1,"pipFocusedAtStart" to focusedAtStart,"pipWidth" to width,"pipHeight" to height,
       "pipVisibleAtEnd" to if(alive())1 else 0,"pipFocusedAtEnd" to if(pipView.hasWindowFocus())1 else 0))
     }
-   }catch(e:TimeoutCancellationException){result=RenderComparisonResult("COMPARE_PIP_TIMEOUT",mapOf("pipRequested" to 1,"pipEntered" to if(enteredOnce)1 else 0))}
-    catch(e:CancellationException){result=RenderComparisonResult("COMPARE_PIP_INTERRUPTED",mapOf("pipRequested" to 1,"pipEntered" to if(enteredOnce)1 else 0));throw e}
-    catch(e:Exception){val issue=e.message?.takeIf{it.matches(Regex("[A-Z0-9_]{1,60}"))}?:"COMPARE_PIP_ERROR";result=RenderComparisonResult(issue,mapOf("pipRequested" to 1,"pipEntered" to if(enteredOnce)1 else 0))}
+   }catch(e:TimeoutCancellationException){result=RenderComparisonResult("COMPARE_PIP_TIMEOUT",setupStats.toMap()+lifecycleEvidence.toMap()+mapOf("pipEntered" to if(enteredOnce)1 else 0))}
+    catch(e:CancellationException){result=RenderComparisonResult("COMPARE_PIP_INTERRUPTED",setupStats.toMap()+lifecycleEvidence.toMap()+mapOf("pipEntered" to if(enteredOnce)1 else 0));throw e}
+    catch(e:Exception){val issue=e.message?.takeIf{it.matches(Regex("[A-Z0-9_]{1,60}"))}?:"COMPARE_PIP_ERROR";result=RenderComparisonResult(issue,setupStats.toMap()+lifecycleEvidence.toMap()+mapOf("pipEntered" to if(enteredOnce)1 else 0))}
    finally {
     completed=true
     withContext(NonCancellable+Dispatchers.Main.immediate){
@@ -104,6 +113,13 @@ internal open class RenderPipComparisonActivity:ComponentActivity() {
    }
   }
  }
+ override fun onStart(){super.onStart();lifecycleEvidence["pipPlatformStarted"]=1}
+ override fun onSaveInstanceState(outState:Bundle){
+  lifecycleEvidence["pipSaveCount"]=(lifecycleEvidence["pipSaveCount"]?:0)+1
+  lifecycleEvidence["pipLifecycleBeforeSave"]=lifecycle.currentState.ordinal
+  super.onSaveInstanceState(outState)
+  lifecycleEvidence["pipLifecycleAfterSave"]=lifecycle.currentState.ordinal
+ }
  override fun onResume(){super.onResume();WatcherAutomation.uiVisible=true}
  override fun onPictureInPictureModeChanged(inPictureInPictureMode:Boolean,newConfig:Configuration){
   super.onPictureInPictureModeChanged(inPictureInPictureMode,newConfig)
@@ -111,6 +127,7 @@ internal open class RenderPipComparisonActivity:ComponentActivity() {
   else if(enteredOnce&&!completed)phase?.cancel(CancellationException("COMPARE_PIP_INTERRUPTED"))
  }
  override fun onStop(){
+  lifecycleEvidence["pipPlatformStarted"]=0
   super.onStop()
   if(!completed)phase?.cancel(CancellationException("COMPARE_PIP_INTERRUPTED"))
   Handler(Looper.getMainLooper()).post{WatcherAutomation.uiVisible=RenderComparisonVisibility.hasStartedActivity}
