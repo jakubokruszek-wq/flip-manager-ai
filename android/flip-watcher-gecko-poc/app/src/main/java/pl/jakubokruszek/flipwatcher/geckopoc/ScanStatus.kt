@@ -140,7 +140,11 @@ object WatcherScanStatus {
     }
     fun request(context:Context)=change(context){s->if(s.active&&System.currentTimeMillis()-s.heartbeat<90_000)s else ScanState(phase="QUEUED",changed=System.currentTimeMillis(),lastSuccess=s.lastSuccess,checked=s.checked,skipped=s.skipped)}
     fun resume(context:Context)=change(context){s->if(s.active&&System.currentTimeMillis()-s.heartbeat<90_000)s else s.copy(phase="QUEUED",reason="",changed=System.currentTimeMillis())}
-    fun begin(context:Context,id:String)=change(context){s->val now=System.currentTimeMillis();ScanState(run=id,phase="PREPARING",started=now,changed=now,heartbeat=now,lastSuccess=s.lastSuccess,checked=now)}
+    fun begin(context:Context,id:String,allowed:()->Boolean={true})=change(context){s->
+        // Check admission while holding the status guard. A concurrent stop
+        // persists its cycle marker before retiring the old status run.
+        if(!allowed())s else {val now=System.currentTimeMillis();ScanState(run=id,phase="PREPARING",started=now,changed=now,heartbeat=now,lastSuccess=s.lastSuccess,checked=now)}
+    }
     fun update(context:Context,id:String,f:(ScanState)->ScanState)=change(context){s->if(s.run!=id||s.ended>0)s else f(s).copy(changed=System.currentTimeMillis(),heartbeat=System.currentTimeMillis())}
     fun beat(context:Context,id:String)=change(context,false){s->if(s.run==id&&s.active)s.copy(heartbeat=System.currentTimeMillis())else s}
     fun finish(context:Context,id:String,phase:String,reason:String=""):ScanState { return change(context){s->if(s.run!=id)s else {if(phase in setOf("DONE","PARTIAL"))WatcherScanSummary.finish(context);val now=System.currentTimeMillis();s.copy(phase=phase,reason=reason,ended=now,changed=now,heartbeat=now,lastSuccess=if(phase=="DONE")now else s.lastSuccess)}} }

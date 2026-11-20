@@ -162,7 +162,7 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
         return withContext(Dispatchers.IO){
             WatcherOutbox(context).use { queue ->
                 val run=id.toString();var begun=false;var ticker:Job?=null
-                fun begin(){if(!begun&&!userStopped()){WatcherAutomation.preferences(context).edit().remove("continuation_at").apply();WatcherScanStatus.begin(context,run);begun=true;ticker=launch{while(isActive){WatcherScanStatus.beat(context,run);delay(5_000)}}}}
+                fun begin(){if(!begun&&!userStopped()){WatcherAutomation.preferences(context).edit().remove("continuation_at").apply();WatcherScanStatus.begin(context,run){!userStopped()};begun=true;ticker=launch{while(isActive){WatcherScanStatus.beat(context,run);delay(5_000)}}}}
                 var budgetReached=false;var retryNeeded=false;var networkPaused=false;var lastIssue=""
                 try {
                     // Ordinary WorkManager jobs need no background-started foreground service.

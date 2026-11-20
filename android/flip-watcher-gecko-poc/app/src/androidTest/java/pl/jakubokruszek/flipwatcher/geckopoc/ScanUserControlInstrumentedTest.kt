@@ -57,6 +57,7 @@ class ScanUserControlInstrumentedTest {
                 assertEquals(before,frozen(q));assertTrue(q.scanned(slot,group.key))
                 val stopped=WatcherScanStatus.read(context);assertEquals("STOPPED",stopped.phase);assertEquals(7,stopped.posts);assertEquals(3,stopped.photos);assertNotEquals(oldRun,stopped.run)
                 WatcherScanStatus.update(context,oldRun){it.copy(phase="READING",posts=999)};WatcherScanStatus.finish(context,oldRun,"DONE");WatcherScanStatus.beat(context,oldRun)
+                WatcherScanStatus.begin(context,oldRun,allowed={!ScanUserControl.isStopped(context,slot)})
                 assertEquals(stopped,WatcherScanStatus.read(context))
                 assertFalse(cancelled.contains("watcher-calendar-v1"));assertFalse(cancelled.any{it.startsWith("watcher-window-")})
                 assertEquals(setOf("watcher-retry-v1","watcher-background-kick-v2",WatcherAutomation.CONTINUATION_TAG,WatcherAutomation.RECOVERY_WORK),cancelled.toSet())
