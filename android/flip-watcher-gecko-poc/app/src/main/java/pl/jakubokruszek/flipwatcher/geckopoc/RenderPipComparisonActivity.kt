@@ -75,7 +75,7 @@ internal open class RenderPipComparisonActivity:ComponentActivity() {
        setupStats.putAll(PipRenderVisibility.snapshot(this@RenderPipComparisonActivity,pipView))
        setupStats.putAll(lifecycleEvidence)
        val w=pipView.width;val h=pipView.height
-       val valid=w in 128..2160&&h in 128..2160&&w.toLong()*h<=4000000&&
+       val valid=w in PipRenderVisibility.MIN_VIEWPORT..2160&&h in PipRenderVisibility.MIN_VIEWPORT..2160&&w.toLong()*h<=4000000&&
         RenderComparisonVisibility.startedActivityCount==1&&PipRenderVisibility.matches(this@RenderPipComparisonActivity,pipView,w,h)
        val now=SystemClock.elapsedRealtime()
        if(!valid){stableSince=0L}

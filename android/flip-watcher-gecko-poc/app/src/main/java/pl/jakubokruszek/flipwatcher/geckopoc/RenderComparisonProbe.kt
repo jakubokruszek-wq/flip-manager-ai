@@ -23,7 +23,8 @@ internal data class RenderComparisonResult(val issue:String,val stats:Map<String
  * it never replaces the production reader's current frame or ownership requirements. */
 internal object RenderComparisonProbe {
  suspend fun run(context:Context,group:WatcherGroup,view:GeckoView?,width:Int,height:Int,alive:()->Boolean,fixtureTarget:String?=null,frameSignal:Boolean=false,pipActivity:androidx.activity.ComponentActivity?=null):RenderComparisonResult=withContext(Dispatchers.Main){
-  require(group.type=="GROUP"&&width in 128..2160&&height in 128..2160&&width.toLong()*height<=4_000_000)
+  val minimum=if(pipActivity==null)128 else PipRenderVisibility.MIN_VIEWPORT
+  require(group.type=="GROUP"&&width in minimum..2160&&height in minimum..2160&&width.toLong()*height<=4_000_000)
   if(fixtureTarget!=null)require(java.net.URI(fixtureTarget).host=="127.0.0.1")
   require(pipActivity==null||view!=null&&!frameSignal)
   val target=fixtureTarget?:group.url
@@ -187,4 +188,3 @@ internal object RenderComparisonProbe {
   return false
  }
 }
-

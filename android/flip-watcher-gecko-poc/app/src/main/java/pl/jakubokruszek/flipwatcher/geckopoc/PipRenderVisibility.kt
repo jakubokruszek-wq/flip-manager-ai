@@ -9,6 +9,10 @@ import org.mozilla.geckoview.GeckoView
 
 /** Real visible PiP policy only. It grants no offer-reading or image ownership permission. */
 internal object PipRenderVisibility {
+ // Android supplies genuine PiP windows with a short edge of108px on some
+ // displays. This diagnostic captures its real viewport; it does not encode
+ // offer photos or relax the ordinary reader's128px minimum.
+ const val MIN_VIEWPORT=64
  /** Count-only setup evidence. Failures retain the reason instead of a bare timeout. */
  fun snapshot(activity:ComponentActivity,view:GeckoView):Map<String,Int> {
   val rect=Rect();val hasRect=view.getGlobalVisibleRect(rect)
