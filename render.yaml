@@ -1,0 +1,28 @@
+# Existing Supabase database and storage are supplied via environment variables.
+# No database migrations or paid Render resources are created.
+services:
+  - type: web
+    name: flip-manager-free
+    runtime: node
+    plan: free
+    region: frankfurt
+    repo: https://github.com/jakubokruszek-wq/flip-manager-ai
+    branch: codex/render-free-migration
+    autoDeployTrigger: "off"
+    buildCommand: npm ci --include=dev && NEXT_PUBLIC_COMMIT_SHA="$RENDER_GIT_COMMIT" npm run build
+    startCommand: exec npm run start -- --hostname 0.0.0.0 --port "$PORT"
+    envVars:
+      - key: NODE_VERSION
+        value: "24.19.0"
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: FLIP_COLLECTOR_PAIRING_SECRET
+        sync: false
