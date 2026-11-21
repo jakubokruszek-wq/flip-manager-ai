@@ -75,7 +75,7 @@ class ScanStatusActivity:ComponentActivity(){
     override fun onResume(){super.onResume();refresh=lifecycleScope.launch{
         while(true){
             val showSources=sourcesExpanded;val showJournal=journalExpanded
-            val value=withContext(Dispatchers.IO){runCatching{Triple(WatcherScanStatus.report(this@ScanStatusActivity),if(showSources)WatcherScanStatus.sourceReport(this@ScanStatusActivity)else null,if(showJournal)WatcherOutbox(this@ScanStatusActivity).use{it.status()}else null)}}
+            val value=withContext(Dispatchers.IO){runCatching{Triple(WatcherScanStatus.report(this@ScanStatusActivity),if(showSources)WatcherScanStatus.sourceReport(this@ScanStatusActivity)else null,if(showJournal)WatcherOutbox(this@ScanStatusActivity).use{it.status()}+"\n\n"+AppExitDiagnostics.text(this@ScanStatusActivity)+"\n"+ManualScanHandoff.failureCounts(this@ScanStatusActivity).entries.joinToString(" • "){"${it.key}: ${it.value}"}else null)}}
             value.onSuccess{(report,details,log)->
                 if(status.text.toString()!=report)status.text=report
                 if(sourcesExpanded&&details!=null&&sources.text.toString()!=details)sources.text=details
