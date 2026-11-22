@@ -155,7 +155,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Offline OCR and consent on API 36 (dedicated device)
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-frame-signal-114' && github.ref != 'refs/heads/codex/android-manual-start-116' && github.ref != 'refs/heads/codex/android-home-crash-117'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-frame-signal-114' && github.ref != 'refs/heads/codex/android-manual-start-116' && github.ref != 'refs/heads/codex/android-home-crash-117' && github.ref != 'refs/heads/codex/android-memory-118'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -194,10 +194,10 @@ jobs:
           retention-days: 14
 
       - name: Release the offline emulator disk before creating the fresh device
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-frame-signal-114' && github.ref != 'refs/heads/codex/android-manual-start-116' && github.ref != 'refs/heads/codex/android-home-crash-117'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-frame-signal-114' && github.ref != 'refs/heads/codex/android-manual-start-116' && github.ref != 'refs/heads/codex/android-home-crash-117' && github.ref != 'refs/heads/codex/android-memory-118'
         run: avdmanager delete avd --name gecko-ocr-offline
       - name: Build both versions for the in-place rollback compatibility test
-        if: github.ref == 'refs/heads/codex/android-frame-signal-114' || github.ref == 'refs/heads/codex/android-manual-start-116' || github.ref == 'refs/heads/codex/android-home-crash-117'
+        if: github.ref == 'refs/heads/codex/android-frame-signal-114' || github.ref == 'refs/heads/codex/android-manual-start-116' || github.ref == 'refs/heads/codex/android-home-crash-117' || github.ref == 'refs/heads/codex/android-memory-118'
         run: |
           echo "ORG_GRADLE_PROJECT_GECKO_POC_VERSION_CODE=$((8000 + ${{ github.run_number }}))" >> "$GITHUB_ENV"
           git fetch --depth=1 origin 01c082ef034d07727a3dbf15c998771240d33888
@@ -205,7 +205,7 @@ jobs:
           (cd ../watcher-upgrade-107/android/flip-watcher-gecko-poc && ./gradlew --no-daemon assembleDebug -PGECKO_POC_VERSION_CODE=8698)
           (cd android/flip-watcher-gecko-poc && ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest -PGECKO_POC_VERSION_CODE=$((8000 + ${{ github.run_number }})))
       - name: Complete worker, own-message and image-binding regressions on API 36
-        if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-frame-signal-114' || github.ref == 'refs/heads/codex/android-manual-start-116' || github.ref == 'refs/heads/codex/android-home-crash-117'
+        if: github.ref == 'refs/heads/codex/android-schema-recovery-086' || github.ref == 'refs/heads/codex/android-reader-recovery-087' || github.ref == 'refs/heads/codex/android-frame-signal-114' || github.ref == 'refs/heads/codex/android-manual-start-116' || github.ref == 'refs/heads/codex/android-home-crash-117' || github.ref == 'refs/heads/codex/android-memory-118'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
@@ -217,12 +217,12 @@ jobs:
           avd-name: gecko-schema-recovery
           force-avd-creation: true
           script: |
-            if [ '${{ github.ref }}' = 'refs/heads/codex/android-frame-signal-114' ] || [ '${{ github.ref }}' = 'refs/heads/codex/android-manual-start-116' ] || [ '${{ github.ref }}' = 'refs/heads/codex/android-home-crash-117' ]; then sh scripts/rollback-upgrade.sh; fi
-            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ManualHandoffSafetyInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanUserControlInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#manualWindowGatePreservesRequestAndReceiptsButDoesNotBlockScheduledWork || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
+            if [ '${{ github.ref }}' = 'refs/heads/codex/android-frame-signal-114' ] || [ '${{ github.ref }}' = 'refs/heads/codex/android-manual-start-116' ] || [ '${{ github.ref }}' = 'refs/heads/codex/android-home-crash-117' ] || [ '${{ github.ref }}' = 'refs/heads/codex/android-memory-118' ]; then sh scripts/rollback-upgrade.sh; fi
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.ScanMemoryDiagnosticsInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.BackgroundPhotoEncodingInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ManualHandoffSafetyInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanUserControlInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#manualWindowGatePreservesRequestAndReceiptsButDoesNotBlockScheduledWork || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.AndroidSignalRenderComparisonInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.AndroidFrameSignalProbeInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ForegroundRenderComparisonInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.RenderComparisonForegroundServiceInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.RenderComparisonRetentionInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.GeckoBackgroundLeaseInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.RenderComparisonInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.RenderDiagnosticsInstrumentedTest
             ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true -Pandroid.testInstrumentationRunnerArguments.class=pl.jakubokruszek.flipwatcher.geckopoc.WatcherAutomationInstrumentedTest#calendarIgnoresOldRevisionAndManualCycleRechecksWhileDegradedReadGetsExactlyOneRetry,pl.jakubokruszek.flipwatcher.geckopoc.WatcherScheduleInstrumentedTest,pl.jakubokruszek.flipwatcher.geckopoc.ScanStatusInstrumentedTest || (adb logcat -d -s GeckoPocTest:I AndroidRuntime:E TestRunner:* > logcat-tests.txt; exit 1)
       - name: Online Gecko flow and full regression on API 36 (fresh device)
-        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-frame-signal-114' && github.ref != 'refs/heads/codex/android-manual-start-116' && github.ref != 'refs/heads/codex/android-home-crash-117'
+        if: github.ref != 'refs/heads/codex/android-schema-recovery-086' && github.ref != 'refs/heads/codex/android-reader-recovery-087' && github.ref != 'refs/heads/codex/android-frame-signal-114' && github.ref != 'refs/heads/codex/android-manual-start-116' && github.ref != 'refs/heads/codex/android-home-crash-117' && github.ref != 'refs/heads/codex/android-memory-118'
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36

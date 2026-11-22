@@ -22,7 +22,7 @@ internal object AppExitDiagnostics {
             val clock=DateTimeFormatter.ofPattern("dd.MM HH:mm:ss").withZone(ZoneId.systemDefault())
             val main=context.applicationInfo.processName?:context.packageName
             if(records.isEmpty())"Historia zakończeń procesów: Android nie zwrócił wpisów."
-            else "Ostatnie zakończenia procesów (Android):\n"+records.joinToString("\n"){entry->
+            else "Ostatnie zakończenia procesów (Android; PSS/RSS 0 = brak pomiaru):\n"+records.joinToString("\n"){entry->
                 val role=if(entry.processName==main)"główny" else "pomocniczy"
                 val reason=when(entry.reason){
                     3->"mało pamięci"
@@ -35,7 +35,7 @@ internal object AppExitDiagnostics {
                     16->"aktualizacja aplikacji"
                     else->"kod ${entry.reason}"
                 }
-                "${clock.format(Instant.ofEpochMilli(entry.timestamp))} • $role • $reason • status ${entry.status}"
+                "${clock.format(Instant.ofEpochMilli(entry.timestamp))} • $role • $reason • status ${entry.status} • ważność ${entry.importance} • PSS ${entry.pss/1024} MiB • RSS ${entry.rss/1024} MiB"
             }
         }.getOrElse{"Historia zakończeń procesów: odczyt niedostępny."}
         readAt=now

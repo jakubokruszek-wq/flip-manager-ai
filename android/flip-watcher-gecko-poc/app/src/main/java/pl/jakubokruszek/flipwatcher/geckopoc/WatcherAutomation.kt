@@ -3,6 +3,7 @@ package pl.jakubokruszek.flipwatcher.geckopoc
 import android.content.Context
 import androidx.work.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -144,7 +145,15 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
     internal open fun send(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=WatcherUpload.send(credentials,item)
     internal open fun sendReport(credentials:WatcherLink.Credentials,item:WatcherOutbox.Item)=WatcherUpload.report(credentials,item)
     internal open fun groups(credentials:WatcherLink.Credentials)=WatcherLink.sources(credentials,verifyDevice=true)
-    internal open suspend fun scan(group:WatcherGroup,progress:(String)->Unit)=if(group.type=="PROFILE")ProfileWatcherScan(applicationContext).run(group,{!userStopped()&&!blockedByWindow()&&WatcherAutomation.enabled(applicationContext)},progress)else BackgroundWatcherScan(applicationContext).run(group,{!userStopped()&&!blockedByWindow()&&WatcherAutomation.enabled(applicationContext)},progress)
+    internal open suspend fun scan(group:WatcherGroup,progress:(String)->Unit):SavedResult {
+        withContext(Dispatchers.IO){ScanMemoryDiagnostics.record(applicationContext,false)}
+        return try {
+            if(group.type=="PROFILE")ProfileWatcherScan(applicationContext).run(group,{!userStopped()&&!blockedByWindow()&&WatcherAutomation.enabled(applicationContext)},progress)
+            else BackgroundWatcherScan(applicationContext).run(group,{!userStopped()&&!blockedByWindow()&&WatcherAutomation.enabled(applicationContext)},progress)
+        } finally {
+            withContext(NonCancellable+Dispatchers.IO){ScanMemoryDiagnostics.record(applicationContext,true)}
+        }
+    }
     override suspend fun doWork():Result {
         // A duplicate calendar/kick must not spend its job budget waiting behind another scan.
         if(!WatcherAutomation.lock.tryLock())return Result.success()
