@@ -10,6 +10,9 @@ internal object SourceRetryPolicy {
     fun closeFailure(issue:String,alreadyAttempted:Boolean):Boolean {
         if(pauseForNetwork(issue))return false
         if(issue in setOf("LOGIN_REQUIRED","CAPTCHA","CHECKPOINT","WAITING_FOR_BACKGROUND"))return false
+        // This exact code is produced only by the group desktop reader; its
+        // BackgroundLoadRetry has already exhausted the one fresh-session retry.
+        if(issue=="SCAN_PORT_LOST")return true
         // BackgroundLoadRetry already opened a fresh session once. A second
         // outer pass would multiply the same failed work without new evidence.
         val exhaustedLoad=listOf("GROUP","PROFILE").any{prefix ->

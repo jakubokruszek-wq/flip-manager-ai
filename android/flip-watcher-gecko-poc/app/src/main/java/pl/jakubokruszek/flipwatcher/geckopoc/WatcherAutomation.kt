@@ -155,8 +155,9 @@ open class WatcherAutomationWorker(context:Context,parameters:WorkerParameters):
         }
     }
     override suspend fun doWork():Result {
-        // A duplicate calendar/kick must not spend its job budget waiting behind another scan.
-        if(!WatcherAutomation.lock.tryLock())return Result.success()
+        // Retain a kick/continuation that arrives while another source is unwinding.
+        // WorkManager retries later; this job never waits behind the browser lock.
+        if(!WatcherAutomation.lock.tryLock())return if(WatcherAutomation.enabled(applicationContext))Result.retry()else Result.success()
         return try{runWork()}finally{
             WatcherAutomation.lock.unlock()
             // A fresh request can arrive while the retired source is unwinding.

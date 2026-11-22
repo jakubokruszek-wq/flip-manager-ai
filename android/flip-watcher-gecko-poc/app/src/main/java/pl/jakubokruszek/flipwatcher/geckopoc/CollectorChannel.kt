@@ -32,6 +32,18 @@ class CollectorChannel(
     private var desktopNonce: String? = null
     internal var viewportBridge:DesktopViewportBridge?=null
     internal var lastViewportCaptureCounts:List<Int> = emptyList();private set
+    private var fixtureDesktopRequest:(()->Unit)?=null
+    internal fun onFixtureDesktopRequest(callback:()->Unit){check(fixtureMode){"FIXTURE_ONLY"};fixtureDesktopRequest=callback}
+    internal fun disconnectFixturePort():Boolean {
+        check(fixtureMode){"FIXTURE_ONLY"}
+        val current=port?:return false
+        current.disconnect()
+        // Local disconnect need not notify its own delegate. Complete the same
+        // native disconnect path explicitly in this fixture-only fault injection;
+        // a later Gecko callback sees a retired port and is safely ignored.
+        if(port===current)portDelegate.onDisconnect(current)
+        return true
+    }
     private var port: WebExtension.Port? = null
     private var portReady: CompletableDeferred<Unit> = CompletableDeferred()
     private val pending = HashMap<String, CompletableDeferred<JSONObject?>>()
@@ -321,12 +333,20 @@ class CollectorChannel(
             pending.remove(nonce)
             return null
         }
-        return try { withTimeoutOrNull(timeoutMs) { deferred.await() } } finally { pending.remove(nonce) }
+        return try {
+            // Loopback acceptance tests can sever a REAL native port only after
+            // its request is pending. No page message can install this native hook.
+            if(fixtureMode&&message.optString("type")=="desktopPreview"){
+                val callback=fixtureDesktopRequest;fixtureDesktopRequest=null;callback?.invoke()
+            }
+            withTimeoutOrNull(timeoutMs) { deferred.await() }
+        } finally { pending.remove(nonce) }
     }
 
     fun close() {
         if(closed)return
         closed=true
+        fixtureDesktopRequest=null
         boundExtension?.let{runCatching{session.webExtensionController.setMessageDelegate(it,null,PocPolicy.NATIVE_APP)}}
         boundExtension=null
         abortDesktop()

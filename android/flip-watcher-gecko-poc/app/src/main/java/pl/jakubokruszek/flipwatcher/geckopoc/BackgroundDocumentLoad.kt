@@ -29,7 +29,9 @@ internal object BackgroundLoadRetry {
             }catch(e:Exception){
                 if(e is CancellationException)throw e
                 val reason=e.message.orEmpty()
-                val retryable=reason=="${prefix}_NOT_READY"||reason=="${prefix}_RENDER_RETRY_FAILED"||reason=="${prefix}_LOAD_ERROR"||reason.startsWith("${prefix}_LOAD_ERROR_")
+                // Only the group reader emits SCAN_PORT_LOST. Reopen a fresh
+                // session once, never continue on the disconnected document.
+                val retryable=(prefix=="GROUP"&&reason=="SCAN_PORT_LOST")||reason=="${prefix}_NOT_READY"||reason=="${prefix}_RENDER_RETRY_FAILED"||reason=="${prefix}_LOAD_ERROR"||reason.startsWith("${prefix}_LOAD_ERROR_")
                 if(index==1||!retryable||!alive())throw e
                 progress("LOADING");pause()
                 if(!alive())throw e

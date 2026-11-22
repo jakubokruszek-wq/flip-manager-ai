@@ -25,7 +25,18 @@ class BackgroundWatcherScan(private val context:Context) {
         require(java.net.URI(target).host=="127.0.0.1")
         return runTarget(WatcherGroup(FIXTURE_GROUP_ID,"Fixture"),target,true,alive,forceSurfaceRefresh=forceSurfaceRefresh)
     }
-    private suspend fun runTarget(group:WatcherGroup,target:String,fixture:Boolean,alive:()->Boolean,progress:(String)->Unit={},forceSurfaceRefresh:Boolean=false):SavedResult=withContext(Dispatchers.Main){
+    internal suspend fun runFixtureWithRecovery(target:String,alive:()->Boolean,
+                                              configureChannel:(Int,CollectorChannel)->Unit,
+                                              cleaned:(Int)->Unit={}):SavedResult {
+        require(java.net.URI(target).host=="127.0.0.1")
+        var attempt=0
+        return BackgroundLoadRetry.run("GROUP",alive){
+            val current=++attempt
+            try{runTarget(WatcherGroup(FIXTURE_GROUP_ID,"Fixture"),target,true,alive,fixtureChannel={configureChannel(current,it)})}
+            finally{cleaned(current)}
+        }
+    }
+    private suspend fun runTarget(group:WatcherGroup,target:String,fixture:Boolean,alive:()->Boolean,progress:(String)->Unit={},forceSurfaceRefresh:Boolean=false,fixtureChannel:((CollectorChannel)->Unit)?=null):SavedResult=withContext(Dispatchers.Main){
         withTimeout(if(fixture)300_000 else 180_000){
             check(alive())
             val browser=GeckoSession()
@@ -61,6 +72,7 @@ class BackgroundWatcherScan(private val context:Context) {
             }
             try {
                 channel.attach(GeckoHost.collectorExtension(context));check(live())
+                check(fixture||fixtureChannel==null){"FIXTURE_ONLY"};if(fixture)fixtureChannel?.invoke(channel)
                 DesktopSessionPreview.applyDesktop(browser)
                 browser.open(GeckoHost.runtime(context));surface=BackgroundViewport(browser,observation)
                 browser.setActive(true);browser.setFocused(true);browser.loadUri(target)

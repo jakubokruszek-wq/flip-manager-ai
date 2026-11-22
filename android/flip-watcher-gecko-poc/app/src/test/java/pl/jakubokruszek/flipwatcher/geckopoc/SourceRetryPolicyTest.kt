@@ -35,4 +35,12 @@ class SourceRetryPolicyTest {
             assertFalse(SourceRetryPolicy.closeFailure(issue,true))
         }
     }
+    @Test fun groupPortLossAlreadyExhaustedItsFreshSessionAndMustNotMultiplyOuterRetries(){
+        assertTrue(SourceRetryPolicy.closeFailure("SCAN_PORT_LOST",false))
+        assertTrue(SourceRetryPolicy.closeFailure("SCAN_PORT_LOST",true))
+        // PROFILE_PROTOCOL is a different producer/code and retains its existing policy.
+        assertFalse(SourceRetryPolicy.closeFailure("PROFILE_PROTOCOL",false))
+        assertTrue(SourceRetryPolicy.closeFailure("PROFILE_PROTOCOL",true))
+    }
+
 }

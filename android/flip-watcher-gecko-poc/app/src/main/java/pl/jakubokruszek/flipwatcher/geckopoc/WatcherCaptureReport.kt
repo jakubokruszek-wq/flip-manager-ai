@@ -27,10 +27,14 @@ object WatcherCaptureReport {
             .put("batteryExempt",power.isIgnoringBatteryOptimizations(context.packageName))
             .put("stats",JSONObject(value?.captureStats?:failureStats).apply{
                 if(elapsedMs>0)put("groupElapsedMs",elapsedMs.coerceAtMost(100_000_000L))
-                if((RenderDiagnostics.enabled(context)||failureStats["renderDiagEnabled"]==1)&&length()<=153){
+                // Record capture time even without render diagnostics. Delivery
+                // can be delayed in the durable outbox: received_at is not scan time.
+                // Leave room for the four existing queue counters (160-field contract).
+                if(length()<=154){
                     val captured=System.currentTimeMillis()
-                    put("renderDiagEnabled",1);put("capturedEpochDay",(captured/86400000L).toInt());put("capturedDayMs",(captured%86400000L).toInt())
+                    put("capturedEpochDay",(captured/86400000L).toInt());put("capturedDayMs",(captured%86400000L).toInt())
                 }
+                if((RenderDiagnostics.enabled(context)||failureStats["renderDiagEnabled"]==1)&&length()<=155)put("renderDiagEnabled",1)
                 for((key,count)in queueStats)if(key in setOf("queuePending","queueBlocked","queueQualityHeld","queueSent")&&count in 0..100_000_000)put(key,count)
             })
             .put("posts",JSONArray(value?.rows?.map{r->JSONObject().put("postId",r.postId).put("intent",r.intent)
