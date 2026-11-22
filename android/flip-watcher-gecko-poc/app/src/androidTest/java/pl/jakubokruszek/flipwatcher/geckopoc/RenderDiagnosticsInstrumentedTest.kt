@@ -18,8 +18,14 @@ class RenderDiagnosticsInstrumentedTest {
    assertNull(RenderDiagnostics.begin(context,"GROUP"))
    assertSame(error,RenderDiagnostics.failure(context,"GROUP",error,null,null,0))
    val group=WatcherGroups.configured.first()
+   val offBefore=System.currentTimeMillis()
    val off=WatcherCaptureReport.create(context,"diag","run",group,null,error.message!!).getJSONObject("stats")
-   assertFalse(off.has("renderDiagEnabled"));assertFalse(off.has("capturedEpochDay"))
+   // Report creation time is ordinary delivery metadata. Render observations
+   // still require opt-in, and disabling them must preserve the original error.
+   assertFalse(off.has("renderDiagEnabled"));assertFalse(off.has("groupAcquireErrors"))
+   val offCaptured=off.getLong("capturedEpochDay")*86400000L+off.getLong("capturedDayMs")
+   assertTrue(offCaptured in offBefore..System.currentTimeMillis())
+   assertEquals(setOf("capturedEpochDay","capturedDayMs"),off.keys().asSequence().toSet())
    RenderDiagnostics.set(context,true);val observation=checkNotNull(RenderDiagnostics.begin(context,"GROUP"))
    observation.available();observation.acquisitionFailed(1)
    val wrapped=RenderDiagnostics.failure(context,"GROUP",error,observation,null,1)
