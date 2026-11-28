@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 25
     env:
       NEXT_TELEMETRY_DISABLED: '1'
-      RCN_PROOF_DIR: ${{ runner.temp }}/rcn-proof
+      RCN_PROOF_DIR: /tmp/rcn-proof
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -60,6 +60,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rcn-comparison-proof-${{ github.run_number }}
-          path: ${{ runner.temp }}/rcn-proof
+          path: /tmp/rcn-proof
           if-no-files-found: ignore
           retention-days: 14
