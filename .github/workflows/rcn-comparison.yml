@@ -36,7 +36,7 @@ jobs:
         run: |
           node --test-isolation=none --test features/transaction-prices/model.test.ts features/transaction-prices/wfs.test.ts
           node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks 'app/api/market-intelligence/[listingId]/transactions/route.test.ts'
-          node --import ./scripts/test-alias-loader.mjs --test-isolation=none --test features/market-intelligence/*.test.mjs features/auth/operator.test.ts features/auth/route-authorization.test.ts
+          node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/market-intelligence/*.test.mjs features/auth/operator.test.ts features/auth/route-authorization.test.ts
       - name: Read official RCN source without credentials or database changes
         continue-on-error: true
         run: |
