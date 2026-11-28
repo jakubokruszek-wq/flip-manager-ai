@@ -53,7 +53,7 @@ export const modules: ModuleDefinition[] = [
   },
   {
     id: "priceRadar",
-    title: "Radar cen po remoncie",
+    title: "Radar transakcji RCN",
     href: "/price-radar",
     icon: Gauge,
   },

@@ -69,9 +69,5 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
-      - name: Radar PWA, continuation, connection recovery and quality views (Playwright)
-        run: |
-          node --test --test-concurrency=1 \
-            features/price-radar/components/price-radar-continuation.browser.test.cjs \
-            features/price-radar/components/price-radar-page.browser.test.cjs \
-            features/price-radar/price-radar-quality.browser.test.cjs
+      - name: RCN Radar, transaction pairs and responsive comparison (Playwright)
+        run: node features/transaction-prices/panel.browser.test.cjs

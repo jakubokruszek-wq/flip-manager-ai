@@ -1,5 +1,5 @@
-import { PriceRadarPage } from "@/features/price-radar/components/price-radar-page";
-export const metadata = { title: "Radar cen po remoncie" };
+import { RcnRadarPage } from "@/features/transaction-prices/rcn-radar-page";
+export const metadata = { title: "Radar transakcji RCN" };
 export default function Page() {
-  return <PriceRadarPage />;
+  return <RcnRadarPage />;
 }

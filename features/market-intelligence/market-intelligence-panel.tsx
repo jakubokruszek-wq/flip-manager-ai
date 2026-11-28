@@ -2,6 +2,7 @@
 
 import { ExternalLink } from "lucide-react";
 import { TransactionPricesPanel } from "@/features/transaction-prices/transaction-prices-panel";
+import { StreetResalesLoader } from "@/features/transaction-prices/resales-loader";
 import { getPurchaseRecommendation } from "@/features/purchase-recommendation/recommendation";
 import type { MarketIntelligence } from "./types";
 
@@ -59,6 +60,7 @@ export function MarketIntelligencePanel({ data, loading, error, calculatorCosts,
       </div>
 
       <TransactionPricesPanel key={data.listingId} listingId={data.listingId} />
+      <StreetResalesLoader key={`resales-${data.listingId}`} listingId={data.listingId} />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Metric label="Cena oferty" value={currency(data.currentPrice)} />

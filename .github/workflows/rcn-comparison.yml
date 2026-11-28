@@ -1,7 +1,7 @@
 name: RCN transaction comparison
 on:
   push:
-    branches: [codex/rcn-lodz-comparisons]
+    branches: [codex/rcn-lodz-comparisons, codex/rcn-street-resales]
   pull_request:
     paths:
       - 'features/transaction-prices/**'
@@ -31,11 +31,14 @@ jobs:
       - name: Type and style checks
         run: |
           node node_modules/typescript/bin/tsc --noEmit
-          node node_modules/eslint/bin/eslint.js features/transaction-prices features/market-intelligence/market-intelligence-panel.tsx 'app/api/market-intelligence/[listingId]/transactions'
+          node node_modules/eslint/bin/eslint.js features/transaction-prices features/market-intelligence/market-intelligence-panel.tsx 'app/api/market-intelligence/[listingId]/transactions' 'app/api/market-intelligence/[listingId]/resales' app/api/price-radar/rcn
       - name: Models, source limits and protected route
         run: |
-          node --test-isolation=none --test features/transaction-prices/model.test.ts features/transaction-prices/wfs.test.ts
+          node --test-isolation=none --test features/transaction-prices/model.test.ts features/transaction-prices/wfs.test.ts features/transaction-prices/resales.test.ts features/transaction-prices/spatial.test.ts
           node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks 'app/api/market-intelligence/[listingId]/transactions/route.test.ts'
+          node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks 'app/api/market-intelligence/[listingId]/resales/route.test.ts'
+          node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test app/api/price-radar/rcn/*.test.ts
+          python3 scripts/parse-rcn-bulk.test.py
           node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/market-intelligence/*.test.mjs features/auth/operator.test.ts features/auth/route-authorization.test.ts
       - name: Read official RCN source without credentials or database changes
         continue-on-error: true
