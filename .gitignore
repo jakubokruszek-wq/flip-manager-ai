@@ -49,3 +49,7 @@ next-env.d.ts
 
 # Local RCN browser verification artifacts
 .rcn-proof/
+
+# Python caches from the native RCN parser
+__pycache__/
+*.pyc

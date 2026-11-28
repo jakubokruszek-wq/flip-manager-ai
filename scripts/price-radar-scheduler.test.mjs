@@ -7,30 +7,20 @@ function json(status, payload) {
   return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
 }
 
-test("the GitHub schedule checks saved Warsaw settings every five minutes and stays isolated from Finder/Watcher/CRM", async () => {
-  const workflow = await readFile(new URL("../.github/workflows/price-radar-scan-scheduler.yml", import.meta.url), "utf8");
+test("the retired collector acknowledges queued scheduler ticks as terminal without starting legacy work", async () => {
   const endpoint = await readFile(new URL("../app/api/jobs/price-radar-collect/route.ts", import.meta.url), "utf8");
-  const collector = await readFile(new URL("../features/price-radar/server/collect.ts", import.meta.url), "utf8");
-  const runner = await readFile(new URL("./price-radar-scheduler.mjs", import.meta.url), "utf8");
-  assert.match(workflow, /cron:\s*["']\*\/5 \* \* \* \*["']/u);
-  assert.doesNotMatch(workflow, /timezone:/u, "the 5-minute tick is UTC-independent; the server applies Europe/Warsaw wall time");
-  assert.match(workflow, /group:\s*price-radar-scheduler/u);
-  assert.match(workflow, /cancel-in-progress:\s*false/u);
-  assert.match(workflow, /secrets\.PRICE_RADAR_CRON_SECRET/u);
-  assert.match(workflow, /api\/jobs\/price-radar-collect/u);
-  assert.doesNotMatch(workflow, /workflow_dispatch|finder-scan|facebook-watch|crm|vercel\.json/iu);
   assert.match(endpoint, /process\.env\.PRICE_RADAR_CRON_SECRET/u);
-  assert.match(endpoint, /claimOrCreateRadarRun/u);
-  assert.match(endpoint, /runRadarCollectionPortion/u);
-  assert.doesNotMatch(endpoint, /facebook_scan_jobs|source_scans|crm/u);
-  assert.doesNotMatch(collector, /facebook_scan_jobs|source_scans|crm/u);
-  assert.doesNotMatch(collector, /enqueueRadarOlxJob/u, "OLX left Radar: the collector never queues an OLX job");
-  assert.match(collector, /RADAR_REMOVED_SOURCES: ReadonlySet<string> = new Set\(\["olx"\]\)/u);
-  assert.match(workflow, /MAX_REQUESTS:\s*["']24["']/u);
-  assert.match(workflow, /MAX_ELAPSED_MS:\s*["']3300000["']/u);
-  assert.match(runner, /AbortSignal\.timeout\(REQUEST_TIMEOUT_MS\)/u);
-  assert.match(endpoint, /maxDuration = 60;/u);
-  assert.match(runner, /REQUEST_TIMEOUT_MS\s*=\s*62_000/u, "an HTTP call must time out just after the endpoint's 60-second function bound");
+  assert.match(endpoint, /status: "completed", retired: true/u);
+  assert.match(endpoint, /RCN_RADAR_REPLACED_ASKING_COLLECTOR/u);
+  assert.doesNotMatch(endpoint, /import\s|claimOrCreateRadarRun|runRadarCollectionPortion|ensureRadarWatchdog|scheduleRadarContinuation|createAdminClient|runAfterResponse/u);
+  let calls = 0;
+  const result = await runPriceRadarScheduler({
+    url: "https://example.test/api/jobs/price-radar-collect", secret: "radar-secret",
+    fetchImpl: async () => { calls++; return json(200, { status: "completed", retired: true }); },
+    sleepImpl: async () => assert.fail("retirement must never schedule another tick"), log: () => {}, now: () => 0,
+  });
+  assert.deepEqual(result, { status: "completed", runId: null, requests: 1, terminal: true });
+  assert.equal(calls, 1);
 });
 
 test("the runner resumes durable portions and stops only after an explicit terminal status", async () => {

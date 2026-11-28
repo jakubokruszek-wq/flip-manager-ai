@@ -1,0 +1,41 @@
+name: Update official Łódź RCN transactions
+on:
+  schedule:
+    - cron: '15 6 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: rcn-city-data-update
+  cancel-in-progress: false
+jobs:
+  update:
+    if: github.ref == 'refs/heads/main' && github.repository == 'jakubokruszek-wq/flip-manager-ai'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/cache@v4
+        with:
+          path: /tmp/rcn-archives
+          key: rcn-official-archives-${{ github.run_id }}
+          restore-keys: rcn-official-archives-
+      - run: npm ci --no-audit --no-fund
+      - name: Validate matching, coordinates and district calculations
+        run: node --test-isolation=none --test features/transaction-prices/resales.test.ts features/transaction-prices/spatial.test.ts
+      - name: Refresh published files and rebuild safe transaction pairs
+        run: node scripts/update-rcn-snapshot.mjs /tmp/rcn-archives
+      - name: Publish refreshed public summaries
+        run: |
+          git add features/transaction-prices/data/rcn-snapshot.json features/transaction-prices/data/rcn-addresses.json
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'Refresh official Łódź RCN transaction dataset'
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi

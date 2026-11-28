@@ -1,10 +1,7 @@
-name: Price Radar daily scheduler
+name: Retired asking-price Radar scheduler
 
 on:
-  schedule:
-    # The server reads each owner's saved Europe/Warsaw time and decides
-    # whether this lightweight tick should start or continue a durable run.
-    - cron: "*/5 * * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
