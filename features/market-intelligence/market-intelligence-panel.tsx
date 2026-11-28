@@ -1,6 +1,7 @@
 "use client";
 
 import { ExternalLink } from "lucide-react";
+import { TransactionPricesPanel } from "@/features/transaction-prices/transaction-prices-panel";
 import { getPurchaseRecommendation } from "@/features/purchase-recommendation/recommendation";
 import type { MarketIntelligence } from "./types";
 
@@ -56,6 +57,8 @@ export function MarketIntelligencePanel({ data, loading, error, calculatorCosts,
           <p className="text-xl font-bold leading-none">{data.comparableCount}</p>
         </div>
       </div>
+
+      <TransactionPricesPanel key={data.listingId} listingId={data.listingId} />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Metric label="Cena oferty" value={currency(data.currentPrice)} />

@@ -1,0 +1,65 @@
+name: RCN transaction comparison
+on:
+  push:
+    branches: [codex/rcn-lodz-comparisons]
+  pull_request:
+    paths:
+      - 'features/transaction-prices/**'
+      - 'features/market-intelligence/market-intelligence-panel.tsx'
+      - 'app/api/market-intelligence/**'
+      - '.github/workflows/rcn-comparison.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rcn-comparison-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      RCN_PROOF_DIR: /tmp/rcn-proof
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Type and style checks
+        run: |
+          node node_modules/typescript/bin/tsc --noEmit
+          node node_modules/eslint/bin/eslint.js features/transaction-prices features/market-intelligence/market-intelligence-panel.tsx 'app/api/market-intelligence/[listingId]/transactions'
+      - name: Models, source limits and protected route
+        run: |
+          node --test-isolation=none --test features/transaction-prices/model.test.ts features/transaction-prices/wfs.test.ts
+          node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks 'app/api/market-intelligence/[listingId]/transactions/route.test.ts'
+          node --import ./scripts/test-alias-loader.mjs --experimental-test-module-mocks --test features/market-intelligence/*.test.mjs features/auth/operator.test.ts features/auth/route-authorization.test.ts
+      - name: Read official RCN source without credentials or database changes
+        continue-on-error: true
+        run: |
+          mkdir -p "$RCN_PROOF_DIR"
+          node scripts/check-rcn-source.mjs > "$RCN_PROOF_DIR/live-rcn.log" 2>&1
+      - name: Use installed Chrome or install Chromium
+        run: |
+          browser_path="$(command -v google-chrome || command -v chromium || true)"
+          if [ -n "$browser_path" ]; then
+            echo "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$browser_path" >> "$GITHUB_ENV"
+          else
+            npx playwright install --with-deps chromium
+          fi
+      - name: Actual Next and mobile/desktop browser regression
+        run: node features/transaction-prices/panel.browser.test.cjs
+      - name: Temporary fixture does not remain in the application
+        if: always()
+        run: test ! -e 'app/(app)/rcn-browser-fixture/page.tsx'
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rcn-comparison-proof-${{ github.run_number }}
+          path: /tmp/rcn-proof
+          if-no-files-found: ignore
+          retention-days: 14
