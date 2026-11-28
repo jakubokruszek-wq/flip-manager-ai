@@ -1,5 +1,5 @@
 {
-  "importedAt": "2026-11-28T12:53:29.507Z",
+  "importedAt": "2026-11-28T13:35:12.185Z",
   "sourceUrl": "https://nowa.mapa.lodz.pl/dla-profesjonalistow/",
   "addresses": [
     {
@@ -11,8 +11,8 @@
     {
       "street": "1 Maja",
       "building": "15",
-      "latitude": 51.77332546692127,
-      "longitude": 19.44724327087949
+      "latitude": 51.77332649212183,
+      "longitude": 19.447244082324303
     },
     {
       "street": "1 Maja",
@@ -77,8 +77,8 @@
     {
       "street": "1 Maja",
       "building": "39",
-      "latitude": 51.77248777609399,
-      "longitude": 19.44210650447597
+      "latitude": 51.7727040856259,
+      "longitude": 19.442066601357286
     },
     {
       "street": "1 Maja",
@@ -401,8 +401,8 @@
     {
       "street": "6 Sierpnia",
       "building": "52/54",
-      "latitude": 51.7674076000833,
-      "longitude": 19.44332176568111
+      "latitude": 51.76752124257249,
+      "longitude": 19.44366961329653
     },
     {
       "street": "6 Sierpnia",
@@ -2963,8 +2963,8 @@
     {
       "street": "Bolesława Limanowskiego",
       "building": "46",
-      "latitude": 51.78739137436106,
-      "longitude": 19.445163706630048
+      "latitude": 51.78721911875889,
+      "longitude": 19.445114505920056
     },
     {
       "street": "Bolesława Limanowskiego",
@@ -4421,8 +4421,8 @@
     {
       "street": "Dr Adama Próchnika",
       "building": "19",
-      "latitude": 51.77466377175786,
-      "longitude": 19.450412627704814
+      "latitude": 51.77468318521775,
+      "longitude": 19.45063207292337
     },
     {
       "street": "Dr Adama Próchnika",
@@ -4487,8 +4487,8 @@
     {
       "street": "Dr Adama Próchnika",
       "building": "39",
-      "latitude": 51.774108452441325,
-      "longitude": 19.44656302857781
+      "latitude": 51.774322248127056,
+      "longitude": 19.44663373580071
     },
     {
       "street": "Dr Adama Próchnika",
@@ -4601,8 +4601,8 @@
     {
       "street": "Dr Władysława Biegańskiego",
       "building": "12/16",
-      "latitude": 51.80095013792719,
-      "longitude": 19.445926409421148
+      "latitude": 51.80078961109993,
+      "longitude": 19.44596210540596
     },
     {
       "street": "Dr Władysława Biegańskiego",
@@ -4661,8 +4661,8 @@
     {
       "street": "Dr. Stefana Kopcińskiego",
       "building": "35",
-      "latitude": 51.77119373958399,
-      "longitude": 19.482721649743443
+      "latitude": 51.77115351494206,
+      "longitude": 19.482405261250875
     },
     {
       "street": "Dr. Stefana Kopcińskiego",
@@ -4900,12 +4900,6 @@
     },
     {
       "street": "Drewnowska",
-      "building": "9",
-      "latitude": 51.782283378965374,
-      "longitude": 19.452127732757795
-    },
-    {
-      "street": "Drewnowska",
       "building": "9/11",
       "latitude": 51.782302279297376,
       "longitude": 19.451720892143975
@@ -4987,6 +4981,12 @@
       "building": "3/5",
       "latitude": 51.788099565147384,
       "longitude": 19.44584912178334
+    },
+    {
+      "street": "Drukarska",
+      "building": "5/7",
+      "latitude": 51.78829920728253,
+      "longitude": 19.445955378534684
     },
     {
       "street": "Drukarska",
@@ -5207,8 +5207,8 @@
     {
       "street": "Elżbiety Łokietkówny",
       "building": "11",
-      "latitude": 51.73637327619709,
-      "longitude": 19.573783422499304
+      "latitude": 51.73640306885255,
+      "longitude": 19.57377954726261
     },
     {
       "street": "Elżbiety Łokietkówny",
@@ -5477,8 +5477,8 @@
     {
       "street": "Fabryczna",
       "building": "7",
-      "latitude": 51.75576065099243,
-      "longitude": 19.472448660763813
+      "latitude": 51.7555701855575,
+      "longitude": 19.472494142788847
     },
     {
       "street": "Falista",
@@ -5819,8 +5819,8 @@
     {
       "street": "Franciszkańska",
       "building": "18/20",
-      "latitude": 51.78278487394073,
-      "longitude": 19.460457451259998
+      "latitude": 51.782788771715744,
+      "longitude": 19.460457960500964
     },
     {
       "street": "Franciszkańska",
@@ -5885,8 +5885,8 @@
     {
       "street": "Franciszkańska",
       "building": "66/68",
-      "latitude": 51.78878158682294,
-      "longitude": 19.459179727323047
+      "latitude": 51.7887815931312,
+      "longitude": 19.459179739061028
     },
     {
       "street": "Franciszkańska",
@@ -5987,8 +5987,8 @@
     {
       "street": "Gabrieli Zapolskiej",
       "building": "85",
-      "latitude": 51.72873888881617,
-      "longitude": 19.494482325467505
+      "latitude": 51.72858840215045,
+      "longitude": 19.494536301350415
     },
     {
       "street": "Garnizonowa",
@@ -6179,8 +6179,8 @@
     {
       "street": "Gdańska",
       "building": "46",
-      "latitude": 51.770578355263915,
-      "longitude": 19.449571513823926
+      "latitude": 51.77056303880621,
+      "longitude": 19.449136428472098
     },
     {
       "street": "Gdańska",
@@ -7697,8 +7697,8 @@
     {
       "street": "Grabowa",
       "building": "13",
-      "latitude": 51.74714885502291,
-      "longitude": 19.47248632504243
+      "latitude": 51.747283700373416,
+      "longitude": 19.47232079065929
     },
     {
       "street": "Grabowa",
@@ -8471,8 +8471,8 @@
     {
       "street": "Henryka Sienkiewicza",
       "building": "53",
-      "latitude": 51.764388643643095,
-      "longitude": 19.461607337475403
+      "latitude": 51.76428719681203,
+      "longitude": 19.461217517521153
     },
     {
       "street": "Henryka Sienkiewicza",
@@ -8489,8 +8489,8 @@
     {
       "street": "Henryka Sienkiewicza",
       "building": "6",
-      "latitude": 51.7702912678258,
-      "longitude": 19.46113121900611
+      "latitude": 51.77029177579678,
+      "longitude": 19.461130127593865
     },
     {
       "street": "Henryka Sienkiewicza",
@@ -9269,8 +9269,8 @@
     {
       "street": "Jana Dębowskiego",
       "building": "2",
-      "latitude": 51.775954969995915,
-      "longitude": 19.534749552467122
+      "latitude": 51.77590371290106,
+      "longitude": 19.53469602793601
     },
     {
       "street": "Jana Karskiego",
@@ -9365,8 +9365,8 @@
     {
       "street": "Jana Pietrusińskiego",
       "building": "10",
-      "latitude": 51.775467276112984,
-      "longitude": 19.43086098027258
+      "latitude": 51.7755861147412,
+      "longitude": 19.430669267102896
     },
     {
       "street": "Jana Pietrusińskiego",
@@ -10655,8 +10655,8 @@
     {
       "street": "Juliusza Słowackiego",
       "building": "12",
-      "latitude": 51.73671225119334,
-      "longitude": 19.47342560636735
+      "latitude": 51.73671286094956,
+      "longitude": 19.47342611319752
     },
     {
       "street": "Juliusza Słowackiego",
@@ -11050,7 +11050,7 @@
     },
     {
       "street": "Karolewska",
-      "building": "13C",
+      "building": "13c",
       "latitude": 51.760042376545734,
       "longitude": 19.437425359196883
     },
@@ -12635,8 +12635,8 @@
     {
       "street": "Kpt Pilota Franciszka Żwirki",
       "building": "20",
-      "latitude": 51.75545928432494,
-      "longitude": 19.455088592777706
+      "latitude": 51.755507692952385,
+      "longitude": 19.455467963193392
     },
     {
       "street": "Kpt Pilota Franciszka Żwirki",
@@ -12731,8 +12731,8 @@
     {
       "street": "Kpt. Stefana Pogonowskiego",
       "building": "23",
-      "latitude": 51.77109483981179,
-      "longitude": 19.44191040019247
+      "latitude": 51.771094840653134,
+      "longitude": 19.441910406958623
     },
     {
       "street": "Kpt. Stefana Pogonowskiego",
@@ -13193,8 +13193,8 @@
     {
       "street": "Ks. Abp Jana Pawła Woronicza",
       "building": "5D",
-      "latitude": 51.791073051941005,
-      "longitude": 19.40883960442975
+      "latitude": 51.79112945943204,
+      "longitude": 19.40881518851892
     },
     {
       "street": "Ks. Abp Jana Pawła Woronicza",
@@ -14363,8 +14363,8 @@
     {
       "street": "Legionów",
       "building": "17",
-      "latitude": 51.77682180146976,
-      "longitude": 19.450632918583416
+      "latitude": 51.77656841552288,
+      "longitude": 19.4507345033904
     },
     {
       "street": "Legionów",
@@ -16055,14 +16055,14 @@
     {
       "street": "Łąkowa",
       "building": "13",
-      "latitude": 51.7608898273493,
-      "longitude": 19.44043359239666
+      "latitude": 51.76099829325085,
+      "longitude": 19.440803518294096
     },
     {
       "street": "Łąkowa",
       "building": "14",
-      "latitude": 51.76207883693165,
-      "longitude": 19.44120925730172
+      "latitude": 51.76207883313704,
+      "longitude": 19.441209250275282
     },
     {
       "street": "Łąkowa",
@@ -16181,14 +16181,14 @@
     {
       "street": "Łomżyńska",
       "building": "16",
-      "latitude": 51.741168301649665,
-      "longitude": 19.47209098530541
+      "latitude": 51.74104174202191,
+      "longitude": 19.472153173818995
     },
     {
       "street": "Łomżyńska",
       "building": "17/19",
-      "latitude": 51.740722864494174,
-      "longitude": 19.471297800249083
+      "latitude": 51.740610613197134,
+      "longitude": 19.471653810060133
     },
     {
       "street": "Łomżyńska",
@@ -17333,14 +17333,14 @@
     {
       "street": "Marszałka Józefa Piłsudskiego",
       "building": "43",
-      "latitude": 51.75987264218351,
-      "longitude": 19.470686301242832
+      "latitude": 51.759986154988866,
+      "longitude": 19.47050105899194
     },
     {
       "street": "Marszałka Józefa Piłsudskiego",
       "building": "55",
-      "latitude": 51.760190750463536,
-      "longitude": 19.472404241760753
+      "latitude": 51.76019062325167,
+      "longitude": 19.47240272770629
     },
     {
       "street": "Marszałka Józefa Piłsudskiego",
@@ -18011,8 +18011,8 @@
     {
       "street": "Miedziana",
       "building": "11",
-      "latitude": 51.761906953261274,
-      "longitude": 19.47995330749589
+      "latitude": 51.762072425016754,
+      "longitude": 19.480031744193905
     },
     {
       "street": "Miedziana",
@@ -18023,8 +18023,8 @@
     {
       "street": "Miedziana",
       "building": "4",
-      "latitude": 51.7623694412701,
-      "longitude": 19.477463215506106
+      "latitude": 51.762147361977135,
+      "longitude": 19.477550755359722
     },
     {
       "street": "Miedziana",
@@ -18203,8 +18203,8 @@
     {
       "street": "Mikołaja Kopernika",
       "building": "4",
-      "latitude": 51.763079415952646,
-      "longitude": 19.452309815307608
+      "latitude": 51.7632275777294,
+      "longitude": 19.452091331692703
     },
     {
       "street": "Mikołaja Kopernika",
@@ -18259,6 +18259,12 @@
       "building": "64C",
       "latitude": 51.75734400433099,
       "longitude": 19.437020968555338
+    },
+    {
+      "street": "Mikołaja Kopernika",
+      "building": "67/69",
+      "latitude": 51.75786004617925,
+      "longitude": 19.436041957137306
     },
     {
       "street": "Mikołaja Kopernika",
@@ -19271,8 +19277,8 @@
     {
       "street": "Nawrot",
       "building": "55",
-      "latitude": 51.76328440732471,
-      "longitude": 19.470598077050855
+      "latitude": 51.76306606028881,
+      "longitude": 19.470523271541747
     },
     {
       "street": "Nawrot",
@@ -19469,8 +19475,8 @@
     {
       "street": "Nowa",
       "building": "5",
-      "latitude": 51.766982190295636,
-      "longitude": 19.481423612098435
+      "latitude": 51.76708691572635,
+      "longitude": 19.48125041901219
     },
     {
       "street": "Nowa",
@@ -21611,8 +21617,8 @@
     {
       "street": "Piotra Bardowskiego",
       "building": "16/20",
-      "latitude": 51.77808962044536,
-      "longitude": 19.42553982449211
+      "latitude": 51.778130677682235,
+      "longitude": 19.425216840177796
     },
     {
       "street": "Piotra Bardowskiego",
@@ -21713,8 +21719,8 @@
     {
       "street": "Piotrkowska",
       "building": "117",
-      "latitude": 51.76337089469889,
-      "longitude": 19.45651241436878
+      "latitude": 51.76337091544168,
+      "longitude": 19.456512425841982
     },
     {
       "street": "Piotrkowska",
@@ -21749,8 +21755,8 @@
     {
       "street": "Piotrkowska",
       "building": "134",
-      "latitude": 51.761648689749805,
-      "longitude": 19.458917438596934
+      "latitude": 51.76162791360635,
+      "longitude": 19.4586566928187
     },
     {
       "street": "Piotrkowska",
@@ -21821,8 +21827,8 @@
     {
       "street": "Piotrkowska",
       "building": "194",
-      "latitude": 51.756306621709925,
-      "longitude": 19.45950332484748
+      "latitude": 51.756388801975504,
+      "longitude": 19.459905950175198
     },
     {
       "street": "Piotrkowska",
@@ -21923,8 +21929,8 @@
     {
       "street": "Piotrkowska",
       "building": "277",
-      "latitude": 51.74692607070603,
-      "longitude": 19.46069986731397
+      "latitude": 51.74689311186829,
+      "longitude": 19.460955139884177
     },
     {
       "street": "Piotrkowska",
@@ -21953,8 +21959,8 @@
     {
       "street": "Piotrkowska",
       "building": "46",
-      "latitude": 51.77150874088504,
-      "longitude": 19.456902455010127
+      "latitude": 51.77135507428446,
+      "longitude": 19.45679018347709
     },
     {
       "street": "Piotrkowska",
@@ -21977,8 +21983,8 @@
     {
       "street": "Piotrkowska",
       "building": "67",
-      "latitude": 51.76826563516424,
-      "longitude": 19.4559105938789
+      "latitude": 51.76836579566524,
+      "longitude": 19.456294719012707
     },
     {
       "street": "Piotrkowska",
@@ -22175,8 +22181,8 @@
     {
       "street": "Płk Dr Stanisława Więckowskiego",
       "building": "30",
-      "latitude": 51.77192142456019,
-      "longitude": 19.449529692214245
+      "latitude": 51.77170570864982,
+      "longitude": 19.449770424049653
     },
     {
       "street": "Płk Dr Stanisława Więckowskiego",
@@ -22321,6 +22327,12 @@
       "building": "104",
       "latitude": 51.76344407500784,
       "longitude": 19.46739911425887
+    },
+    {
+      "street": "Płk Jana Kilińskiego",
+      "building": "105",
+      "latitude": 51.7640879151568,
+      "longitude": 19.4663021243348
     },
     {
       "street": "Płk Jana Kilińskiego",
@@ -22517,8 +22529,8 @@
     {
       "street": "Płk Jana Kilińskiego",
       "building": "33",
-      "latitude": 51.77411760218502,
-      "longitude": 19.462325152756023
+      "latitude": 51.77411781825531,
+      "longitude": 19.462324780223533
     },
     {
       "street": "Płk Jana Kilińskiego",
@@ -23093,8 +23105,8 @@
     {
       "street": "Podrzeczna",
       "building": "17",
-      "latitude": 51.781462434202,
-      "longitude": 19.45283046285439
+      "latitude": 51.78127485343609,
+      "longitude": 19.45296381866245
     },
     {
       "street": "Podrzeczna",
@@ -23105,8 +23117,8 @@
     {
       "street": "Podrzeczna",
       "building": "23",
-      "latitude": 51.78124464760451,
-      "longitude": 19.45208748495344
+      "latitude": 51.78146655220981,
+      "longitude": 19.452051672411503
     },
     {
       "street": "Podrzeczna",
@@ -23135,14 +23147,14 @@
     {
       "street": "Podrzeczna",
       "building": "8",
-      "latitude": 51.78088777909932,
-      "longitude": 19.452380478146065
+      "latitude": 51.78084174945848,
+      "longitude": 19.45235076750299
     },
     {
       "street": "Podrzeczna",
       "building": "9",
-      "latitude": 51.78174334969798,
-      "longitude": 19.455849765526313
+      "latitude": 51.78150012873456,
+      "longitude": 19.45598127594931
     },
     {
       "street": "Podwodna",
@@ -23465,14 +23477,14 @@
     {
       "street": "Pomorska",
       "building": "115",
-      "latitude": 51.77841739367125,
-      "longitude": 19.479736578930844
+      "latitude": 51.77865051583265,
+      "longitude": 19.479740949117335
     },
     {
       "street": "Pomorska",
       "building": "13",
-      "latitude": 51.776938564182956,
-      "longitude": 19.457975043232686
+      "latitude": 51.7767486682809,
+      "longitude": 19.458127254948593
     },
     {
       "street": "Pomorska",
@@ -23519,8 +23531,8 @@
     {
       "street": "Pomorska",
       "building": "30",
-      "latitude": 51.777655378157355,
-      "longitude": 19.46241346389292
+      "latitude": 51.777655332537954,
+      "longitude": 19.46241329155542
     },
     {
       "street": "Pomorska",
@@ -23603,8 +23615,8 @@
     {
       "street": "Pomorska",
       "building": "5",
-      "latitude": 51.77649423671189,
-      "longitude": 19.456502451060466
+      "latitude": 51.77658602743414,
+      "longitude": 19.4566966422844
     },
     {
       "street": "Pomorska",
@@ -23957,8 +23969,8 @@
     {
       "street": "Północna",
       "building": "19",
-      "latitude": 51.77902491844698,
-      "longitude": 19.457818185429513
+      "latitude": 51.77883122499694,
+      "longitude": 19.457965332606747
     },
     {
       "street": "Północna",
@@ -24185,14 +24197,14 @@
     {
       "street": "Prezydenta Gabriela Narutowicza",
       "building": "39",
-      "latitude": 51.771526668419675,
-      "longitude": 19.468092141693216
+      "latitude": 51.77132217222538,
+      "longitude": 19.468264948817602
     },
     {
       "street": "Prezydenta Gabriela Narutowicza",
       "building": "41",
-      "latitude": 51.771301347619016,
-      "longitude": 19.46848519373644
+      "latitude": 51.77130134812195,
+      "longitude": 19.46848519366496
     },
     {
       "street": "Prezydenta Gabriela Narutowicza",
@@ -24239,8 +24251,8 @@
     {
       "street": "Prezydenta Gabriela Narutowicza",
       "building": "74",
-      "latitude": 51.7727183855816,
-      "longitude": 19.477459206292057
+      "latitude": 51.77287075331938,
+      "longitude": 19.477287346863243
     },
     {
       "street": "Prezydenta Gabriela Narutowicza",
@@ -24263,8 +24275,8 @@
     {
       "street": "Prezydenta Gabriela Narutowicza",
       "building": "79",
-      "latitude": 51.772504885113065,
-      "longitude": 19.479739569883257
+      "latitude": 51.77226972745784,
+      "longitude": 19.479785092623022
     },
     {
       "street": "Prezydenta Gabriela Narutowicza",
@@ -24275,8 +24287,8 @@
     {
       "street": "Prezydenta Gabriela Narutowicza",
       "building": "8/10",
-      "latitude": 51.771179379251286,
-      "longitude": 19.45763899294146
+      "latitude": 51.770961398778425,
+      "longitude": 19.45768791810716
     },
     {
       "street": "Prezydenta Gabriela Narutowicza",
@@ -24431,8 +24443,8 @@
     {
       "street": "Pryncypalna",
       "building": "34",
-      "latitude": 51.724283219491355,
-      "longitude": 19.475678865609524
+      "latitude": 51.72427106319982,
+      "longitude": 19.475891111262804
     },
     {
       "street": "Pryncypalna",
@@ -24449,8 +24461,8 @@
     {
       "street": "Przednia",
       "building": "74",
-      "latitude": 51.70178583258523,
-      "longitude": 19.47711895576384
+      "latitude": 51.701655882180205,
+      "longitude": 19.476968677560848
     },
     {
       "street": "Przedświt",
@@ -24803,8 +24815,8 @@
     {
       "street": "Przędzalniana",
       "building": "21",
-      "latitude": 51.76495582858094,
-      "longitude": 19.47969278721468
+      "latitude": 51.76487224203236,
+      "longitude": 19.479882058758854
     },
     {
       "street": "Przędzalniana",
@@ -25433,8 +25445,8 @@
     {
       "street": "Rajmunda Rembielińskiego",
       "building": "19",
-      "latitude": 51.75096359756119,
-      "longitude": 19.446370164224117
+      "latitude": 51.750726813629456,
+      "longitude": 19.446404317839416
     },
     {
       "street": "Rajmunda Rembielińskiego",
@@ -25511,8 +25523,8 @@
     {
       "street": "Rawska",
       "building": "6",
-      "latitude": 51.74980832559716,
-      "longitude": 19.485322452717654
+      "latitude": 51.749634728010605,
+      "longitude": 19.485372860951603
     },
     {
       "street": "Rawska",
@@ -25925,8 +25937,8 @@
     {
       "street": "Rewolucji 1905 R.",
       "building": "25",
-      "latitude": 51.775044908641355,
-      "longitude": 19.460315925489617
+      "latitude": 51.77504486266881,
+      "longitude": 19.46031645423303
     },
     {
       "street": "Rewolucji 1905 R.",
@@ -25943,8 +25955,8 @@
     {
       "street": "Rewolucji 1905 R.",
       "building": "40A",
-      "latitude": 51.775609562723744,
-      "longitude": 19.463904838341595
+      "latitude": 51.77578154932821,
+      "longitude": 19.463957740039195
     },
     {
       "street": "Rewolucji 1905 R.",
@@ -26129,8 +26141,8 @@
     {
       "street": "Rojna",
       "building": "3",
-      "latitude": 51.79339936144716,
-      "longitude": 19.392534645621048
+      "latitude": 51.793399591430706,
+      "longitude": 19.392534152243062
     },
     {
       "street": "Rojna",
@@ -26171,8 +26183,8 @@
     {
       "street": "Rojna",
       "building": "41",
-      "latitude": 51.79476793323364,
-      "longitude": 19.375459385631903
+      "latitude": 51.79500052306344,
+      "longitude": 19.37537348438376
     },
     {
       "street": "Rojna",
@@ -27365,8 +27377,8 @@
     {
       "street": "Sebastiana Felsztyńskiego",
       "building": "34",
-      "latitude": 51.73939106831229,
-      "longitude": 19.44576013506867
+      "latitude": 51.73939130761725,
+      "longitude": 19.445760120737845
     },
     {
       "street": "Sebastiana Felsztyńskiego",
@@ -27755,8 +27767,8 @@
     {
       "street": "Skrzydlata",
       "building": "27",
-      "latitude": 51.811304270301974,
-      "longitude": 19.473549007290835
+      "latitude": 51.811295129480285,
+      "longitude": 19.47334523444581
     },
     {
       "street": "Skupiona",
@@ -28877,8 +28889,8 @@
     {
       "street": "Stanisława Przybyszewskiego",
       "building": "36",
-      "latitude": 51.74492790945176,
-      "longitude": 19.472339452307146
+      "latitude": 51.745113417137325,
+      "longitude": 19.47221170375475
     },
     {
       "street": "Stanisława Przybyszewskiego",
@@ -28895,8 +28907,8 @@
     {
       "street": "Stanisława Przybyszewskiego",
       "building": "5",
-      "latitude": 51.74302849336022,
-      "longitude": 19.464038403812385
+      "latitude": 51.74287003475873,
+      "longitude": 19.46423039437486
     },
     {
       "street": "Stanisława Przybyszewskiego",
@@ -28967,8 +28979,8 @@
     {
       "street": "Stanisława Wigury",
       "building": "16",
-      "latitude": 51.75688998640767,
-      "longitude": 19.46459505737018
+      "latitude": 51.756712983437765,
+      "longitude": 19.46481857778369
     },
     {
       "street": "Stanisława Wigury",
@@ -29003,8 +29015,8 @@
     {
       "street": "Stanisława Wigury",
       "building": "28",
-      "latitude": 51.75748041244816,
-      "longitude": 19.467687143576086
+      "latitude": 51.757307162151385,
+      "longitude": 19.467831831539836
     },
     {
       "street": "Stanisława Wigury",
@@ -29117,8 +29129,8 @@
     {
       "street": "Starosikawska",
       "building": "11",
-      "latitude": 51.7872147619984,
-      "longitude": 19.46845149417752
+      "latitude": 51.78708241231127,
+      "longitude": 19.46835368877808
     },
     {
       "street": "Stary Rynek",
@@ -29195,8 +29207,8 @@
     {
       "street": "Stefana Jaracza",
       "building": "13",
-      "latitude": 51.772656946186615,
-      "longitude": 19.459293287098287
+      "latitude": 51.77285031630138,
+      "longitude": 19.459111741228053
     },
     {
       "street": "Stefana Jaracza",
@@ -29243,8 +29255,8 @@
     {
       "street": "Stefana Jaracza",
       "building": "41",
-      "latitude": 51.772868234643774,
-      "longitude": 19.465732307294246
+      "latitude": 51.77306893322799,
+      "longitude": 19.465703609938522
     },
     {
       "street": "Stefana Jaracza",
@@ -29261,8 +29273,8 @@
     {
       "street": "Stefana Jaracza",
       "building": "5",
-      "latitude": 51.772492641599435,
-      "longitude": 19.457406580524577
+      "latitude": 51.77268635802329,
+      "longitude": 19.457185975543297
     },
     {
       "street": "Stefana Jaracza",
@@ -29279,8 +29291,8 @@
     {
       "street": "Stefana Jaracza",
       "building": "6",
-      "latitude": 51.77294958572205,
-      "longitude": 19.457166334940396
+      "latitude": 51.77316838710718,
+      "longitude": 19.45726384307793
     },
     {
       "street": "Stefana Jaracza",
@@ -29309,8 +29321,8 @@
     {
       "street": "Stefana Jaracza",
       "building": "82",
-      "latitude": 51.774704955429335,
-      "longitude": 19.47639848905903
+      "latitude": 51.77469566640882,
+      "longitude": 19.476735556143275
     },
     {
       "street": "Stefana Jaracza",
@@ -29621,8 +29633,8 @@
     {
       "street": "Stefana Żeromskiego",
       "building": "65",
-      "latitude": 51.76617445177557,
-      "longitude": 19.445866777993025
+      "latitude": 51.76623551228601,
+      "longitude": 19.446112888976266
     },
     {
       "street": "Stefana Żeromskiego",
@@ -29813,8 +29825,8 @@
     {
       "street": "Sucha",
       "building": "2/4",
-      "latitude": 51.76153291715597,
-      "longitude": 19.492348097870607
+      "latitude": 51.76153220234219,
+      "longitude": 19.49234781972703
     },
     {
       "street": "Sucha",
@@ -30407,8 +30419,8 @@
     {
       "street": "Świtezianki",
       "building": "44",
-      "latitude": 51.82402824976424,
-      "longitude": 19.44773976901917
+      "latitude": 51.82383808791209,
+      "longitude": 19.447479717774915
     },
     {
       "street": "Świtezianki",
@@ -30863,8 +30875,8 @@
     {
       "street": "Targowa",
       "building": "15",
-      "latitude": 51.764333846806586,
-      "longitude": 19.471176747943804
+      "latitude": 51.76449166158232,
+      "longitude": 19.47083807737781
     },
     {
       "street": "Targowa",
@@ -33352,12 +33364,6 @@
     },
     {
       "street": "Wierzbowa",
-      "building": "33",
-      "latitude": 51.77560689340317,
-      "longitude": 19.47750690756739
-    },
-    {
-      "street": "Wierzbowa",
       "building": "34",
       "latitude": 51.774104746759534,
       "longitude": 19.478738728577493
@@ -33623,8 +33629,8 @@
     {
       "street": "Wileńska",
       "building": "59",
-      "latitude": 51.75547873677043,
-      "longitude": 19.415480159246897
+      "latitude": 51.755398161742086,
+      "longitude": 19.415770708881748
     },
     {
       "street": "Wileńska",
@@ -34637,8 +34643,8 @@
     {
       "street": "Wólczańska",
       "building": "119",
-      "latitude": 51.760023850647876,
-      "longitude": 19.45303090969085
+      "latitude": 51.76010531064477,
+      "longitude": 19.453355898344075
     },
     {
       "street": "Wólczańska",
@@ -34679,8 +34685,8 @@
     {
       "street": "Wólczańska",
       "building": "144",
-      "latitude": 51.75652864697945,
-      "longitude": 19.455480909222267
+      "latitude": 51.75650064702886,
+      "longitude": 19.455123096167487
     },
     {
       "street": "Wólczańska",
@@ -34841,8 +34847,8 @@
     {
       "street": "Wólczańska",
       "building": "37",
-      "latitude": 51.768630346195565,
-      "longitude": 19.4517521161086
+      "latitude": 51.76846236040486,
+      "longitude": 19.45146599110939
     },
     {
       "street": "Wólczańska",
@@ -34877,8 +34883,8 @@
     {
       "street": "Wólczańska",
       "building": "72",
-      "latitude": 51.763455163795754,
-      "longitude": 19.45370079557037
+      "latitude": 51.763497096147226,
+      "longitude": 19.453339036721033
     },
     {
       "street": "Wólczańska",
@@ -35093,8 +35099,8 @@
     {
       "street": "Wschodnia",
       "building": "27",
-      "latitude": 51.77594709054633,
-      "longitude": 19.4567531230361
+      "latitude": 51.77605864624299,
+      "longitude": 19.457132274878848
     },
     {
       "street": "Wschodnia",
@@ -35141,8 +35147,8 @@
     {
       "street": "Wschodnia",
       "building": "51",
-      "latitude": 51.77331152592344,
-      "longitude": 19.457336834402778
+      "latitude": 51.77345102419592,
+      "longitude": 19.457309506564524
     },
     {
       "street": "Wschodnia",
@@ -35939,8 +35945,8 @@
     {
       "street": "Zawiszy Czarnego",
       "building": "32",
-      "latitude": 51.786921765300356,
-      "longitude": 19.461251453016693
+      "latitude": 51.78708211016479,
+      "longitude": 19.461150758886557
     },
     {
       "street": "Zawiszy Czarnego",
@@ -36611,8 +36617,8 @@
     {
       "street": "Zielona",
       "building": "40",
-      "latitude": 51.769083129546985,
-      "longitude": 19.443150074584896
+      "latitude": 51.769309617869,
+      "longitude": 19.443228566563267
     },
     {
       "street": "Zielona",
@@ -37259,8 +37265,8 @@
     {
       "street": "Żubardzka",
       "building": "12",
-      "latitude": 51.78668490338538,
-      "longitude": 19.414740205371235
+      "latitude": 51.78652011357319,
+      "longitude": 19.414657075587712
     },
     {
       "street": "Żubardzka",
