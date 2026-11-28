@@ -46,3 +46,6 @@ next-env.d.ts
 
 # OCR assets generated from the locked npm packages
 /public/ocr/
+
+# Local RCN browser verification artifacts
+.rcn-proof/
